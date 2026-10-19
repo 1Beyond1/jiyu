@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { X, FileText, Image, FileArchive, FileSpreadsheet, Shapes, FolderOpen, Inbox } from 'lucide-react'
 
 export function Brand({ small = false }: { small?: boolean }) {
-  return <div className={`brand ${small ? 'small' : ''}`}><img src="/favicon.svg" alt="" /><div><strong>归集<span>guiji</span></strong>{!small && <p>让文件，各得其所</p>}</div></div>
+  return <div className={`brand ${small ? 'small' : ''}`}><img src="/favicon.svg" alt="" /><div><strong>集屿<span>jiyu</span></strong>{!small && <p>让文件，各得其所</p>}</div></div>
 }
 
 export function Modal({ title, subtitle, children, onClose, wide = false }: { title: string; subtitle?: string; children: ReactNode; onClose: () => void; wide?: boolean }) {

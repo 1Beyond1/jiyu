@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Workspace } from '../types'
 
+// 保留更名前的数据键，避免集屿更名后丢失已有的浏览器演示记录。
 const KEY = 'guiji.workspace.v1'
 
 export function createWorkspace(): Workspace {
