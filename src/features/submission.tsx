@@ -30,5 +30,5 @@ export function Submission({ collection, ownerName, onSubmit }: { collection?: C
     {!!files.length && <div className="upload-list">{files.map((f, i) => <div key={`${f.name}-${i}`}><FileIcon name={f.name} /><span>{f.name}<small>{formatSize(f.size)}</small></span><button type="button" className="icon-button" aria-label={`移除${f.name}`} onClick={() => setFiles(files.filter((_, index) => i !== index))}><X size={15} /></button></div>)}</div>}
     {error && <p className="error-text" role="alert">{error}</p>}
     <div className="form-note">界面演示：只记录文件信息，不上传文件内容。</div><button type="submit" className="button primary submit-button"><Check size={16} />提交演示记录</button>
-  </form>}</> }</section><footer className="submission-bottom"><a href="#/overview"><ArrowLeft size={13} />返回工作台</a><span>由归集提供支持 · 让文件，各得其所</span></footer></main>
+  </form>}</> }</section><footer className="submission-bottom"><a href="#/overview"><ArrowLeft size={13} />返回工作台</a><span>由集屿提供支持 · 让文件，各得其所</span></footer></main>
 }

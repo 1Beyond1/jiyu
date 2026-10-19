@@ -1,6 +1,6 @@
 # 项目管理
 
-更新：2026-10-19。产品暂定名：归集 / Guiji。
+更新：2026-10-19。项目名称：集屿 / Jiyu（用户已确认）。
 
 ## 用户目标
 
@@ -23,7 +23,7 @@
 ## 当前目录
 
 ```text
-filegeter/
+jiyu/
   src/
     components/       共享 UI
     features/         按收集、文件、命名、助手等功能拆分
@@ -44,7 +44,7 @@ filegeter/
 2. 不提前搭空的 monorepo。真正开始后端时再增加 `server/`，复用 TypeScript 类型，先保持单仓库。
 3. `node_modules/`、`dist/`、`.cache/`、`.artifacts/` 是可再生内容。截图与临时样本仅进 `.artifacts/`；npm 缓存可随时清理。
 4. 开发依赖仅在本地/构建阶段使用。部署只打包应用构建结果与正式服务依赖，不把 npm 缓存和原型截图带上 VPS。
-5. 正式版数据放独立挂载，例如 `/var/lib/guiji/`；与应用发布目录分开。数据库、上传和备份不进 Git 或 Docker 镜像。
+5. 正式版数据放独立挂载，例如 `/var/lib/jiyu/`；与应用发布目录分开。数据库、上传和备份不进 Git 或 Docker 镜像。
 6. 日志轮转、临时上传定期清理、单任务/全局配额、回收站保留期、备份保留上限需要在 P1/P2 实现并验证。
 7. 增加依赖前说明用途。简单状态用 React；简单弹窗用原生 dialog；本阶段无 UI 大组件库、状态库或路由库。
 
@@ -69,12 +69,12 @@ filegeter/
 - 浏览器实际验证：创建任务、生成分享链接、提交测试文件元数据、文件搜索、多选批量命名、非法路径阻止、同扩展名重名阻止、AI 进度演示、恢复演示数据。
 - 手机尺寸检查：导航可打开，页面根节点无横向溢出，文件表格独立滚动。
 - 浏览器捕获的 error 日志为空。验收测试数据已恢复为初始示例。
-- 源码、锁文件、配置和文档合计约 164 KB；已清理本次 npm 下载缓存。预览截图位于忽略的 `.artifacts/guiji-workspace.jpg`。
+- 源码、锁文件、配置和文档合计约 164 KB；已清理本次 npm 下载缓存。预览截图位于忽略的 `.artifacts/jiyu-workspace.jpg`。
 - 初版界面验收时仅初始化了本地 Git；后续按用户要求建立公开 GitHub 仓库与版本管理，见下一节。后端、真实存储与模型调用均未实现，也未部署到 VPS。
 
 ## Git 管理
 
-- 仓库：[1Beyond1/filegeter](https://github.com/1Beyond1/filegeter)，公开仓库，默认分支 `main`，本地远端名为 `origin`。
+- 仓库：[1Beyond1/jiyu](https://github.com/1Beyond1/jiyu)，公开仓库，默认分支 `main`，本地远端名为 `origin`。
 - 作者与维护者：`1Beyond1`。本仓库的提交邮箱为 GitHub 隐私邮箱 `142073741+1Beyond1@users.noreply.github.com`，不把个人邮箱公开到新提交中；不修改其他项目的 Git 身份。
 - 初始版本：`v0.1.0`，对应可交互的 P0 界面原型。此标签不代表真实文件服务已可投产。
 - `.gitattributes` 统一文本为 LF；`.editorconfig` 统一编辑器格式；保留唯一 `package-lock.json`。

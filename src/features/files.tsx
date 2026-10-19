@@ -27,7 +27,7 @@ export function FileTable({ files, collections, compact = false, search = '', co
   const allChecked = list.length > 0 && list.every(f => selected.includes(f.id))
   function exportCsv() {
     const rows = (chosen.length ? chosen : visible).map(f => [f.name, f.owner, collections.find(c => c.id === f.collectionId)?.title || '', formatSize(f.size), formatDate(f.createdAt)].map(csvCell).join(','))
-    downloadText('归集-文件清单.csv', '\uFEFF文件名称,提交人,收集任务,文件大小,提交时间\n' + rows.join('\n'), 'text/csv;charset=utf-8')
+    downloadText('集屿-文件清单.csv', '\uFEFF文件名称,提交人,收集任务,文件大小,提交时间\n' + rows.join('\n'), 'text/csv;charset=utf-8')
   }
   return <div className="file-panel">
     {!compact && <div className="file-toolbar"><div className="input-with-icon"><Search size={16} /><input placeholder="搜索文件名、提交人…" aria-label="搜索文件" value={query} onChange={e => setQuery(e.target.value)} /></div><div className="toolbar-actions"><label className="select-filter"><select aria-label="筛选文件" value={filter} onChange={e => { setFilter(e.target.value); setSelected([]) }}><option value="all">全部文件</option><option value="pending">待整理</option><option value="image">图片文件</option></select><ChevronDown size={14} /></label><button className="button" onClick={exportCsv}><Download size={15} />导出清单</button></div></div>}

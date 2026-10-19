@@ -1,10 +1,10 @@
-# 归集 Guiji
+# 集屿 Jiyu
 
-[![CI](https://github.com/1Beyond1/filegeter/actions/workflows/ci.yml/badge.svg)](https://github.com/1Beyond1/filegeter/actions/workflows/ci.yml)
+[![CI](https://github.com/1Beyond1/jiyu/actions/workflows/ci.yml/badge.svg)](https://github.com/1Beyond1/jiyu/actions/workflows/ci.yml)
 
 让每一份文件都有归处。面向个人 VPS 的文件收集与整理工作台。
 
-作者与维护者：[1Beyond1](https://github.com/1Beyond1) · [GitHub 仓库](https://github.com/1Beyond1/filegeter)
+作者与维护者：[1Beyond1](https://github.com/1Beyond1) · [GitHub 仓库](https://github.com/1Beyond1/jiyu)
 
 **当前阶段：可交互的前端原型，等待视觉风格确认。不是可用于生产的文件服务。**
 
@@ -38,7 +38,7 @@ npm run preview # 预览构建结果
 
 ## 原型边界
 
-数据存储于当前浏览器的 `localStorage`，键为 `guiji.workspace.v1`。同源标签页间同步；不同设备与浏览器间不共享。
+数据存储于当前浏览器的 `localStorage`，为保留更名前的演示数据，兼容沿用键 `guiji.workspace.v1`。同源标签页间同步；不同设备与浏览器间不共享。
 
 提交页只读取 `File.name` 和 `File.size` 等元数据，不上传、不读取正文、不保留文件内容。示例总量与存储容量用于视觉演示，文件列表展示其中的部分样本。分享链接只适合当前本机、同浏览器演示。
 
