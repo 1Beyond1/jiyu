@@ -81,8 +81,9 @@ jiyu/
 - 初始版本：`v0.1.0`，对应可交互的 P0 界面原型。此标签不代表真实文件服务已可投产。
 - `.gitattributes` 统一文本为 LF；`.editorconfig` 统一编辑器格式；保留唯一 `package-lock.json`。
 - GitHub Actions 使用 Node.js 24，执行 `npm ci` 与 `npm run build`。在 `main` 推送、PR 和手动触发时运行；官方 action 固定提交号，工作流只授予读取仓库权限。
+- 按用户最新偏好，日常改动直接推送 `main`。本地先通过构建；远端 CI 在推送后提供检查结果，不再作为同步代码前的阻塞门槛。保留禁止强推和删除 `main` 的保护。
 - 全部路径的默认维护者由 `.github/CODEOWNERS` 指向 `@1Beyond1`。PR 模板记录改动目的与验证结果。
-- GitHub 合并方式采用 squash，合并后自动删除功能分支。个人项目暂不要求其他人审批自己的 PR。
+- 需要隔离的大改动可以使用功能分支和 PR；使用 PR 时采用 squash，合并后自动删除功能分支，不强制要求他人审批。
 - 不强制推送或删除 `main`，不提交可再生内容、用户文件、凭证或本地配置。不要创建源码副本充当备份。
 
 后续开发采用以下流程：
@@ -90,14 +91,13 @@ jiyu/
 ```sh
 git switch main
 git pull --ff-only
-git switch -c feat/short-description
 # 开发并检查差异
 npm run build
 git add <本次改动的具体文件>
 git diff --cached
 git commit -m "feat: describe the change"
-git push -u origin feat/short-description
-# 在 GitHub 提交 PR，检查通过后 squash 合并
+git push origin main
+# GitHub CI 在推送后自动构建，不必等待排队再同步代码
 ```
 
 提交信息使用 `feat:`、`fix:`、`docs:`、`chore:` 等简短前缀。一个提交解决一个清楚的问题；初始界面基线作为一个完整提交保存。
