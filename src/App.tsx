@@ -45,6 +45,7 @@ export default function App() {
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
   }, [])
+  useEffect(() => { window.scrollTo(0, 0) }, [page, hash])
   useEffect(() => {
     const handler = (e: PointerEvent) => { if (notificationRef.current && !notificationRef.current.contains(e.target as Node)) setNotifications(false) }
     document.addEventListener('pointerdown', handler)
@@ -87,11 +88,11 @@ export default function App() {
       <main className="main-content" id="main-content">
         {saveError && <div className="error-banner" role="alert">浏览器存储空间不足，最新修改暂未保存。请在设置里导出记录。</div>}
         {page === 'overview' && <>
-          <div className="page-title home-title"><div><p className="greeting">生活有序，工作从容<span className="greeting-line" /></p><h1>每一份文件，都有归处<span className="title-dot">。</span></h1><p>收集、整理、妥善存放。把时间留给更重要的事。</p></div><button className="button primary" onClick={() => setCreateOpen(true)}><Plus size={17} />新建收集</button></div>
+          <div className="page-title home-title"><div><p className="greeting"><span className="greeting-line" />{workspace.displayName}，欢迎回到集屿</p><h1>每一份文件，都有归处<span className="title-dot">。</span></h1><p>收集、整理、妥善存放。把时间留给更重要的事。</p></div><button className="button primary" onClick={() => setCreateOpen(true)}><Plus size={17} />新建收集</button></div>
           <div className="overview-stats"><div><span><FolderClosed size={16} />进行中的收集</span><p>{active.length}<small>项</small><em><span />正在有序进行</em></p></div><div><span><ArrowDownToLine size={16} />累计收到文件</span><p>{total}<small>份</small><em className="stat-note">来自 {workspace.collections.length} 项收集</em></p></div><div><span><Clock3 size={16} />待整理文件</span><p>{pending}<small>份</small><button onClick={() => navigate('tools')}>去整理<ArrowUpRight size={13} /></button></p></div><div><span><HardDrive size={16} />已用存储空间</span><p>12.8<small>GB</small><em className="stat-note">共 100 GB · 演示</em></p></div></div>
           <section className="collections-section"><div className="section-heading"><h2>进行中的收集<span className="count-badge">{active.length}</span></h2><button className="text-button" onClick={() => navigate('collections')}>全部收集<ArrowRight size={15} /></button></div>{active.length ? <div className="collection-grid">{active.slice(0, 3).map(c => <CollectionCard key={c.id} collection={c} onOpen={openCollection} onShare={setShare} />)}</div> : <Empty title="从第一项收集开始" text="点击新建收集，告别零散的文件消息。" />}</section>
           <section className="recent-section"><div className="section-heading"><div className="heading-with-note"><h2>最近收到</h2><span>每一份新提交，都在这里</span></div><button className="text-button" onClick={() => { setCollectionId(''); navigate('files') }}>查看全部文件<ArrowRight size={15} /></button></div><FileTable {...fileProps} compact /></section>
-          <div className="ai-banner"><div className="ai-banner-symbol"><Sparkles size={24} strokeWidth={1.5} /></div><div><h3>文件有点多？让 AI 搭把手。</h3><p>统一命名、梳理进度，让井井有条变得轻而易举。</p></div><button className="text-button" onClick={() => setAiOpen(true)}>和集屿 AI 聊聊<ArrowUpRight size={15} /></button><div className="banner-lines"><span /><span /><span /></div></div>
+          <div className="ai-banner"><div className="ai-banner-symbol"><Sparkles size={24} strokeWidth={1.5} /></div><div><h3>有些整理，一句话就好。</h3><p>试着说「帮我统一文件名」，先看看集屿 AI 的整理建议。</p></div><button className="text-button" onClick={() => setAiOpen(true)}>和集屿 AI 聊聊<ArrowUpRight size={15} /></button></div>
           <div className="workspace-footnote"><span><ShieldCheck size={13} />你的文件，你来掌控</span><span>少一点繁琐，多一点从容。</span></div>
         </>}
         {page === 'collections' && <Collections collections={workspace.collections} onOpen={openCollection} onShare={setShare} onCreate={() => setCreateOpen(true)} />}

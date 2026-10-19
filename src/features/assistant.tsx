@@ -14,7 +14,7 @@ export function Assistant({ workspace, onClose, onRename }: { workspace: Workspa
     if (!text.trim()) return
     let response = ''
     let action = false
-    if (/命名|改名|整理/.test(text)) {
+    if (/命名|文件名|改名|整理/.test(text)) {
       response = '可以试试「{任务}_{提交人}_{序号}」，自动保留原扩展名。我会先展示命名预览，你确认后再应用。'
       action = true
     } else if (/进度|多少|情况|概览/.test(text)) {
