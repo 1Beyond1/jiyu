@@ -9,7 +9,8 @@ COPY server ./server
 RUN npm run build && npm test && npm prune --omit=dev
 
 FROM node:24-bookworm-slim AS runtime
-ENV NODE_ENV=production JIYU_HOST=0.0.0.0 JIYU_PORT=3000 JIYU_DATA_DIR=/data/live
+RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng && rm -rf /var/lib/apt/lists/*
+ENV NODE_ENV=production JIYU_HOST=0.0.0.0 JIYU_PORT=3000 JIYU_DATA_DIR=/data/live JIYU_BACKUP_DIR=/backups
 WORKDIR /app
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist

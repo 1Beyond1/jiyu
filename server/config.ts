@@ -9,6 +9,7 @@ export interface Config {
   requestBytes: number
   secureCookie: boolean
   trustProxy?: boolean
+  backupDir?: string
 }
 
 export function configFromEnv(): Config {
@@ -25,5 +26,6 @@ export function configFromEnv(): Config {
     requestBytes: number('JIYU_REQUEST_MB', 512, 2048) * 1024 * 1024,
     secureCookie: origin.startsWith('https:'),
     trustProxy: process.env.JIYU_TRUST_PROXY === 'true',
+    backupDir: process.env.JIYU_BACKUP_DIR ? resolve(process.env.JIYU_BACKUP_DIR) : undefined,
   }
 }

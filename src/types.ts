@@ -1,6 +1,8 @@
 export type Page = 'overview' | 'collections' | 'files' | 'tools' | 'storage' | 'settings' | 'trash'
 export type CollectionStatus = 'active' | 'completed' | 'paused'
 export type StorageId = 'local' | 'onedrive' | 's3'
+export type UserRole = 'admin' | 'editor' | 'viewer'
+export interface SessionUser { id: string; username: string; displayName: string; role: UserRole; disabled?: boolean }
 
 export interface Collection {
   id: string
@@ -32,6 +34,7 @@ export interface CollectedFile {
   sha256?: string
   originalName?: string
   deletedAt?: string
+  tags?: string[]
 }
 
 export interface Activity {
@@ -52,6 +55,12 @@ export interface Workspace {
 }
 
 export interface UploadReceipt { receiptId: string; filesCount: number; bytes: number; createdAt: string }
+export interface BackupSettings { enabled: boolean; intervalHours: number; keep: number }
+export interface BackupInfo { id: string; createdAt: string; files: number; bytes: number }
+export interface BackupRun { id: string; status: 'running' | 'succeeded' | 'failed'; startedAt: string; finishedAt?: string; error?: string }
+export interface BackupStatus { settings: BackupSettings; lastRun: BackupRun | null; backups: BackupInfo[]; directory: string }
+export interface DocumentInfo { file_id: string; status: 'queued' | 'processing' | 'ready' | 'failed' | 'unsupported'; kind?: string; chars: number; truncated: number; updated_at?: string; error?: string }
+export interface FileContent { preview: 'image' | 'pdf' | 'text' | 'none'; mime?: string; text?: string; document?: DocumentInfo }
 
 export type ArchiveLayout = 'flat' | 'collection' | 'owner' | 'collection-owner'
 export type ArchiveStatus = 'ready' | 'streaming' | 'completed' | 'failed' | 'cancelled'
@@ -70,7 +79,8 @@ export interface AISettings {
   usedToday: number
 }
 export interface RenameChange { id: string; oldName: string; name: string }
-export interface AIReply { runId: string; reply: string; changes: RenameChange[]; tokens: number }
+export interface TagChange { id: string; name: string; oldTags: string[]; tags: string[] }
+export interface AIReply { runId: string; reply: string; changes: RenameChange[]; tags?: TagChange[]; tokens: number }
 export interface AIRun { id: string; model: string; fileCount: number; status: string; tokens: number; createdAt: string }
 
 export const storageNames: Record<StorageId, string> = {

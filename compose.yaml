@@ -9,6 +9,7 @@ services:
       JIYU_QUOTA_MB: ${JIYU_QUOTA_MB:-10240}
       JIYU_REQUEST_MB: ${JIYU_REQUEST_MB:-512}
       JIYU_TRUST_PROXY: 'true'
+      JIYU_BACKUP_DIR: /backups
     volumes:
       - data:/data
       - backups:/backups

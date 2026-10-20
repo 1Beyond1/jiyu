@@ -15,7 +15,7 @@ export class Store {
     try { this.lock.exec('BEGIN EXCLUSIVE') } catch { this.lock.close(); throw new Error('数据目录正被使用，请先停止集屿服务') }
     this.db = new DatabaseSync(join(dataDir, 'jiyu.sqlite'))
     const schema = this.db.prepare('PRAGMA user_version').get() as { user_version: number }
-    if (schema.user_version > 2) { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close(); throw new Error('数据库版本高于当前应用，请使用匹配版本，禁止降级覆盖') }
+    if (schema.user_version > 3) { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close(); throw new Error('数据库版本高于当前应用，请使用匹配版本，禁止降级覆盖') }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS collections (id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
@@ -26,14 +26,24 @@ export class Store {
       CREATE TABLE IF NOT EXISTS renames (id TEXT PRIMARY KEY, data TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS ai_runs (id TEXT PRIMARY KEY, model TEXT NOT NULL, fileCount INTEGER NOT NULL, status TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, proposalHash TEXT);
       CREATE TABLE IF NOT EXISTS ai_usage (day TEXT PRIMARY KEY, calls INTEGER NOT NULL);
-      PRAGMA user_version=2;`)
-    for (const dir of ['objects', 'tmp']) mkdirSync(join(dataDir, dir), { recursive: true, mode: 0o700 })
+      CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL, token_hash TEXT NOT NULL, key_hash TEXT NOT NULL, data TEXT NOT NULL, bytes INTEGER NOT NULL, file_count INTEGER NOT NULL, expires INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS upload_parts (batch_id TEXT NOT NULL REFERENCES uploads(id) ON DELETE CASCADE, file_index INTEGER NOT NULL, part_index INTEGER NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(batch_id,file_index,part_index));
+      CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL COLLATE NOCASE, display_name TEXT NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','editor','viewer')), disabled INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS documents (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE, status TEXT NOT NULL, kind TEXT, chars INTEGER NOT NULL DEFAULT 0, truncated INTEGER NOT NULL DEFAULT 0, updated_at TEXT, error TEXT);
+      CREATE VIRTUAL TABLE IF NOT EXISTS content_search USING fts5(file_id UNINDEXED, body, tokenize='trigram');
+      CREATE TABLE IF NOT EXISTS ai_plans (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+      PRAGMA user_version=3;`)
+    const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]
+    if (!sessionColumns.some(c => c.name === 'user_id')) this.db.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'primary'")
+    if (this.get('password')) this.db.prepare("INSERT OR IGNORE INTO users VALUES ('primary','admin',?,?,'admin',0)").run(this.get('displayName') || '管理员', this.get('password')!)
+    for (const dir of ['objects', 'tmp', 'chunks']) mkdirSync(join(dataDir, dir), { recursive: true, mode: 0o700 })
     // 在获得目录互斥锁后恢复中断批次，已提交文件永不清理。
-    for (const name of readdirSync(join(dataDir, 'tmp'))) rmSync(join(dataDir, 'tmp', name), { force: true })
+    for (const name of readdirSync(join(dataDir, 'tmp'))) if (/^(?:[a-f0-9-]{36}|ocr-[a-zA-Z0-9_-]+)$/.test(name)) rmSync(join(dataDir, 'tmp', name), { force: true, recursive: true })
     const keys = new Set((this.db.prepare('SELECT storage_key FROM files').all() as { storage_key: string }[]).map(r => r.storage_key))
     for (const name of readdirSync(join(dataDir, 'objects'))) if (/^[a-f0-9-]{36}$/.test(name) && !keys.has(name)) rmSync(join(dataDir, 'objects', name), { force: true })
     this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now())
     this.db.prepare("UPDATE ai_runs SET status='interrupted' WHERE status='pending'").run()
+    this.db.prepare("UPDATE documents SET status='queued' WHERE status='processing'").run()
     if (!this.get('password') && !existsSync(join(dataDir, 'setup-token'))) writeFileSync(join(dataDir, 'setup-token'), token(), { mode: 0o600 })
   }
   get(key: string) { return (this.db.prepare('SELECT value FROM settings WHERE key=?').get(key) as { value: string } | undefined)?.value }
@@ -61,6 +71,8 @@ export class Store {
   addFile(file: CollectedFile, key: string) { this.db.prepare('INSERT INTO files VALUES (?,?,?,?)').run(file.id, file.collectionId, key, JSON.stringify(file)) }
   fileKey(id: string) { return (this.db.prepare('SELECT storage_key FROM files WHERE id=?').get(id) as { storage_key: string } | undefined)?.storage_key }
   usedBytes(collectionId?: string) { return this.files().filter(f => !collectionId || f.collectionId === collectionId).reduce((sum, f) => sum + f.size, 0) }
+  pendingBytes(collectionId?: string) { return Number((this.db.prepare(`SELECT COALESCE(SUM(bytes),0) AS total FROM uploads WHERE expires>?${collectionId ? ' AND collection_id=?' : ''}`).get(Date.now(), ...(collectionId ? [collectionId] : [])) as { total: number }).total) }
+  pendingFiles() { return Number((this.db.prepare('SELECT COALESCE(SUM(file_count),0) AS total FROM uploads WHERE expires>?').get(Date.now()) as { total: number }).total) }
   workspace(quotaBytes: number): Workspace {
     const files = this.files()
     return { version: 1, displayName: this.get('displayName') || '管理员', collections: this.collections(), files: files.filter(f => !f.deletedAt), trash: files.filter(f => f.deletedAt), storage: { usedBytes: this.usedBytes(), quotaBytes }, lastRenameId: (this.db.prepare('SELECT id FROM renames WHERE undone=0 ORDER BY rowid DESC LIMIT 1').get() as { id: string } | undefined)?.id, activities: (this.db.prepare('SELECT id,text,time FROM activities ORDER BY id DESC LIMIT 30').all() as { id: number; text: string; time: string }[]).map(a => ({ ...a, id: String(a.id), time: new Date(a.time).toLocaleString('zh-CN', { timeZone: 'Asia/Taipei', hour12: false }) })) }

@@ -4,6 +4,17 @@
 
 ## 第一版实施决策
 
+### 完整工作台实施（2026-10-20，开发中）
+
+- 继续使用同一个 Fastify / SQLite 服务。schema 3 保存分片上传、工作台成员、备份计划和后台处理状态；旧管理员兼容迁移，升级前保留离线备份。
+- 断点续传采用固定 4 MiB 分片、独立上传凭证、分片 SHA-256 和原子批次提交。临时正文放 `chunks/`，24 小时过期，预留整批容量；重选文件时逐片比对，避免拼接不同版本。原 multipart 接口共享容量预留边界。
+- 自动备份使用 SQLite 在线快照，再从快照读取不可变正文引用。清单最后写入，保留策略只清理专用备份目录内完整且可识别的备份；服务端不会在线清空回收站正文。
+- 成员权限采用单工作台的管理员 / 编辑者 / 只读成员，服务端逐请求鉴权；不引入多租户。
+- 网盘连接使用服务端加密凭证和可恢复传输记录，连接测试与真实授权状态分开。WebDAV / S3 使用标准协议，百度和夸克核对官方开放接口后实现；未授权时不显示已连接。
+- 预览与正文索引只处理明确支持的类型；OCR 在本机运行。正文交给外部 AI 需要额外明确授权，原有元数据授权不自动扩大。
+
+正文检索使用 SQLite [FTS5 trigram](https://www.sqlite.org/fts5.html)，支持中文子串；两字查询使用受限结果的线性匹配。DOCX 沿用已有 `yauzl` 读取器并调整为正式依赖，只读取限定大小的 `word/document.xml`，拒绝实体声明，不解压到文件系统。PDF 使用 Poppler，OCR 使用 [Tesseract CLI](https://tesseract-ocr.github.io/tessdoc/Command-Line-Usage.html)，子进程不用 shell，限定线程、时间、页数、像素及输出；识别后的文本只在本机 SQLite 中索引。容器增加原生工具测试，宿主机未安装时会明确报告缺失，不用模拟结果替代识别。
+
 - 单仓库增加 `server/`，Fastify 提供同源 API 和构建后的前端，Node.js 24 直接执行 TypeScript，不另加运行时转译器。
 - SQLite 使用 Node.js 内置 `node:sqlite`，先不引入 Drizzle；显式事务和 schema 版本维护结构。文件正文流式写入独立数据目录，随机存储键与显示名称分离，记录 SHA-256。
 - 仅新增 Fastify、multipart、static、cookie、rate-limit 官方组件，分别负责 HTTP、流式上传、静态页面、会话 cookie 与限流。认证、哈希、文件和 SQLite 使用原生 API。
