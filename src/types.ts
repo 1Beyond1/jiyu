@@ -13,6 +13,8 @@ export interface Collection {
   storage: StorageId
   status: CollectionStatus
   formats: string
+  maxFileSizeMB: number
+  maxFilesPerSubmission: number
 }
 
 export interface CollectedFile {

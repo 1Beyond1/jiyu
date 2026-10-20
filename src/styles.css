@@ -168,6 +168,7 @@ svg { flex-shrink: 0; }
 .status i { height: 4px; width: 4px; border-radius: 50%; background: currentColor; }
 .status.completed { color: var(--secondary); background: var(--canvas); }
 .status.paused { color: var(--secondary); background: var(--canvas); }
+.status.expired { color: var(--accent-dark); background: var(--accent-soft); }
 .status.neutral { color: var(--muted); background: var(--canvas); }
 .card-title { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 5px; text-align: left; font-size: 15px; font-weight: 500; padding: 16px 0 0; line-height: 1.6; }
 .card-title svg { color: var(--muted); opacity: 0; transition: opacity .18s; }
@@ -237,6 +238,26 @@ tr.selected td { background: #f4ece2; }
 .create-card > span { display: grid; place-content: center; width: 43px; height: 43px; background: var(--surface); border-radius: 50%; }
 .create-card b { font-weight: 500; font-size: 12px; margin-top: 15px; }
 .create-card p { font-size: 11px; margin-top: 7px; color: var(--muted); }
+.collection-back { margin: -8px 0 22px; padding-left: 0; }
+.collection-detail-title { align-items: flex-end; }
+.collection-detail-title h1 { overflow-wrap: anywhere; }
+.collection-detail-kicker { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.collection-brief { display: grid; grid-template-columns: minmax(180px, 1fr) 3fr; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); padding: 26px; gap: 30px; }
+.collection-progress-summary { border-right: 1px solid var(--line); padding-right: 30px; }
+.collection-progress-summary p { display: flex; justify-content: space-between; font-size: 12px; color: var(--secondary); }
+.collection-progress-summary p > span { color: var(--accent); }
+.collection-progress-summary > strong { display: block; font-size: 30px; font-weight: 500; margin: 12px 0 14px; font-variant-numeric: tabular-nums; }
+.collection-progress-summary strong small { font-size: 13px; color: var(--muted); font-weight: 400; }
+.collection-progress-summary > small { display: block; font-size: 10px; color: var(--muted); margin-top: 10px; }
+.collection-brief dl { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin: 0; align-content: center; min-width: 0; }
+.collection-brief dt { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+.collection-brief dd { margin: 0; font-size: 13px; line-height: 1.8; }
+.collection-brief dd small { display: block; color: var(--muted); font-size: 10px; margin-top: 7px; }
+.collection-formats { overflow-wrap: anywhere; }
+.collection-lifecycle { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 15px 0; margin-bottom: 26px; border-bottom: 1px solid var(--line); }
+.collection-lifecycle > p { flex: 1; font-size: 11px; color: var(--secondary); line-height: 1.8; min-width: 160px; }
+.collection-lifecycle > small { width: 100%; font-size: 11px; color: var(--accent); }
+.collection-detail-note { margin-top: 16px; color: var(--muted); font-size: 10px; line-height: 1.8; }
 .files-view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
 .files-tabs { display: flex; gap: 22px; align-items: center; }
 .files-tabs > button { font-size: 12px; display: flex; align-items: center; gap: 7px; padding: 0 0 17px; border-bottom: 2px solid transparent; }
@@ -462,6 +483,8 @@ tr.selected td { background: #f4ece2; }
   .toast { left: calc(50% + 103px); }
 }
 @media (max-width: 1000px) {
+  .collection-brief { grid-template-columns: 1fr; gap: 22px; }
+  .collection-progress-summary { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 22px; }
   .collection-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .collections-section .collection-card:last-child { display: none; }
   .collection-card { padding: 20px 19px 0; }
@@ -495,6 +518,13 @@ tr.selected td { background: #f4ece2; }
   table { min-width: 760px; }
 }
 @media (max-width: 760px) {
+  .collection-detail-title { align-items: flex-start; }
+  .collection-detail-title .button-row { width: 100%; }
+  .collection-brief { padding: 21px; }
+  .collection-brief dl { grid-template-columns: 1fr 1fr; gap: 24px 14px; }
+  .collection-brief dl > div:last-child { grid-column: 1 / -1; }
+  .collection-tabs { gap: 22px; overflow-x: auto; }
+  .collection-tabs > button { white-space: nowrap; }
   .sidebar { transform: translateX(-100%); transition: transform .2s; width: 224px; }
   .sidebar.open { transform: translateX(0); }
   .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 34; background: #21321e40; backdrop-filter: blur(2px); }

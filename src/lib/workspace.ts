@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Workspace } from '../types'
+import { defaultCollectionLimits } from './collections'
 
 // 保留更名前的数据键，避免集屿更名后丢失已有的浏览器演示记录。
 const KEY = 'guiji.workspace.v1'
@@ -13,7 +14,7 @@ export function createWorkspace(): Workspace {
       { id: 'team-october', title: '十月团队周报', description: '每一份进展，都值得被看见', category: 'document', received: 8, target: 12, deadline: '2026-10-23', storage: 'local', status: 'active', formats: 'PDF, DOCX, XLSX' },
       { id: 'city-walk', title: '城市漫游 · 摄影征集', description: '把你眼中的城市，分享给我们', category: 'photo', received: 32, target: 50, deadline: '2026-10-31', storage: 'local', status: 'active', formats: 'JPG, PNG, HEIC, ZIP' },
       { id: 'september-archive', title: '九月项目交付归档', description: '一个阶段的结束，也是新的开始', category: 'document', received: 16, target: 16, deadline: '2026-09-30', storage: 'local', status: 'completed', formats: 'PDF, ZIP' },
-    ],
+    ].map(c => ({ ...c, ...defaultCollectionLimits })) as Workspace['collections'],
     files: [
       { id: 'f1', name: '秋日品牌视觉提案.pdf', size: 2480000, collectionId: 'brand-autumn', owner: '陈念', createdAt: '2026-10-19T10:42:00+08:00', storage: 'local', status: 'ready' },
       { id: 'f2', name: '品牌辅助图形_v2.fig', size: 18600000, collectionId: 'brand-autumn', owner: '许知远', createdAt: '2026-10-19T10:28:00+08:00', storage: 'local', status: 'ready' },
@@ -38,7 +39,7 @@ function readWorkspace(): Workspace {
     if (!raw) return createWorkspace()
     const data = JSON.parse(raw) as Workspace
     if (data.version !== 1 || !Array.isArray(data.collections) || !Array.isArray(data.files) || !Array.isArray(data.activities) || typeof data.displayName !== 'string') return createWorkspace()
-    return data
+    return { ...data, collections: data.collections.map(c => ({ ...defaultCollectionLimits, ...c })) }
   } catch { return createWorkspace() }
 }
 

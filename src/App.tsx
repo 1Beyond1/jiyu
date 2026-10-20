@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowDownToLine, ArrowRight, ArrowUpRight, Bell, Check, ChevronDown, ChevronRight, CircleHelp, Clock3, Files, FolderClosed, HardDrive, LayoutDashboard, Link, Menu, Plus, Search, Settings, ShieldCheck, Sparkles, WandSparkles, X } from 'lucide-react'
 import { Brand, Empty, Modal } from './components/ui'
-import { CollectionCard, Collections, CreateCollection, ShareCollection } from './features/collections'
+import { CollectionCard, Collections, CollectionForm, ShareCollection } from './features/collections'
+import { CollectionDetail } from './features/collection-detail'
 import { FileDetail, FileTable } from './features/files'
 import { RenameModal } from './features/rename'
 import { SettingsPage, StoragePage, ToolsPage } from './features/workspace-pages'
 import { Assistant } from './features/assistant'
 import { Submission } from './features/submission'
 import { createWorkspace, useWorkspace } from './lib/workspace'
-import type { CollectedFile, Collection, Page } from './types'
+import { collectionState, isExpired, submissionError } from './lib/collections'
+import type { CollectedFile, Collection, CollectionStatus, Page, Workspace } from './types'
 
 const navigation = [
   { id: 'overview', label: '工作台', icon: LayoutDashboard },
@@ -23,12 +25,17 @@ function readPage(): Page {
   return candidate in pageNames ? candidate as Page : 'overview'
 }
 
+function recordActivity(workspace: Workspace, text: string) {
+  return [{ id: crypto.randomUUID(), text, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Taipei' }) }, ...workspace.activities].slice(0, 20)
+}
+
 export default function App() {
   const { workspace, setWorkspace, saveError } = useWorkspace()
   const [page, setPage] = useState<Page>(readPage)
   const [hash, setHash] = useState(location.hash)
   const [menuOpen, setMenuOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [editing, setEditing] = useState<Collection | null>(null)
   const [share, setShare] = useState<Collection | null>(null)
   const [detail, setDetail] = useState<CollectedFile | null>(null)
   const [renaming, setRenaming] = useState<CollectedFile[] | null>(null)
@@ -62,24 +69,43 @@ export default function App() {
     if (next !== 'files') { setSearch(''); setCollectionId('') }
     location.hash = `/${next}`
   }
-  function openCollection(id: string) { setCollectionId(id); setSearch(''); navigate('files') }
+  function openCollection(id: string) { setPage('collections'); setHash(`#/collections/${id}`); setMenuOpen(false); setSearch(''); location.hash = `/collections/${id}` }
   function review(ids: string[]) {
     setWorkspace(w => ({ ...w, files: w.files.map(f => ids.includes(f.id) ? { ...f, status: 'ready' } : f) }))
     setDetail(null); notify(`已将 ${ids.length} 个文件标记为已整理`)
   }
-  const active = workspace.collections.filter(c => c.status === 'active')
+  const active = workspace.collections.filter(c => collectionState(c) === 'active')
   const currentCollection = workspace.collections.find(c => c.id === collectionId)
+  const taskId = page === 'collections' && hash.startsWith('#/collections/') ? hash.slice('#/collections/'.length) : ''
+  const viewedCollection = workspace.collections.find(c => c.id === taskId)
   const total = workspace.collections.reduce((sum, c) => sum + c.received, 0)
   const pending = workspace.files.filter(f => f.status === 'pending').length
   const fileProps = { files: workspace.files, collections: workspace.collections, onRename: setRenaming, onReview: review, onDetail: setDetail }
   function openRename() { const list = workspace.files.filter(f => f.status === 'pending'); if (workspace.files.length) setRenaming(list.length ? list : workspace.files); else notify('先添加一些文件，再来试试重命名') }
+  function changeCollectionStatus(id: string, status: CollectionStatus) {
+    const current = workspace.collections.find(c => c.id === id)
+    if (!current) return
+    if (status === 'active' && isExpired(current)) { notify('请先编辑规则，延长截止日期'); return }
+    const label = status === 'active' ? '重新开放' : status === 'paused' ? '暂停' : '结束'
+    setWorkspace(w => ({ ...w, collections: w.collections.map(c => c.id === id ? { ...c, status } : c), activities: recordActivity(w, `${label}了「${current.title}」`) }))
+    notify(`收集已${label}`)
+  }
+  function submitFiles(files: CollectedFile[]) {
+    const current = workspace.collections.find(c => c.id === files[0]?.collectionId)
+    if (!current) return '没有找到这项收集，请重新打开收集链接。'
+    const error = submissionError(current, files)
+    if (error) return error
+    if (!files[0].owner.trim()) return '请填写你的姓名。'
+    setWorkspace(w => ({ ...w, files: [...files, ...w.files], collections: w.collections.map(c => c.id === current.id ? { ...c, received: c.received + files.length } : c), activities: recordActivity(w, `${files[0].owner}向「${current.title}」提交了 ${files.length} 份文件（演示）`) }))
+    return ''
+  }
 
-  if (hash.startsWith('#/submit/')) return <Submission ownerName={workspace.displayName} collection={workspace.collections.find(c => c.id === hash.slice('#/submit/'.length))} onSubmit={files => setWorkspace(w => ({ ...w, files: [...files, ...w.files], collections: w.collections.map(c => c.id === files[0]?.collectionId ? { ...c, received: c.received + files.length } : c), activities: [{ id: crypto.randomUUID(), text: `${files[0]?.owner}提交了 ${files.length} 份文件（演示）`, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Taipei' }) }, ...w.activities].slice(0, 20) }))} />
+  if (hash.startsWith('#/submit/')) return <Submission key={hash} ownerName={workspace.displayName} collection={workspace.collections.find(c => c.id === hash.slice('#/submit/'.length))} onSubmit={submitFiles} />
 
   return <div className="app-shell">
     {menuOpen && <button className="sidebar-backdrop" onClick={() => setMenuOpen(false)} aria-label="收起导航" />}
     <aside className={`sidebar ${menuOpen ? 'open' : ''}`}><a className="brand-link" href="#/overview" onClick={() => navigate('overview')} aria-label="集屿首页"><Brand /></a>
-      <button className="workspace-switch" onClick={() => navigate('settings')}><span className="workspace-avatar">林</span><span>我的工作空间<small>个人工作台</small></span><ChevronDown size={13} /></button>
+      <button className="workspace-switch" onClick={() => navigate('settings')}><span className="workspace-avatar">{workspace.displayName.slice(0, 1)}</span><span>我的工作空间<small>个人工作台</small></span><ChevronDown size={13} /></button>
       <p className="nav-caption">工作空间</p><nav aria-label="主导航">{navigation.map(n => <button className={page === n.id ? 'active' : ''} key={n.id} onClick={() => { setCollectionId(''); setSearch(''); navigate(n.id) }}><n.icon size={18} strokeWidth={1.7} /><span>{n.label}</span>{n.id === 'collections' && <em>{active.length}</em>}{n.id === 'tools' && <span className="nav-new">NEW</span>}</button>)}</nav>
       <p className="nav-caption second">管理</p><nav aria-label="工作空间管理"><button className={page === 'storage' ? 'active' : ''} onClick={() => navigate('storage')}><HardDrive size={18} strokeWidth={1.7} /><span>存储空间</span></button><button className={page === 'settings' ? 'active' : ''} onClick={() => navigate('settings')}><Settings size={18} strokeWidth={1.7} /><span>设置</span></button></nav>
       <div className="sidebar-bottom"><div className="storage-meter"><div><span><HardDrive size={14} />本地存储</span><span className="meter-dot" /></div><p><b>12.8 GB</b><span> / 100 GB</span></p><div className="progress"><span style={{ width: '12.8%' }} /></div><button onClick={() => navigate('storage')}>管理存储空间<ArrowUpRight size={13} /></button><small>演示容量</small></div><button className="sidebar-help" onClick={() => setHelp(true)}><CircleHelp size={16} /><span>使用指南</span><ArrowUpRight size={13} /></button><button className="account" onClick={() => navigate('settings')}><span className="account-avatar">{workspace.displayName.slice(0, 1)}</span><span><b>{workspace.displayName}</b><small>个人账号</small></span><Settings size={15} /></button></div>
@@ -95,9 +121,10 @@ export default function App() {
           <div className="ai-banner"><div className="ai-banner-symbol"><Sparkles size={24} strokeWidth={1.5} /></div><div><h3>有些整理，一句话就好。</h3><p>试着说「帮我统一文件名」，先看看集屿 AI 的整理建议。</p></div><button className="text-button" onClick={() => setAiOpen(true)}>和集屿 AI 聊聊<ArrowUpRight size={15} /></button></div>
           <div className="workspace-footnote"><span><ShieldCheck size={13} />你的文件，你来掌控</span><span>少一点繁琐，多一点从容。</span></div>
         </>}
-        {page === 'collections' && <Collections collections={workspace.collections} onOpen={openCollection} onShare={setShare} onCreate={() => setCreateOpen(true)} />}
+        {page === 'collections' && !taskId && <Collections collections={workspace.collections} onOpen={openCollection} onShare={setShare} onCreate={() => setCreateOpen(true)} />}
+        {page === 'collections' && taskId && (viewedCollection ? <CollectionDetail collection={viewedCollection} {...fileProps} files={workspace.files.filter(f => f.collectionId === taskId)} onBack={() => navigate('collections')} onEdit={() => setEditing(viewedCollection)} onShare={() => setShare(viewedCollection)} onStatus={status => changeCollectionStatus(taskId, status)} /> : <><Empty title="没有找到这项收集" text="任务可能已被重置，请返回收集列表查看。" /><button className="button" onClick={() => navigate('collections')}>返回全部收集</button></>)}
         {page === 'files' && <><div className="page-title"><div><p className="eyebrow">A PLACE FOR EVERY FILE</p><h1>{currentCollection?.title || '所有文件，井井有条。'}</h1><p>{currentCollection?.description || '告别散落的文件，在这里找到每一份认真。'}</p></div>{currentCollection ? <button className="button primary" onClick={() => setShare(currentCollection)}><Link size={16} />分享收集</button> : <button className="button primary" onClick={openRename}><WandSparkles size={16} />批量重命名</button>}</div>
-          <div className="files-view-header"><div className="files-tabs"><button className={!collectionId ? 'active' : ''} onClick={() => { setCollectionId(''); setSearch('') }}>全部文件<span>{workspace.files.length}</span></button><label><FolderClosed size={15} /><select aria-label="按收集任务筛选" value={collectionId} onChange={e => setCollectionId(e.target.value)}><option value="">按收集筛选</option>{workspace.collections.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}</select></label></div>{currentCollection && <button className="text-button" onClick={() => { setWorkspace(w => ({ ...w, collections: w.collections.map(c => c.id === collectionId ? { ...c, status: c.status === 'active' ? 'paused' : 'active' } : c) })); notify(currentCollection.status === 'active' ? '收集已暂停' : '收集已恢复') }}>{currentCollection.status === 'active' ? '暂停收集' : '重新开启'}</button>}</div>
+          <div className="files-view-header"><div className="files-tabs"><button className={!collectionId ? 'active' : ''} onClick={() => { setCollectionId(''); setSearch('') }}>全部文件<span>{workspace.files.length}</span></button><label><FolderClosed size={15} /><select aria-label="按收集任务筛选" value={collectionId} onChange={e => setCollectionId(e.target.value)}><option value="">按收集筛选</option>{workspace.collections.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}</select></label></div>{currentCollection && <button className="text-button" onClick={() => openCollection(currentCollection.id)}>管理这项收集<ArrowUpRight size={14} /></button>}</div>
           {search && <div className="search-result-note">搜索「{search}」<button className="icon-button" aria-label="清除搜索" onClick={() => setSearch('')}><X size={14} /></button></div>}
           <FileTable key={`files-${collectionId}`} {...fileProps} search={search} collectionId={collectionId} />
         </>}
@@ -108,7 +135,14 @@ export default function App() {
     </div>
     {!aiOpen && <button className="ai-fab" onClick={() => setAiOpen(true)}><Sparkles size={19} strokeWidth={1.6} /><span>集屿 AI</span><span className="ai-fab-dot" /></button>}
     {aiOpen && <Assistant workspace={workspace} onClose={() => setAiOpen(false)} onRename={openRename} />}
-    {createOpen && <CreateCollection onClose={() => setCreateOpen(false)} onCreate={c => { setWorkspace(w => ({ ...w, collections: [c, ...w.collections] })); setCreateOpen(false); setShare(c); notify('新收集已创建') }} />}
+    {(createOpen || editing) && <CollectionForm collection={editing || undefined} onClose={() => { setCreateOpen(false); setEditing(null) }} onSave={updated => {
+      if (editing) {
+        setWorkspace(w => ({ ...w, collections: w.collections.map(c => c.id === updated.id ? { ...updated, received: c.received, storage: c.storage, status: c.status } : c), activities: recordActivity(w, `修改了「${updated.title}」的收集规则`) }))
+        setEditing(null); notify('收集规则已更新，原链接保持有效')
+      } else {
+        setWorkspace(w => ({ ...w, collections: [updated, ...w.collections], activities: recordActivity(w, `创建了「${updated.title}」`) })); setCreateOpen(false); openCollection(updated.id); setShare(updated); notify('新收集已创建')
+      }
+    }} />}
     {share && <ShareCollection collection={share} onClose={() => setShare(null)} />}
     {detail && <FileDetail file={detail} collection={workspace.collections.find(c => c.id === detail.collectionId)} onClose={() => setDetail(null)} onRename={() => { setRenaming([detail]); setDetail(null) }} onReview={() => review([detail.id])} />}
     {renaming && <RenameModal files={renaming} allFiles={workspace.files} collections={workspace.collections} onClose={() => setRenaming(null)} onApply={changes => { setWorkspace(w => ({ ...w, files: w.files.map(f => { const change = changes.find(c => c.id === f.id); return change ? { ...f, name: change.name } : f }) })); setRenaming(null); notify(`已重命名 ${changes.length} 个文件`) }} />}
