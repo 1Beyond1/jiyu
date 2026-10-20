@@ -708,3 +708,24 @@ tr.selected td { background: #f4ece2; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+/* 归档预览沿用纸面弹窗，不缓存完整下载文件。 */
+.archive-summary { display: flex; align-items: center; gap: 14px; padding: 18px; margin-bottom: 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.archive-summary strong { font-size: 16px; font-weight: 500; }
+.archive-summary p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.archive-summary > span:last-child { margin-left: auto; color: var(--muted); font-size: 11px; }
+.archive-preview-heading { display: flex; align-items: center; justify-content: space-between; margin: 24px 0 12px; }
+.archive-preview-heading h3 { margin: 0; font-size: 13px; font-weight: 500; }
+.archive-preview-heading > span { color: var(--muted); font-size: 11px; }
+.archive-preview { max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.archive-preview > div { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 20px; padding: 13px 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.archive-preview > div:last-child { border-bottom: 0; }
+.archive-preview code { overflow-wrap: anywhere; font: inherit; color: var(--accent); }
+.archive-preview > div > span { overflow-wrap: anywhere; }
+.archive-preview .archive-preview-labels { position: sticky; top: 0; color: var(--muted); background: var(--surface); font-size: 11px; }
+.archive-preview > p { padding: 12px 16px; color: var(--muted); font-size: 11px; }
+@media (max-width: 600px) {
+  .archive-summary { flex-wrap: wrap; }
+  .archive-summary > span:last-child { flex-basis: 100%; margin-left: 0; }
+  .archive-preview > div { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .archive-preview-labels span:first-child { display: none; }
+}

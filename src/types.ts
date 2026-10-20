@@ -53,6 +53,11 @@ export interface Workspace {
 
 export interface UploadReceipt { receiptId: string; filesCount: number; bytes: number; createdAt: string }
 
+export type ArchiveLayout = 'flat' | 'collection' | 'owner' | 'collection-owner'
+export type ArchiveStatus = 'ready' | 'streaming' | 'completed' | 'failed' | 'cancelled'
+export interface ArchiveEntry { id: string; name: string; path: string; size: number }
+export interface ArchivePlan { id: string; fileName: string; layout: ArchiveLayout; totalBytes: number; entries: ArchiveEntry[]; expiresAt: string; status: ArchiveStatus; error?: string }
+
 export interface AISettings {
   revision: string
   enabled: boolean
