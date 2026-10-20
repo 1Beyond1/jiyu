@@ -15,6 +15,8 @@ import { Store } from './store.ts'
 import { checkPassword, digest, equalToken, hashPassword, HttpError, object, passwordInput, safeName, text, token } from './security.ts'
 import { fileExtensions, isExpired, submissionError } from '../src/lib/collections.ts'
 import type { Collection, CollectedFile } from '../src/types.ts'
+import { proposalHash, registerAI } from './ai.ts'
+import type { AITransport } from './ai.ts'
 
 function collectionInput(value: unknown, current?: Collection): Collection {
   const body = object(value)
@@ -32,7 +34,7 @@ function collectionInput(value: unknown, current?: Collection): Collection {
   return { id: current?.id || randomUUID(), uploadToken: current?.uploadToken || token(), title: text(body.title, '收集名称', 50), description: typeof body.description === 'string' ? text(body.description, '收集说明', 150, 0) : '', category, target: integer('target', 10000), deadline, formats: formats.join(', ').toUpperCase(), maxFileSizeMB: integer('maxFileSizeMB', 1024), maxFilesPerSubmission: integer('maxFilesPerSubmission', 100), maxTotalSizeMB: integer('maxTotalSizeMB', 1048576, current?.maxTotalSizeMB || 2048), storage: 'local', received: current?.received || 0, status: current?.status || 'active' }
 }
 
-export async function createApp(config: Config, options: { serveFrontend?: boolean } = {}) {
+export async function createApp(config: Config, options: { serveFrontend?: boolean; aiTransport?: AITransport } = {}) {
   const store = new Store(config.dataDir)
   const app = Fastify({ logger: false, trustProxy: config.trustProxy || false, bodyLimit: 64 * 1024, requestTimeout: 10 * 60 * 1000, connectionTimeout: 30 * 1000 })
   let reserved = 0, uploads = 0
@@ -75,7 +77,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     if (reply.sent) return
     const e = error as Error & { statusCode?: number; code?: string }
     const limit = e.code?.includes('LIMIT') || e.code === 'FST_REQ_FILE_TOO_LARGE'
-    const status = limit ? 413 : e.statusCode && e.statusCode >= 400 && e.statusCode < 500 ? e.statusCode : e.code === 'ENOSPC' ? 507 : 500
+    const status = limit ? 413 : e.statusCode && e.statusCode >= 400 && (e.statusCode < 500 || (error instanceof HttpError && e.statusCode <= 599)) ? e.statusCode : e.code === 'ENOSPC' ? 507 : 500
     reply.code(status).send({ error: error instanceof HttpError ? error.message : limit ? '文件大小、数量或请求总量超过限制' : status === 500 ? '服务暂时无法完成操作，请稍后重试' : status === 507 ? '服务器磁盘空间不足' : '请求无效，请检查输入后重试' })
   })
   app.addHook('preHandler', (req, reply, done) => {
@@ -94,7 +96,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     reply.raw.once('finish', () => { req.raw.removeListener('data', count); if (exceeded) req.raw.destroy() })
     done()
   })
-  app.get('/api/health', async () => ({ ok: true, version: '0.2.0' }))
+  app.get('/api/health', async () => ({ ok: true, version: '0.3.0' }))
   app.get('/api/auth/status', async req => ({ setupRequired: !store.get('password'), authenticated: !!session(req), csrf: session(req)?.csrf }))
   app.post('/api/auth/setup', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (req, reply) => {
     if (store.get('password')) throw new HttpError(409, '管理员已经初始化')
@@ -231,13 +233,18 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     if (!Array.isArray(changes)) throw new HttpError(400, '命名方案无效')
     const plan = changes.map(value => { const item = object(value); return { id: text(item.id, '文件编号', 36), name: safeName(item.name), oldName: text(item.oldName, '原文件名', 200) } })
     const selected = chosenFiles(plan.map(p => p.id)), all = store.files().filter(f => !f.deletedAt)
+    const aiRunId = object(req.body).aiRunId
+    if (aiRunId !== undefined) {
+      const run = store.db.prepare('SELECT proposalHash,status,createdAt FROM ai_runs WHERE id=?').get(text(aiRunId, 'AI 操作编号', 36)) as { proposalHash: string; status: string; createdAt: string } | undefined
+      if (!run || run.status !== 'succeeded' || Date.now() - Date.parse(run.createdAt) > 30 * 60 * 1000 || run.proposalHash !== proposalHash(plan)) throw new HttpError(409, 'AI 方案已过期、已执行或被修改，请重新生成')
+    }
     if (selected.some(f => f.name !== plan.find(p => p.id === f.id)?.oldName)) throw new HttpError(409, '文件名已被其他操作修改，请刷新后重新预览')
     const names = all.map(f => (plan.find(p => p.id === f.id)?.name || f.name).toLowerCase())
     const newNames = plan.map(p => p.name.toLowerCase())
     if (newNames.some(name => names.filter(n => n === name).length > 1)) throw new HttpError(409, '命名方案产生重名，请调整规则')
     for (const f of selected) { const next = plan.find(p => p.id === f.id)!.name; if (next.slice(next.lastIndexOf('.')).toLowerCase() !== f.name.slice(f.name.lastIndexOf('.')).toLowerCase()) throw new HttpError(400, '批量命名需保留文件扩展名') }
     const operationId = randomUUID()
-    store.transaction(() => { for (const f of selected) store.saveFile({ ...f, name: plan.find(p => p.id === f.id)!.name }); store.db.prepare('INSERT INTO renames(id,data) VALUES (?,?)').run(operationId, JSON.stringify(plan)); store.activity(`批量重命名 ${selected.length} 个文件`) })
+    store.transaction(() => { for (const f of selected) store.saveFile({ ...f, name: plan.find(p => p.id === f.id)!.name }); store.db.prepare('INSERT INTO renames(id,data) VALUES (?,?)').run(operationId, JSON.stringify(plan)); if (aiRunId) store.db.prepare('UPDATE ai_runs SET status=? WHERE id=?').run('applied', String(aiRunId)); store.activity(`${aiRunId ? '确认 AI 方案，' : ''}批量重命名 ${selected.length} 个文件`) })
     return { workspace: store.workspace(config.quotaBytes), operationId }
   })
   app.post('/api/files/rename/:id/undo', async req => {
@@ -251,6 +258,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     return store.workspace(config.quotaBytes)
   })
   app.get('/api/storage', async () => { const disk = await statfs(config.dataDir); return { usedBytes: store.usedBytes(), quotaBytes: config.quotaBytes, availableBytes: disk.bavail * disk.bsize } })
+  registerAI(app, store, options.aiTransport)
   app.addHook('onClose', async () => { store.close() })
   if (options.serveFrontend !== false && existsSync(resolve('dist/index.html'))) {
     await app.register(staticFiles, { root: resolve('dist'), index: ['index.html'], cacheControl: false })

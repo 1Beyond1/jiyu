@@ -53,6 +53,21 @@ export interface Workspace {
 
 export interface UploadReceipt { receiptId: string; filesCount: number; bytes: number; createdAt: string }
 
+export interface AISettings {
+  revision: string
+  enabled: boolean
+  protocol: 'responses' | 'chat'
+  baseUrl: string
+  model: string
+  maxDailyCalls: number
+  hasKey: boolean
+  keyReady: boolean
+  usedToday: number
+}
+export interface RenameChange { id: string; oldName: string; name: string }
+export interface AIReply { runId: string; reply: string; changes: RenameChange[]; tokens: number }
+export interface AIRun { id: string; model: string; fileCount: number; status: string; tokens: number; createdAt: string }
+
 export const storageNames: Record<StorageId, string> = {
   local: '本地存储', onedrive: 'OneDrive', s3: 'S3 对象存储',
 }

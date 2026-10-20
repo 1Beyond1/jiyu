@@ -7,12 +7,13 @@ import { FileDetail, FileTable, TrashPage } from './features/files'
 import { RenameModal } from './features/rename'
 import { SettingsPage, StoragePage, ToolsPage } from './features/workspace-pages'
 import { Assistant } from './features/assistant'
+import { AIPlan } from './features/ai-plan'
 import { PublicSubmission } from './features/submission'
 import { AdminGate } from './features/auth'
 import { formatSize, useWorkspace } from './lib/workspace'
 import { api } from './lib/api'
 import { collectionState, isExpired } from './lib/collections'
-import type { CollectedFile, Collection, CollectionStatus, Page, Workspace } from './types'
+import type { AIReply, CollectedFile, Collection, CollectionStatus, Page, Workspace } from './types'
 
 const navigation = [
   { id: 'overview', label: '工作台', icon: LayoutDashboard },
@@ -48,6 +49,8 @@ function WorkspaceApp() {
   const [detail, setDetail] = useState<CollectedFile | null>(null)
   const [renaming, setRenaming] = useState<CollectedFile[] | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
+  const [assistantFileIds, setAssistantFileIds] = useState<string[]>([])
+  const [aiProposal, setAiProposal] = useState<AIReply | null>(null)
   const [notifications, setNotifications] = useState(false)
   const [help, setHelp] = useState(false)
   const [search, setSearch] = useState('')
@@ -68,7 +71,7 @@ function WorkspaceApp() {
     return () => document.removeEventListener('pointerdown', handler)
   }, [])
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
-  useEffect(() => setOperationError(''), [createOpen, editing, renaming, share, trashing])
+  useEffect(() => setOperationError(''), [createOpen, editing, renaming, share, trashing, aiProposal])
   function notify(text: string, failed = false) {
     setToastError(failed)
     setToast(text)
@@ -97,8 +100,9 @@ function WorkspaceApp() {
   const viewedCollection = workspace.collections.find(c => c.id === taskId)
   const total = workspace.collections.reduce((sum, c) => sum + c.received, 0)
   const pending = workspace.files.filter(f => f.status === 'pending').length
-  const fileProps = { files: workspace.files, collections: workspace.collections, onRename: setRenaming, onReview: review, onDetail: setDetail, onTrash: setTrashing }
+  const fileProps = { files: workspace.files, collections: workspace.collections, onRename: setRenaming, onReview: review, onDetail: setDetail, onTrash: setTrashing, onAI: openAssistant }
   function openRename() { const list = workspace.files.filter(f => f.status === 'pending'); if (workspace.files.length) setRenaming(list.length ? list : workspace.files); else notify('先添加一些文件，再来试试重命名') }
+  function openAssistant(files: CollectedFile[] = []) { setAssistantFileIds(files.slice(0, 30).map(f => f.id)); setAiOpen(true) }
   async function changeCollectionStatus(id: string, status: CollectionStatus) {
     const current = workspace.collections.find(c => c.id === id)
     if (!current) return
@@ -128,7 +132,7 @@ function WorkspaceApp() {
           <div className="overview-stats"><div><span><FolderClosed size={16} />进行中的收集</span><p>{active.length}<small>项</small><em><span />正在有序进行</em></p></div><div><span><ArrowDownToLine size={16} />累计收到文件</span><p>{total}<small>份</small><em className="stat-note">来自 {workspace.collections.length} 项收集</em></p></div><div><span><Clock3 size={16} />待整理文件</span><p>{pending}<small>份</small><button onClick={() => navigate('tools')}>去整理<ArrowUpRight size={13} /></button></p></div><div><span><HardDrive size={16} />已用存储空间</span><p className="real-storage-value">{formatSize(usedBytes)}<em className="stat-note">配额 {formatSize(quotaBytes)}</em></p></div></div>
           <section className="collections-section"><div className="section-heading"><h2>进行中的收集<span className="count-badge">{active.length}</span></h2><button className="text-button" onClick={() => navigate('collections')}>全部收集<ArrowRight size={15} /></button></div>{active.length ? <div className="collection-grid">{active.slice(0, 3).map(c => <CollectionCard key={c.id} collection={c} onOpen={openCollection} onShare={setShare} />)}</div> : <Empty title="从第一项收集开始" text="点击新建收集，告别零散的文件消息。" />}</section>
           <section className="recent-section"><div className="section-heading"><div className="heading-with-note"><h2>最近收到</h2><span>每一份新提交，都在这里</span></div><button className="text-button" onClick={() => { setCollectionId(''); navigate('files') }}>查看全部文件<ArrowRight size={15} /></button></div><FileTable {...fileProps} compact /></section>
-          <div className="ai-banner"><div className="ai-banner-symbol"><Sparkles size={24} strokeWidth={1.5} /></div><div><h3>有些整理，一句话就好。</h3><p>试着说「帮我统一文件名」，先看看集屿 AI 的整理建议。</p></div><button className="text-button" onClick={() => setAiOpen(true)}>和集屿 AI 聊聊<ArrowUpRight size={15} /></button></div>
+          <div className="ai-banner"><div className="ai-banner-symbol"><Sparkles size={24} strokeWidth={1.5} /></div><div><h3>有些整理，一句话就好。</h3><p>试着说「帮我统一文件名」，先看看集屿 AI 的整理建议。</p></div><button className="text-button" onClick={() => openAssistant()}>和集屿 AI 聊聊<ArrowUpRight size={15} /></button></div>
           <div className="workspace-footnote"><span><ShieldCheck size={13} />你的文件，你来掌控</span><span>少一点繁琐，多一点从容。</span></div>
         </>}
         {page === 'collections' && !taskId && <Collections collections={workspace.collections} onOpen={openCollection} onShare={setShare} onCreate={() => setCreateOpen(true)} />}
@@ -138,14 +142,15 @@ function WorkspaceApp() {
           {search && <div className="search-result-note">搜索「{search}」<button className="icon-button" aria-label="清除搜索" onClick={() => setSearch('')}><X size={14} /></button></div>}
           <FileTable key={`files-${collectionId}`} {...fileProps} search={search} collectionId={collectionId} />
         </>}
-        {page === 'tools' && <ToolsPage workspace={workspace} onRename={openRename} onFiles={() => { setCollectionId(''); navigate('files') }} onAI={() => setAiOpen(true)} />}
+        {page === 'tools' && <ToolsPage workspace={workspace} onRename={openRename} onFiles={() => { setCollectionId(''); navigate('files') }} onAI={() => openAssistant()} />}
         {page === 'storage' && <StoragePage workspace={workspace} />}
         {page === 'trash' && <TrashPage files={workspace.trash || []} onRestore={async ids => { if (await action('/api/files/restore', { ids })) notify('文件已恢复') }} />}
         {page === 'settings' && <SettingsPage workspace={workspace} onSave={async name => { if (await action('/api/settings', { displayName: name }, 'PATCH')) notify('设置已保存') }} onLogout={async () => { try { await api('/api/auth/logout', 'POST', {}); window.dispatchEvent(new Event('jiyu:session-expired')) } catch (e) { notify((e as Error).message) } }} />}
       </main>
     </div>
-    {!aiOpen && <button className="ai-fab" onClick={() => setAiOpen(true)}><Sparkles size={19} strokeWidth={1.6} /><span>集屿 AI</span><span className="ai-fab-dot" /></button>}
-    {aiOpen && <Assistant workspace={workspace} onClose={() => setAiOpen(false)} onRename={openRename} />}
+    {!aiOpen && <button className="ai-fab" onClick={() => openAssistant()}><Sparkles size={19} strokeWidth={1.6} /><span>集屿 AI</span><span className="ai-fab-dot" /></button>}
+    {aiOpen && <Assistant workspace={workspace} initialFileIds={assistantFileIds} onClose={() => setAiOpen(false)} onRename={files => files.length ? setRenaming(files) : openRename()} onConfigure={() => { setAiOpen(false); navigate('settings') }} onProposal={setAiProposal} />}
+    {aiProposal && <AIPlan proposal={aiProposal} busy={busy} error={operationError} onClose={() => { if (!busy) setAiProposal(null) }} onApply={async () => { if (await action('/api/files/rename', { changes: aiProposal.changes, aiRunId: aiProposal.runId })) { setAiProposal(null); notify('AI 命名方案已应用，可撤销上次命名') } }} />}
     {(createOpen || editing) && <CollectionForm collection={editing || undefined} busy={busy} serverError={operationError} onClose={() => { if (!busy) { setCreateOpen(false); setEditing(null) } }} onSave={async updated => {
       const saved = await action(editing ? `/api/collections/${editing.id}` : '/api/collections', updated, editing ? 'PATCH' : 'POST')
       if (!saved) return
@@ -156,7 +161,7 @@ function WorkspaceApp() {
     {detail && <FileDetail file={detail} collection={workspace.collections.find(c => c.id === detail.collectionId)} onClose={() => setDetail(null)} onRename={() => { setRenaming([detail]); setDetail(null) }} onReview={() => void review([detail.id])} onTrash={() => { setTrashing([detail.id]); setDetail(null) }} />}
     {renaming && <RenameModal files={renaming} allFiles={workspace.files} collections={workspace.collections} busy={busy} serverError={operationError} onClose={() => { if (!busy) setRenaming(null) }} onApply={async changes => { if (await action('/api/files/rename', { changes })) { setRenaming(null); notify(`已重命名 ${changes.length} 个文件`) } }} />}
     {trashing && <Modal title="将文件移入回收站？" onClose={() => { if (!busy) setTrashing(null) }}><p className="body-copy">所选 {trashing.length} 个文件将从列表隐藏，可在回收站恢复。文件内容仍占用存储空间。</p>{operationError && <p className="error-text" role="alert">{operationError}</p>}<footer className="modal-footer"><button className="button" disabled={busy} onClick={() => setTrashing(null)}>取消</button><button className="button primary" disabled={busy} onClick={async () => { if (await action('/api/files/trash', { ids: trashing })) { setTrashing(null); notify('文件已移入回收站') } }}>移入回收站</button></footer></Modal>}
-    {help && <Modal title="从一个链接开始，轻松收齐文件" subtitle="集屿使用指南" onClose={() => setHelp(false)}><div className="guide-steps">{[['发起收集', '设置名称、截止时间和文件格式，创建收集任务。'], ['分享链接', '点击任务上的分享收集，打开提交者看到的页面，将链接发给需要提交文件的人。'], ['集中整理', '在文件管理中选择文件，用命名规则批量整理。']].map(([title, text], i) => <div key={title}><span>{i + 1}</span><div><h3>{title}</h3><p>{text}</p></div></div>)}</div><div className="form-note">第一版使用服务器本地存储，支持真实上传下载、批量命名和回收站。网盘与真实 AI 模型尚未接入。</div><footer className="modal-footer"><button className="button primary" onClick={() => setHelp(false)}>开始使用<ArrowRight size={15} /></button></footer></Modal>}
+    {help && <Modal title="从一个链接开始，轻松收齐文件" subtitle="集屿使用指南" onClose={() => setHelp(false)}><div className="guide-steps">{[['发起收集', '设置名称、截止时间和文件格式，创建收集任务。'], ['分享链接', '点击任务上的分享收集，打开提交者看到的页面，将链接发给需要提交文件的人。'], ['集中整理', '在文件管理中选择文件，用命名规则批量整理。']].map(([title, text], i) => <div key={title}><span>{i + 1}</span><div><h3>{title}</h3><p>{text}</p></div></div>)}</div><div className="form-note">第一版使用服务器本地存储，支持真实上传下载、批量命名和回收站。可在设置中接入自己的模型；网盘仍为后续接入计划。</div><footer className="modal-footer"><button className="button primary" onClick={() => setHelp(false)}>开始使用<ArrowRight size={15} /></button></footer></Modal>}
     {toast && <div className={`toast ${toastError ? 'failed' : ''}`} role={toastError ? 'alert' : 'status'}><span>{toastError ? <X size={14} /> : <Check size={14} />}</span>{toast}</div>}
   </div>
 }

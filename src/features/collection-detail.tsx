@@ -16,9 +16,10 @@ interface CollectionDetailProps {
   onReview: (ids: string[]) => void
   onDetail: (file: CollectedFile) => void
   onTrash?: (ids: string[]) => void
+  onAI?: (files: CollectedFile[]) => void
 }
 
-export function CollectionDetail({ collection: c, files, onBack, onEdit, onShare, onStatus, onRename, onReview, onDetail, onTrash }: CollectionDetailProps) {
+export function CollectionDetail({ collection: c, files, onBack, onEdit, onShare, onStatus, onRename, onReview, onDetail, onTrash, onAI }: CollectionDetailProps) {
   const [confirm, setConfirm] = useState<CollectionStatus | null>(null)
   const state = collectionState(c)
   const pending = files.filter(f => f.status === 'pending').length
@@ -41,7 +42,7 @@ export function CollectionDetail({ collection: c, files, onBack, onEdit, onShare
     </section>
     <div className="collection-lifecycle"><p>{state === 'active' ? '收集链接已开放，可以接收文件。' : state === 'expired' ? '已超过截止时间。延长截止日期后即可继续收集。' : state === 'paused' ? '收集已暂停，提交页暂不接收文件。' : '收集已结束，已收到的文件仍可整理。'}</p><div className="button-row">{actions.map(a => <button key={a.status} className="text-button" disabled={a.status === 'active' && expired} onClick={() => setConfirm(a.status)}><a.icon size={14} />{a.label}</button>)}</div>{expired && c.status !== 'active' && <small>延长截止日期后可重新开放</small>}</div>
     <div className="section-heading"><h2>收到的文件<span className="count-badge">{files.length}</span></h2><span className="muted">{pending} 份待整理</span></div>
-    <FileTable key={c.id} files={files} collections={[c]} onRename={onRename} onReview={onReview} onDetail={onDetail} onTrash={onTrash} />
+    <FileTable key={c.id} files={files} collections={[c]} onRename={onRename} onReview={onReview} onDetail={onDetail} onTrash={onTrash} onAI={onAI} />
     <div className="collection-detail-note">文件保存在服务器本地，只有管理员可以查看和下载。任务总容量包含回收站文件。</div>
     {confirm && <Modal title={confirmTitle} subtitle={c.title} onClose={() => setConfirm(null)}><p className="body-copy">{confirm === 'active' ? '原收集链接将再次接受提交，现有文件记录会保留。' : confirm === 'paused' ? '暂停后，原收集链接暂不接受提交。你可以随时重新开放，已收到的记录会保留。' : '结束后，原收集链接将停止接收提交。已收到的记录会保留，你也可以在截止日期内重新开放。'}</p><footer className="modal-footer"><button className="button" onClick={() => setConfirm(null)}>取消</button><button className="button primary" onClick={() => { onStatus(confirm); setConfirm(null) }}>{confirm === 'active' ? '重新开放' : confirm === 'paused' ? '暂停收集' : '结束收集'}</button></footer></Modal>}
   </>

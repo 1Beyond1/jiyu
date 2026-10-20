@@ -15,7 +15,7 @@ export class Store {
     try { this.lock.exec('BEGIN EXCLUSIVE') } catch { this.lock.close(); throw new Error('数据目录正被使用，请先停止集屿服务') }
     this.db = new DatabaseSync(join(dataDir, 'jiyu.sqlite'))
     const schema = this.db.prepare('PRAGMA user_version').get() as { user_version: number }
-    if (schema.user_version > 1) { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close(); throw new Error('数据库版本高于当前应用，请使用匹配版本，禁止降级覆盖') }
+    if (schema.user_version > 2) { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close(); throw new Error('数据库版本高于当前应用，请使用匹配版本，禁止降级覆盖') }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS collections (id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
@@ -24,13 +24,16 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS submissions (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS renames (id TEXT PRIMARY KEY, data TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0);
-      PRAGMA user_version=1;`)
+      CREATE TABLE IF NOT EXISTS ai_runs (id TEXT PRIMARY KEY, model TEXT NOT NULL, fileCount INTEGER NOT NULL, status TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, proposalHash TEXT);
+      CREATE TABLE IF NOT EXISTS ai_usage (day TEXT PRIMARY KEY, calls INTEGER NOT NULL);
+      PRAGMA user_version=2;`)
     for (const dir of ['objects', 'tmp']) mkdirSync(join(dataDir, dir), { recursive: true, mode: 0o700 })
     // 在获得目录互斥锁后恢复中断批次，已提交文件永不清理。
     for (const name of readdirSync(join(dataDir, 'tmp'))) rmSync(join(dataDir, 'tmp', name), { force: true })
     const keys = new Set((this.db.prepare('SELECT storage_key FROM files').all() as { storage_key: string }[]).map(r => r.storage_key))
     for (const name of readdirSync(join(dataDir, 'objects'))) if (/^[a-f0-9-]{36}$/.test(name) && !keys.has(name)) rmSync(join(dataDir, 'objects', name), { force: true })
     this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now())
+    this.db.prepare("UPDATE ai_runs SET status='interrupted' WHERE status='pending'").run()
     if (!this.get('password') && !existsSync(join(dataDir, 'setup-token'))) writeFileSync(join(dataDir, 'setup-token'), token(), { mode: 0o600 })
   }
   get(key: string) { return (this.db.prepare('SELECT value FROM settings WHERE key=?').get(key) as { value: string } | undefined)?.value }

@@ -1,5 +1,5 @@
 import { backup, DatabaseSync } from 'node:sqlite'
-import { createReadStream } from 'node:fs'
+import { createReadStream, existsSync } from 'node:fs'
 import { mkdir, copyFile, readFile, writeFile, stat, rm } from 'node:fs/promises'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -14,34 +14,54 @@ function separate(a: string, b: string) {
   const inside = (parent: string, child: string) => { const path = relative(parent, child); return !path || (!path.startsWith('..') && !isAbsolute(path)) }
   if (inside(a, b) || inside(b, a)) throw new Error('备份与数据目录必须互相独立')
 }
-interface Manifest { version: 1; createdAt: string; databaseSha256: string; files: { key: string; size: number; sha256: string }[] }
+interface Manifest { version: 1 | 2; createdAt: string; databaseSha256: string; secretKeySha256?: string; files: { key: string; size: number; sha256: string }[] }
 
 export async function createBackup(dataDir: string, destination: string) {
   dataDir = resolve(dataDir); destination = resolve(destination); separate(dataDir, destination)
-  const store = new Store(dataDir)
+  // 备份不运行 schema 迁移，升级前的旧版快照才能用于回退。
+  const lock = new DatabaseSync(join(dataDir, 'service-lock.sqlite'))
+  try { lock.exec('BEGIN EXCLUSIVE') } catch { lock.close(); throw new Error('数据目录正被使用，请先停止集屿服务') }
+  let db: DatabaseSync | undefined
   try {
+    db = new DatabaseSync(join(dataDir, 'jiyu.sqlite'), { readOnly: true })
+    const schema = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+    if (schema < 1 || schema > 2) throw new Error('数据库版本不受当前备份工具支持')
+    const ai = db.prepare("SELECT value FROM settings WHERE key='ai.settings'").get() as { value: string } | undefined
+    const keyPath = join(dataDir, 'secrets.key')
+    if (ai && JSON.parse(ai.value).encryptedKey && !existsSync(keyPath)) throw new Error('模型凭证主密钥缺失，备份未完成')
+    if (existsSync(keyPath) && (await stat(keyPath)).size !== 32) throw new Error('模型凭证主密钥无效，备份未完成')
     await mkdir(destination, { mode: 0o700 })
     await mkdir(join(destination, 'objects'), { mode: 0o700 })
-    await backup(store.db, join(destination, 'jiyu.sqlite'))
+    await backup(db, join(destination, 'jiyu.sqlite'))
     const files = []
-    for (const file of store.files()) {
-      const key = store.fileKey(file.id)!, source = join(dataDir, 'objects', key), target = join(destination, 'objects', key)
+    const rows = db.prepare('SELECT storage_key,data FROM files').all() as { storage_key: string; data: string }[]
+    for (const row of rows) {
+      const file = JSON.parse(row.data) as { size: number; sha256: string }
+      const key = row.storage_key
+      if (!/^[a-f0-9-]{36}$/.test(key)) throw new Error('存储键无效')
+      const source = join(dataDir, 'objects', key), target = join(destination, 'objects', key)
       if (await checksum(source) !== file.sha256) throw new Error('文件校验不通过，备份未完成')
       await copyFile(source, target)
       files.push({ key, size: file.size, sha256: file.sha256! })
     }
-    const manifest: Manifest = { version: 1, createdAt: new Date().toISOString(), databaseSha256: await checksum(join(destination, 'jiyu.sqlite')), files }
+    let secretKeySha256: string | undefined
+    if (existsSync(join(dataDir, 'secrets.key'))) {
+      await copyFile(join(dataDir, 'secrets.key'), join(destination, 'secrets.key'))
+      secretKeySha256 = await checksum(join(destination, 'secrets.key'))
+    }
+    const manifest: Manifest = { version: schema === 1 && !secretKeySha256 ? 1 : 2, createdAt: new Date().toISOString(), databaseSha256: await checksum(join(destination, 'jiyu.sqlite')), secretKeySha256, files }
     // 最后写清单；没有清单的目录不视为有效备份。
     await writeFile(join(destination, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600, flag: 'wx' })
     return { files: files.length, destination }
-  } finally { store.close() }
+  } finally { db?.close(); lock.exec('ROLLBACK'); lock.close() }
 }
 
 export async function restoreBackup(source: string, destination: string) {
   source = resolve(source); destination = resolve(destination); separate(source, destination)
   if ((await stat(join(source, 'manifest.json'))).size > 10 * 1024 ** 2) throw new Error('备份清单过大')
   const manifest = JSON.parse(await readFile(join(source, 'manifest.json'), 'utf8')) as Manifest
-  if (manifest.version !== 1 || !Array.isArray(manifest.files) || !/^[a-f0-9]{64}$/.test(manifest.databaseSha256)) throw new Error('备份清单无效')
+  if (![1, 2].includes(manifest.version) || !Array.isArray(manifest.files) || !/^[a-f0-9]{64}$/.test(manifest.databaseSha256)) throw new Error('备份清单无效')
+  if (manifest.secretKeySha256 !== undefined && (!/^[a-f0-9]{64}$/.test(manifest.secretKeySha256) || (await stat(join(source, 'secrets.key'))).size !== 32 || await checksum(join(source, 'secrets.key')) !== manifest.secretKeySha256)) throw new Error('凭证主密钥校验失败')
   if (await checksum(join(source, 'jiyu.sqlite')) !== manifest.databaseSha256) throw new Error('数据库校验失败')
   for (const file of manifest.files) {
     if (!/^[a-f0-9-]{36}$/.test(file.key) || !/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0) throw new Error('备份文件条目无效')
@@ -50,6 +70,8 @@ export async function restoreBackup(source: string, destination: string) {
   const db = new DatabaseSync(join(source, 'jiyu.sqlite'), { readOnly: true })
   try {
     const rows = db.prepare('SELECT storage_key,data FROM files').all() as { storage_key: string; data: string }[]
+    const ai = db.prepare("SELECT value FROM settings WHERE key='ai.settings'").get() as { value: string } | undefined
+    if (ai && JSON.parse(ai.value).encryptedKey && !manifest.secretKeySha256) throw new Error('备份缺少模型凭证主密钥')
     if (rows.length !== manifest.files.length || rows.some(row => { const entry = manifest.files.find(f => f.key === row.storage_key); const data = JSON.parse(row.data); return !entry || entry.size !== data.size || entry.sha256 !== data.sha256 })) throw new Error('清单与数据库不一致')
     const integrity = db.prepare('PRAGMA integrity_check').get() as Record<string, string>
     if (Object.values(integrity)[0] !== 'ok') throw new Error('数据库完整性检查失败')
@@ -57,6 +79,7 @@ export async function restoreBackup(source: string, destination: string) {
   await mkdir(destination, { mode: 0o700 }) // 必须是全新目录，永不覆盖现有数据。
   await mkdir(join(destination, 'objects'), { mode: 0o700 })
   await copyFile(join(source, 'jiyu.sqlite'), join(destination, 'jiyu.sqlite'))
+  if (manifest.secretKeySha256) await copyFile(join(source, 'secrets.key'), join(destination, 'secrets.key'))
   for (const file of manifest.files) await copyFile(join(source, 'objects', file.key), join(destination, 'objects', file.key))
   const restored = new Store(destination)
   try { restored.db.exec('DELETE FROM sessions'); restored.activity('从已校验的备份恢复数据，旧登录会话已撤销') } finally { restored.close() }

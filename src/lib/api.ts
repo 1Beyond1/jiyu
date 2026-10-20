@@ -2,8 +2,8 @@ import type { UploadReceipt } from '../types'
 
 let csrf = ''
 export function setCsrf(value: string) { csrf = value }
-export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(path, { method, credentials: 'same-origin', headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' ? { 'X-CSRF-Token': csrf } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) })
+export async function api<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, { method, signal, credentials: 'same-origin', headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' ? { 'X-CSRF-Token': csrf } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) })
   const data = await response.json().catch(() => ({ error: '服务返回了无效响应' }))
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('jiyu:session-expired'))
