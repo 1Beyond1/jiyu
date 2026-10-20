@@ -26,7 +26,7 @@ export function Collections({ collections, onOpen, onShare, onCreate }: { collec
   </>
 }
 
-export function CollectionForm({ collection, onClose, onSave }: { collection?: Collection; onClose: () => void; onSave: (c: Collection) => void }) {
+export function CollectionForm({ collection, onClose, onSave, busy = false, serverError }: { collection?: Collection; onClose: () => void; onSave: (c: Collection) => void; busy?: boolean; serverError?: string }) {
   const [title, setTitle] = useState(collection?.title || '')
   const [description, setDescription] = useState(collection?.description || '')
   const [target, setTarget] = useState(collection?.target || 20)
@@ -36,34 +36,40 @@ export function CollectionForm({ collection, onClose, onSave }: { collection?: C
   const [maxFileSizeMB, setMaxFileSizeMB] = useState(collection?.maxFileSizeMB || defaultCollectionLimits.maxFileSizeMB)
   const [maxFilesPerSubmission, setMaxFilesPerSubmission] = useState(collection?.maxFilesPerSubmission || defaultCollectionLimits.maxFilesPerSubmission)
   const [error, setError] = useState('')
+  const [maxTotalSizeMB, setMaxTotalSizeMB] = useState(collection?.maxTotalSizeMB || 2048)
   return <Modal title={collection ? '编辑收集规则' : '发起一项新收集'} subtitle={collection ? '修改会同步到原有收集链接，已收到的记录会保留。' : '设置好规则，剩下的交给一个链接。'} onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault()
       const extensions = fileExtensions(formats)
       if (!title.trim()) { setError('请填写收集名称。'); return }
       if (!extensions.length || extensions.length > 20 || extensions.some(ext => !/^[a-z0-9]{1,12}$/.test(ext))) { setError('请填写有效的文件后缀，例如 PDF, JPG, ZIP，最多 20 种。'); return }
-      onSave({ id: collection?.id || crypto.randomUUID(), title: title.trim(), description: description.trim() || '期待每一份认真准备的文件', target, deadline, category, formats: extensions.join(', ').toUpperCase(), received: collection?.received || 0, storage: collection?.storage || 'local', status: collection?.status || 'active', maxFileSizeMB, maxFilesPerSubmission })
+      onSave({ id: collection?.id || crypto.randomUUID(), title: title.trim(), description: description.trim() || '期待每一份认真准备的文件', target, deadline, category, formats: extensions.join(', ').toUpperCase(), received: collection?.received || 0, storage: collection?.storage || 'local', status: collection?.status || 'active', maxFileSizeMB, maxFilesPerSubmission, maxTotalSizeMB })
     }}>
       <label className="field">收集名称<input autoFocus required maxLength={50} value={title} onChange={e => setTitle(e.target.value)} placeholder="例如：十月设计素材收集" /></label>
       <label className="field">收集说明<textarea maxLength={150} value={description} onChange={e => setDescription(e.target.value)} placeholder="告诉提交者，你想收集什么…" rows={3} /></label>
       <div className="form-row"><label className="field">预计收集份数<input type="number" min={1} max={10000} required value={target} onChange={e => setTarget(Number(e.target.value))} /><small>用于进度参考，收齐后仍可继续提交。</small></label><label className="field">截止日期<input type="date" required min={!collection || collection.status === 'active' ? localDate() : undefined} value={deadline} onChange={e => setDeadline(e.target.value)} /><small>截至当天 23:59（UTC+8）。</small></label></div>
-      <div className="form-row"><label className="field">收集类型<select value={category} onChange={e => setCategory(e.target.value as Collection['category'])}><option value="document">文档资料</option><option value="design">设计素材</option><option value="photo">摄影图片</option></select></label><label className="field">存储位置<select><option>本地存储（演示）</option></select></label></div>
+      <div className="form-row"><label className="field">收集类型<select value={category} onChange={e => setCategory(e.target.value as Collection['category'])}><option value="document">文档资料</option><option value="design">设计素材</option><option value="photo">摄影图片</option></select></label><label className="field">存储位置<select><option>服务器本地存储</option></select></label></div>
       <label className="field">允许的文件格式<input required maxLength={260} value={formats} onChange={e => setFormats(e.target.value)} /><small>多个后缀用逗号分隔，例如 PDF, JPG, ZIP。</small></label>
       <div className="form-row"><label className="field">单文件上限（MB）<input type="number" required min={1} max={1024} value={maxFileSizeMB} onChange={e => setMaxFileSizeMB(Number(e.target.value))} /></label><label className="field">每次最多提交（个）<input type="number" required min={1} max={100} value={maxFilesPerSubmission} onChange={e => setMaxFilesPerSubmission(Number(e.target.value))} /></label></div>
-      {error && <p className="error-text" role="alert">{error}</p>}
-      <div className="form-note">界面预览：任务保存在当前浏览器，收集链接用于预览提交流程。</div>
-      <footer className="modal-footer"><button type="button" className="button" onClick={onClose}>取消</button><button className="button primary" type="submit"><Check size={16} />{collection ? '保存修改' : '创建收集'}</button></footer>
+      {(error || serverError) && <p className="error-text" role="alert">{error || serverError}</p>}
+      <label className="field">任务总容量（MB）<input type="number" required min={1} max={1048576} value={maxTotalSizeMB} onChange={e => setMaxTotalSizeMB(Number(e.target.value))} /><small>已在回收站的文件也计入容量，避免隐藏文件继续占满磁盘。</small></label>
+      <div className="form-note">文件保存在服务器本地持久目录。网盘接入将在后续版本提供。</div>
+      <footer className="modal-footer"><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy} type="submit"><Check size={16} />{busy ? '正在保存…' : collection ? '保存修改' : '创建收集'}</button></footer>
     </form>
   </Modal>
 }
 
-export function ShareCollection({ collection, onClose }: { collection: Collection; onClose: () => void }) {
+export function ShareCollection({ collection, onClose, onRotate, busy, serverError }: { collection: Collection; onClose: () => void; onRotate: () => void; busy: boolean; serverError?: string }) {
   const [copied, setCopied] = useState(false)
-  const url = `${location.origin}/#/submit/${collection.id}`
+  const url = `${location.origin}/#/submit/${collection.uploadToken}`
+  const [rotate, setRotate] = useState(false)
   return <Modal title="好文件，一个链接就能收齐" subtitle={collection.title} onClose={onClose}>
-    <div className="share-art"><div><CollectionIcon category={collection.category} /><span className="share-art-link"><Link size={18} /></span></div><p>提交者无需登录，即可选择文件</p><small>当前为同浏览器演示，尚未连接上传服务</small></div>
+    <div className="share-art"><div><CollectionIcon category={collection.category} /><span className="share-art-link"><Link size={18} /></span></div><p>提交者无需登录，即可上传文件</p><small>持有链接的人可提交，请仅分享给参与本次收集的人。</small></div>
     <label className="field">收集链接<div className="copy-field"><input value={url} readOnly aria-label="收集链接" /><button className="icon-button" aria-label="复制链接" onClick={async () => { try { await navigator.clipboard.writeText(url); setCopied(true) } catch { setCopied(false) } }}>{copied ? <Check size={18} /> : <Copy size={18} />}</button></div></label>
     {copied && <p className="success-text" role="status">链接已复制</p>}
+    {serverError && <p className="error-text" role="alert">{serverError}</p>}
+    <div className="form-note">链接只允许提交文件，不提供文件列表或下载权限。暂停或结束收集可立即停止接收。</div>
+    {rotate ? <div className="rotate-confirm"><p>重新生成后，之前分享的链接会立即失效。</p><button className="button" disabled={busy} onClick={() => setRotate(false)}>取消</button><button className="button" disabled={busy} onClick={() => { onRotate(); setRotate(false); setCopied(false) }}>确认更换链接</button></div> : <button className="text-button" onClick={() => setRotate(true)}>更换收集链接</button>}
     <footer className="modal-footer"><button className="button" onClick={onClose}>完成</button><a href={url} target="_blank" rel="noreferrer" className="button primary">预览提交页<ExternalLink size={15} /></a></footer>
   </Modal>
 }

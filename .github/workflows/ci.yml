@@ -33,5 +33,32 @@ jobs:
         run: npm ci
       - name: Typecheck and build
         run: npm run build
-      - name: Check collection rules
+      - name: Test file service and collection rules
         run: npm test
+  container:
+    name: Container smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and boot container
+        run: |
+          docker build -t jiyu:test .
+          docker run -d --name jiyu-test -e JIYU_ORIGIN=http://127.0.0.1:3000 -p 127.0.0.1:3000:3000 jiyu:test
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/api/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs jiyu-test
+          exit 1
+      - name: Validate deployment configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -e JIYU_DOMAIN=files.example.com caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Clean up
+        if: always()
+        run: docker rm -f jiyu-test || true

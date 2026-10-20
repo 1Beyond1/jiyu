@@ -1,6 +1,19 @@
 # 技术选型与架构建议
 
-日期：2026-10-19。前端已落地，以下后端与部署部分为规划。
+更新：2026-10-20。开始实现本地存储 MVP；网盘和模型适配仍为后续规划。
+
+## 第一版实施决策
+
+- 单仓库增加 `server/`，Fastify 提供同源 API 和构建后的前端，Node.js 24 直接执行 TypeScript，不另加运行时转译器。
+- SQLite 使用 Node.js 内置 `node:sqlite`，先不引入 Drizzle；显式事务和 schema 版本维护结构。文件正文流式写入独立数据目录，随机存储键与显示名称分离，记录 SHA-256。
+- 仅新增 Fastify、multipart、static、cookie、rate-limit 官方组件，分别负责 HTTP、流式上传、静态页面、会话 cookie 与限流。认证、哈希、文件和 SQLite 使用原生 API。
+- 首次初始化需要数据目录中的一次性口令；管理员密码使用 scrypt，随机会话仅保存哈希，cookie HttpOnly / SameSite，写操作使用会话 CSRF 令牌及固定 Origin 校验。
+- 分享使用独立随机令牌，公开接口不返回其他提交者或文件列表。服务端重复校验状态、截止、数量、容量、配额；批次先落临时文件，再事务提交，失败清理，重试使用幂等键。
+- 第一版批量重命名在 SQLite 事务内原子完成，不移动文件正文；保留审计与撤销映射。回收站仅软删除，释放空间需明确清理。
+- 备份/恢复通过停机 CLI 完成：互斥数据目录锁、数据库与文件一致快照、清单哈希校验、恢复到新目录，不覆盖现有目录。上线使用 Docker Compose + Caddy，数据单独挂载。
+- 验收以真实 HTTP 集成测试覆盖认证、上传下载字节一致、权限隔离、限额、重复提交、重命名、重启持久化及备份恢复；浏览器检查实际操作入口。
+
+实现依据：[Node.js 24 SQLite API](https://nodejs.org/download/release/latest-v24.x/docs/api/sqlite.html)、[Fastify multipart](https://github.com/fastify/fastify-multipart)、[Caddy 请求体限额](https://caddyserver.com/docs/caddyfile/directives/request_body)、[Compose 健康检查启动顺序](https://docs.docker.com/compose/how-tos/startup-order/)。Node 内置 SQLite 在当前 24.x 运行时仍有实验性提示，限定主版本并通过 CI 验证升级。
 
 ## 推荐方案
 

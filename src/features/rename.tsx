@@ -14,7 +14,7 @@ export function getRenames(files: CollectedFile[], collections: Collection[], pa
   })
 }
 
-export function RenameModal({ files, allFiles, collections, onClose, onApply }: { files: CollectedFile[]; allFiles: CollectedFile[]; collections: Collection[]; onClose: () => void; onApply: (changes: { id: string; name: string }[]) => void }) {
+export function RenameModal({ files, allFiles, collections, onClose, onApply, busy = false, serverError }: { files: CollectedFile[]; allFiles: CollectedFile[]; collections: Collection[]; onClose: () => void; busy?: boolean; serverError?: string; onApply: (changes: { id: string; name: string; oldName: string }[]) => void }) {
   const [pattern, setPattern] = useState('{任务}_{提交人}_{序号}')
   const changes = getRenames(files, collections, pattern)
   const names = changes.map(c => c.name.toLowerCase())
@@ -26,7 +26,8 @@ export function RenameModal({ files, allFiles, collections, onClose, onApply }: 
     <div className="token-list">{['{任务}', '{提交人}', '{序号}', '{原名}', '{日期}'].map(token => <button key={token} onClick={() => setPattern(pattern + token)}>{token}</button>)}<span>点击插入变量 · 自动保留扩展名</span></div>
     <div className="rename-preview"><div className="rename-labels"><span>原文件名</span><span>重命名后</span></div>{changes.map(c => <div className="rename-row" key={c.id}><span><FileIcon name={c.oldName} />{c.oldName}</span><ArrowRight size={15} /><strong>{c.name}</strong></div>)}</div>
     {invalid ? <p className="error-text" role="alert">请输入有效规则，仅支持上面的变量，且不能包含路径或特殊符号。</p> : duplicate ? <p className="error-text" role="alert">发现重名文件，请加入「序号」或调整规则。</p> : <p className="success-text"><Check size={15} />命名检查通过，没有重名文件</p>}
-    <div className="form-note"><Info size={15} />预览确认后才会应用。当前仅修改演示文件记录。</div>
-    <footer className="modal-footer"><button className="button" onClick={onClose}>取消</button><button className="button primary" disabled={invalid || duplicate || !files.length} onClick={() => onApply(changes)}><WandSparkles size={15} />应用到 {files.length} 个文件</button></footer>
+    <div className="form-note"><Info size={15} />预览确认后才会应用。服务器会再次检查重名并一次完成修改，文件内容保持不变；可撤销最近的命名操作。</div>
+    {serverError && <p className="error-text" role="alert">{serverError}</p>}
+    <footer className="modal-footer"><button className="button" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={invalid || duplicate || !files.length || busy} onClick={() => onApply(changes)}><WandSparkles size={15} />{busy ? '正在保存…' : `应用到 ${files.length} 个文件`}</button></footer>
   </Modal>
 }

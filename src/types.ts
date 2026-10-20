@@ -1,4 +1,4 @@
-export type Page = 'overview' | 'collections' | 'files' | 'tools' | 'storage' | 'settings'
+export type Page = 'overview' | 'collections' | 'files' | 'tools' | 'storage' | 'settings' | 'trash'
 export type CollectionStatus = 'active' | 'completed' | 'paused'
 export type StorageId = 'local' | 'onedrive' | 's3'
 
@@ -15,6 +15,9 @@ export interface Collection {
   formats: string
   maxFileSizeMB: number
   maxFilesPerSubmission: number
+  maxTotalSizeMB?: number
+  uploadToken?: string
+  requestLimitMB?: number
 }
 
 export interface CollectedFile {
@@ -26,6 +29,9 @@ export interface CollectedFile {
   createdAt: string
   storage: StorageId
   status: 'ready' | 'pending'
+  sha256?: string
+  originalName?: string
+  deletedAt?: string
 }
 
 export interface Activity {
@@ -40,7 +46,12 @@ export interface Workspace {
   files: CollectedFile[]
   activities: Activity[]
   displayName: string
+  trash?: CollectedFile[]
+  storage?: { usedBytes: number; quotaBytes: number }
+  lastRenameId?: string
 }
+
+export interface UploadReceipt { receiptId: string; filesCount: number; bytes: number; createdAt: string }
 
 export const storageNames: Record<StorageId, string> = {
   local: '本地存储', onedrive: 'OneDrive', s3: 'S3 对象存储',
