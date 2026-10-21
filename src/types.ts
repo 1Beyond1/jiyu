@@ -1,6 +1,6 @@
 export type Page = 'overview' | 'collections' | 'files' | 'tools' | 'storage' | 'settings' | 'trash'
 export type CollectionStatus = 'active' | 'completed' | 'paused'
-export type StorageId = 'local' | 'onedrive' | 's3'
+export type StorageId = 'local' | 'onedrive' | 's3' | 'webdav' | 'baidu' | 'quark' | 'gdrive'
 export type UserRole = 'admin' | 'editor' | 'viewer'
 export interface SessionUser { id: string; username: string; displayName: string; role: UserRole; disabled?: boolean }
 
@@ -35,6 +35,8 @@ export interface CollectedFile {
   originalName?: string
   deletedAt?: string
   tags?: string[]
+  remoteStatus?: 'queued' | 'transferring' | 'ready' | 'failed'
+  remotePath?: string
 }
 
 export interface Activity {
@@ -61,6 +63,8 @@ export interface BackupRun { id: string; status: 'running' | 'succeeded' | 'fail
 export interface BackupStatus { settings: BackupSettings; lastRun: BackupRun | null; backups: BackupInfo[]; directory: string }
 export interface DocumentInfo { file_id: string; status: 'queued' | 'processing' | 'ready' | 'failed' | 'unsupported'; kind?: string; chars: number; truncated: number; updated_at?: string; error?: string }
 export interface FileContent { preview: 'image' | 'pdf' | 'text' | 'none'; mime?: string; text?: string; document?: DocumentInfo }
+export interface StorageProfile { id: Exclude<StorageId, 'local'>; endpoint: string; root: string; region?: string; bucket?: string; username?: string; clientId?: string; via?: 'webdav'; hasCredentials: boolean; enabled: boolean; verifiedAt?: string; revision: string }
+export interface TransferInfo { file_id: string; provider: string; state: string; attempts: number; error?: string; updated_at: string; remote_path?: string }
 
 export type ArchiveLayout = 'flat' | 'collection' | 'owner' | 'collection-owner'
 export type ArchiveStatus = 'ready' | 'streaming' | 'completed' | 'failed' | 'cancelled'
@@ -84,5 +88,5 @@ export interface AIReply { runId: string; reply: string; changes: RenameChange[]
 export interface AIRun { id: string; model: string; fileCount: number; status: string; tokens: number; createdAt: string }
 
 export const storageNames: Record<StorageId, string> = {
-  local: '本地存储', onedrive: 'OneDrive', s3: 'S3 对象存储',
+  local: '本地存储', onedrive: 'OneDrive', s3: 'S3 对象存储', webdav: 'WebDAV', baidu: '百度网盘', quark: '夸克网盘', gdrive: 'Google Drive',
 }

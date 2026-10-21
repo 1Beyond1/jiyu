@@ -727,6 +727,17 @@ tr.selected td { background: #f4ece2; }
 .classification-preview > div { padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
 .classification-preview h3, .classification-preview strong { font-size: 13px; font-weight: 500; }
 .classification-preview p { color: var(--muted); font-size: 11px; }
+.transfer-panel { margin-top: 28px; }
+.transfer-list > div { display: flex; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line-soft); }
+.transfer-list > div > div { flex: 1; min-width: 0; }
+.transfer-list strong { display: block; overflow-wrap: anywhere; font-size: 12px; font-weight: 500; }
+.transfer-list small { display: block; font-size: 11px; margin-top: 6px; color: var(--muted); }
+.authorize-box { margin-top: 22px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 14px; background: var(--surface); font-size: 12px; }
+.authorize-box strong { letter-spacing: 2px; }
+.bridge-note { display: block; line-height: 1.9; }
+.bridge-note a { display: block; margin-top: 8px; color: var(--accent-dark); }
+.oauth-note { display: block; overflow-wrap: anywhere; }
+.oauth-note code { display: block; margin: 6px 0; font: inherit; color: var(--secondary); }
 .member-list > div > div { flex: 1; min-width: 0; }
 .member-list strong { font-size: 13px; font-weight: 500; }
 .member-list small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }

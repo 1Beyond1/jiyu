@@ -24,9 +24,11 @@ async function writeSnapshot(db: DatabaseSync, dataDir: string, destination: str
   let rows: { storage_key: string; data: string }[], schema: number
   try {
     schema = (snapshot.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-    if (schema < 1 || schema > 3) throw new Error('数据库版本不受当前备份工具支持')
+    if (schema < 1 || schema > 4) throw new Error('数据库版本不受当前备份工具支持')
     const ai = snapshot.prepare("SELECT value FROM settings WHERE key='ai.settings'").get() as { value: string } | undefined
     if (ai && JSON.parse(ai.value).encryptedKey && !existsSync(join(dataDir, 'secrets.key'))) throw new Error('模型凭证主密钥缺失，备份未完成')
+    const storage = snapshot.prepare("SELECT value FROM settings WHERE key LIKE 'storage.%'").all() as { value: string }[]
+    if (storage.some(s => JSON.parse(s.value).encryptedCredentials) && !existsSync(join(dataDir, 'secrets.key'))) throw new Error('存储凭证主密钥缺失，备份未完成')
     rows = snapshot.prepare('SELECT storage_key,data FROM files').all() as { storage_key: string; data: string }[]
   } finally { snapshot.close() }
   if (existsSync(join(dataDir, 'secrets.key')) && (await stat(join(dataDir, 'secrets.key'))).size !== 32) throw new Error('模型凭证主密钥无效，备份未完成')
@@ -80,6 +82,8 @@ export async function restoreBackup(source: string, destination: string) {
     const rows = db.prepare('SELECT storage_key,data FROM files').all() as { storage_key: string; data: string }[]
     const ai = db.prepare("SELECT value FROM settings WHERE key='ai.settings'").get() as { value: string } | undefined
     if (ai && JSON.parse(ai.value).encryptedKey && !manifest.secretKeySha256) throw new Error('备份缺少模型凭证主密钥')
+    const storage = db.prepare("SELECT value FROM settings WHERE key LIKE 'storage.%'").all() as { value: string }[]
+    if (storage.some(s => JSON.parse(s.value).encryptedCredentials) && !manifest.secretKeySha256) throw new Error('备份缺少存储凭证主密钥')
     if (rows.length !== manifest.files.length || rows.some(row => { const entry = manifest.files.find(f => f.key === row.storage_key); const data = JSON.parse(row.data); return !entry || entry.size !== data.size || entry.sha256 !== data.sha256 })) throw new Error('清单与数据库不一致')
     const integrity = db.prepare('PRAGMA integrity_check').get() as Record<string, string>
     if (Object.values(integrity)[0] !== 'ok') throw new Error('数据库完整性检查失败')
@@ -90,7 +94,7 @@ export async function restoreBackup(source: string, destination: string) {
   if (manifest.secretKeySha256) await copyFile(join(source, 'secrets.key'), join(destination, 'secrets.key'))
   for (const file of manifest.files) await copyFile(join(source, 'objects', file.key), join(destination, 'objects', file.key))
   const restored = new Store(destination)
-  try { restored.db.exec('DELETE FROM sessions; DELETE FROM uploads;'); restored.activity('从已校验的备份恢复数据，旧登录会话与未完成上传已撤销') } finally { restored.close() }
+  try { restored.db.exec('DELETE FROM sessions; DELETE FROM uploads; DELETE FROM storage_oauth;'); restored.activity('从已校验的备份恢复数据，旧登录会话与未完成上传、授权流程已撤销') } finally { restored.close() }
   return { files: manifest.files.length, destination }
 }
 

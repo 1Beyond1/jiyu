@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowUpRight, CalendarDays, Link, Plus, Check, Copy, ExternalLink } from 'lucide-react'
 import { CollectionIcon, Empty, Modal } from '../components/ui'
-import type { Collection } from '../types'
+import type { Collection, StorageProfile } from '../types'
+import { storageNames } from '../types'
+import { api } from '../lib/api'
 import { collectionState, collectionStateNames, defaultCollectionLimits, fileExtensions, localDate, nextWeek } from '../lib/collections'
 
 export function CollectionCard({ collection: c, onOpen, onShare }: { collection: Collection; onOpen: (id: string) => void; onShare: (c: Collection) => void }) {
@@ -37,23 +39,25 @@ export function CollectionForm({ collection, onClose, onSave, busy = false, serv
   const [maxFilesPerSubmission, setMaxFilesPerSubmission] = useState(collection?.maxFilesPerSubmission || defaultCollectionLimits.maxFilesPerSubmission)
   const [error, setError] = useState('')
   const [maxTotalSizeMB, setMaxTotalSizeMB] = useState(collection?.maxTotalSizeMB || 2048)
+  const [storage, setStorage] = useState<Collection['storage']>(collection?.storage || 'local'), [connections, setConnections] = useState<StorageProfile[]>([])
+  useEffect(() => { void api<{ profiles: StorageProfile[] }>('/api/storage/connections').then(s => setConnections(s.profiles.filter(p => p.enabled))).catch(() => {}) }, [])
   return <Modal title={collection ? '编辑收集规则' : '发起一项新收集'} subtitle={collection ? '修改会同步到原有收集链接，已收到的记录会保留。' : '设置好规则，剩下的交给一个链接。'} onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault()
       const extensions = fileExtensions(formats)
       if (!title.trim()) { setError('请填写收集名称。'); return }
       if (!extensions.length || extensions.length > 20 || extensions.some(ext => !/^[a-z0-9]{1,12}$/.test(ext))) { setError('请填写有效的文件后缀，例如 PDF, JPG, ZIP，最多 20 种。'); return }
-      onSave({ id: collection?.id || crypto.randomUUID(), title: title.trim(), description: description.trim() || '期待每一份认真准备的文件', target, deadline, category, formats: extensions.join(', ').toUpperCase(), received: collection?.received || 0, storage: collection?.storage || 'local', status: collection?.status || 'active', maxFileSizeMB, maxFilesPerSubmission, maxTotalSizeMB })
+      onSave({ id: collection?.id || crypto.randomUUID(), title: title.trim(), description: description.trim() || '期待每一份认真准备的文件', target, deadline, category, formats: extensions.join(', ').toUpperCase(), received: collection?.received || 0, storage, status: collection?.status || 'active', maxFileSizeMB, maxFilesPerSubmission, maxTotalSizeMB })
     }}>
       <label className="field">收集名称<input autoFocus required maxLength={50} value={title} onChange={e => setTitle(e.target.value)} placeholder="例如：十月设计素材收集" /></label>
       <label className="field">收集说明<textarea maxLength={150} value={description} onChange={e => setDescription(e.target.value)} placeholder="告诉提交者，你想收集什么…" rows={3} /></label>
       <div className="form-row"><label className="field">预计收集份数<input type="number" min={1} max={10000} required value={target} onChange={e => setTarget(Number(e.target.value))} /><small>用于进度参考，收齐后仍可继续提交。</small></label><label className="field">截止日期<input type="date" required min={!collection || collection.status === 'active' ? localDate() : undefined} value={deadline} onChange={e => setDeadline(e.target.value)} /><small>截至当天 23:59（UTC+8）。</small></label></div>
-      <div className="form-row"><label className="field">收集类型<select value={category} onChange={e => setCategory(e.target.value as Collection['category'])}><option value="document">文档资料</option><option value="design">设计素材</option><option value="photo">摄影图片</option></select></label><label className="field">存储位置<select><option>服务器本地存储</option></select></label></div>
+      <div className="form-row"><label className="field">收集类型<select value={category} onChange={e => setCategory(e.target.value as Collection['category'])}><option value="document">文档资料</option><option value="design">设计素材</option><option value="photo">摄影图片</option></select></label><label className="field">存储位置<select value={storage} onChange={e => setStorage(e.target.value as Collection['storage'])}><option value="local">服务器本地存储</option>{connections.map(p => <option key={p.id} value={p.id}>{storageNames[p.id]} + 本机副本</option>)}{storage !== 'local' && !connections.some(p => p.id === storage) && <option value={storage}>{storageNames[storage]}（连接已停用）</option>}</select></label></div>
       <label className="field">允许的文件格式<input required maxLength={260} value={formats} onChange={e => setFormats(e.target.value)} /><small>多个后缀用逗号分隔，例如 PDF, JPG, ZIP。</small></label>
       <div className="form-row"><label className="field">单文件上限（MB）<input type="number" required min={1} max={1024} value={maxFileSizeMB} onChange={e => setMaxFileSizeMB(Number(e.target.value))} /></label><label className="field">每次最多提交（个）<input type="number" required min={1} max={100} value={maxFilesPerSubmission} onChange={e => setMaxFilesPerSubmission(Number(e.target.value))} /></label></div>
       {(error || serverError) && <p className="error-text" role="alert">{error || serverError}</p>}
       <label className="field">任务总容量（MB）<input type="number" required min={1} max={1048576} value={maxTotalSizeMB} onChange={e => setMaxTotalSizeMB(Number(e.target.value))} /><small>已在回收站的文件也计入容量，避免隐藏文件继续占满磁盘。</small></label>
-      <div className="form-note">文件保存在服务器本地持久目录。网盘接入将在后续版本提供。</div>
+      <div className="form-note">本机可靠接收后再同步到所选云端；云端传输状态在存储空间查看。当前保留完整本机副本。</div>
       <footer className="modal-footer"><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy} type="submit"><Check size={16} />{busy ? '正在保存…' : collection ? '保存修改' : '创建收集'}</button></footer>
     </form>
   </Modal>

@@ -122,7 +122,7 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
       const parts = store.db.prepare('SELECT * FROM upload_parts WHERE batch_id=?').all(row.id) as unknown as Part[]
       for (let i = 0; i < batch.files.length; i++) {
         const f = batch.files[i], hash = createHash('sha256'), storageKey = randomUUID(), target = join(config.dataDir, 'tmp', storageKey)
-        const entry = { file: { id: randomUUID(), name: f.name, originalName: f.name, size: f.size, collectionId: c.id, owner: batch.owner, createdAt: new Date().toISOString(), storage: 'local', status: 'pending' } as CollectedFile, key: storageKey, path: target }
+        const entry = { file: { id: randomUUID(), name: f.name, originalName: f.name, size: f.size, collectionId: c.id, owner: batch.owner, createdAt: new Date().toISOString(), storage: c.storage, ...(c.storage !== 'local' ? { remoteStatus: 'queued' } : {}), status: 'pending' } as CollectedFile, key: storageKey, path: target }
         staged.push(entry)
         async function* source() {
           for (let part = 0; part < Math.ceil(f.size / CHUNK_BYTES); part++) {
@@ -142,7 +142,7 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
       limits(latest, 0, 0)
       const result: UploadReceipt = { receiptId: randomUUID(), filesCount: staged.length, bytes: row.bytes, createdAt: new Date().toISOString() }
       store.transaction(() => {
-        for (const entry of staged) store.addFile(entry.file, entry.key)
+        for (const entry of staged) store.addFile({ ...entry.file, storage: latest.storage, remoteStatus: latest.storage === 'local' ? undefined : 'queued' }, entry.key)
         store.saveCollection({ ...latest, received: latest.received + staged.length })
         store.db.prepare('INSERT INTO submissions VALUES (?,?,?,?)').run(row.id, c.id, row.key_hash, JSON.stringify(result))
         store.db.prepare('DELETE FROM uploads WHERE id=?').run(row.id)

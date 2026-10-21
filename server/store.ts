@@ -15,7 +15,7 @@ export class Store {
     try { this.lock.exec('BEGIN EXCLUSIVE') } catch { this.lock.close(); throw new Error('数据目录正被使用，请先停止集屿服务') }
     this.db = new DatabaseSync(join(dataDir, 'jiyu.sqlite'))
     const schema = this.db.prepare('PRAGMA user_version').get() as { user_version: number }
-    if (schema.user_version > 3) { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close(); throw new Error('数据库版本高于当前应用，请使用匹配版本，禁止降级覆盖') }
+    if (schema.user_version > 4) { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close(); throw new Error('数据库版本高于当前应用，请使用匹配版本，禁止降级覆盖') }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS collections (id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
@@ -32,7 +32,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS documents (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE, status TEXT NOT NULL, kind TEXT, chars INTEGER NOT NULL DEFAULT 0, truncated INTEGER NOT NULL DEFAULT 0, updated_at TEXT, error TEXT);
       CREATE VIRTUAL TABLE IF NOT EXISTS content_search USING fts5(file_id UNINDEXED, body, tokenize='trigram');
       CREATE TABLE IF NOT EXISTS ai_plans (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
-      PRAGMA user_version=3;`)
+      CREATE TABLE IF NOT EXISTS remote_transfers (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE, provider TEXT NOT NULL, state TEXT NOT NULL, revision TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, updated_at TEXT NOT NULL, remote_path TEXT);
+      CREATE TABLE IF NOT EXISTS storage_oauth (id TEXT PRIMARY KEY, provider TEXT NOT NULL, data TEXT NOT NULL, expires INTEGER NOT NULL);
+      PRAGMA user_version=4;`)
     const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]
     if (!sessionColumns.some(c => c.name === 'user_id')) this.db.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'primary'")
     if (this.get('password')) this.db.prepare("INSERT OR IGNORE INTO users VALUES ('primary','admin',?,?,'admin',0)").run(this.get('displayName') || '管理员', this.get('password')!)
@@ -44,6 +46,7 @@ export class Store {
     this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now())
     this.db.prepare("UPDATE ai_runs SET status='interrupted' WHERE status='pending'").run()
     this.db.prepare("UPDATE documents SET status='queued' WHERE status='processing'").run()
+    this.db.prepare("UPDATE remote_transfers SET state='queued' WHERE state='transferring'").run()
     if (!this.get('password') && !existsSync(join(dataDir, 'setup-token'))) writeFileSync(join(dataDir, 'setup-token'), token(), { mode: 0o600 })
   }
   get(key: string) { return (this.db.prepare('SELECT value FROM settings WHERE key=?').get(key) as { value: string } | undefined)?.value }
@@ -66,9 +69,16 @@ export class Store {
     const { uploadToken, ...data } = collection
     this.db.prepare('INSERT INTO collections VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,data=excluded.data').run(collection.id, uploadToken || token(), JSON.stringify(data))
   }
-  files(): CollectedFile[] { return (this.db.prepare('SELECT data FROM files ORDER BY rowid DESC').all() as { data: string }[]).map(r => JSON.parse(r.data)) }
+  files(): CollectedFile[] { return (this.db.prepare('SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id ORDER BY f.rowid DESC').all() as { data: string; state: string | null; remote_path: string | null }[]).map(r => ({ ...JSON.parse(r.data), ...(r.state ? { remoteStatus: r.state, ...(r.remote_path ? { remotePath: r.remote_path } : {}) } : {}) })) }
   saveFile(file: CollectedFile) { this.db.prepare('UPDATE files SET data=? WHERE id=?').run(JSON.stringify(file), file.id) }
-  addFile(file: CollectedFile, key: string) { this.db.prepare('INSERT INTO files VALUES (?,?,?,?)').run(file.id, file.collectionId, key, JSON.stringify(file)) }
+  addFile(file: CollectedFile, key: string) {
+    this.db.prepare('INSERT INTO files VALUES (?,?,?,?)').run(file.id, file.collectionId, key, JSON.stringify(file))
+    if (file.storage !== 'local') {
+      const profile = this.get(`storage.${file.storage}`)
+      const revision = profile ? String(JSON.parse(profile).revision || '') : ''
+      this.db.prepare("INSERT INTO remote_transfers(file_id,provider,state,revision,updated_at) VALUES (?,?,'queued',?,?)").run(file.id, file.storage, revision, new Date().toISOString())
+    }
+  }
   fileKey(id: string) { return (this.db.prepare('SELECT storage_key FROM files WHERE id=?').get(id) as { storage_key: string } | undefined)?.storage_key }
   usedBytes(collectionId?: string) { return this.files().filter(f => !collectionId || f.collectionId === collectionId).reduce((sum, f) => sum + f.size, 0) }
   pendingBytes(collectionId?: string) { return Number((this.db.prepare(`SELECT COALESCE(SUM(bytes),0) AS total FROM uploads WHERE expires>?${collectionId ? ' AND collection_id=?' : ''}`).get(Date.now(), ...(collectionId ? [collectionId] : [])) as { total: number }).total) }

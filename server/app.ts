@@ -25,6 +25,8 @@ import type { UserRow } from './users.ts'
 import { registerBackups } from './backup-scheduler.ts'
 import { registerContent } from './content.ts'
 import type { ContentExtractor } from './content.ts'
+import { registerStorage, requireStorage } from './storage.ts'
+import type { RemoteHTTP } from './remote-http.ts'
 
 function collectionInput(value: unknown, current?: Collection): Collection {
   const body = object(value)
@@ -42,7 +44,7 @@ function collectionInput(value: unknown, current?: Collection): Collection {
   return { id: current?.id || randomUUID(), uploadToken: current?.uploadToken || token(), title: text(body.title, '收集名称', 50), description: typeof body.description === 'string' ? text(body.description, '收集说明', 150, 0) : '', category, target: integer('target', 10000), deadline, formats: formats.join(', ').toUpperCase(), maxFileSizeMB: integer('maxFileSizeMB', 1024), maxFilesPerSubmission: integer('maxFilesPerSubmission', 100), maxTotalSizeMB: integer('maxTotalSizeMB', 1048576, current?.maxTotalSizeMB || 2048), storage: 'local', received: current?.received || 0, status: current?.status || 'active' }
 }
 
-export async function createApp(config: Config, options: { serveFrontend?: boolean; aiTransport?: AITransport; contentExtractor?: ContentExtractor } = {}) {
+export async function createApp(config: Config, options: { serveFrontend?: boolean; aiTransport?: AITransport; contentExtractor?: ContentExtractor; storageHTTP?: RemoteHTTP } = {}) {
   const store = new Store(config.dataDir)
   const app = Fastify({ logger: false, trustProxy: config.trustProxy || false, bodyLimit: 64 * 1024, requestTimeout: 10 * 60 * 1000, connectionTimeout: 30 * 1000 })
   const budget: UploadBudget = { bytes: 0, files: 0, active: 0, collections: new Map() }
@@ -70,7 +72,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     const writes = !['GET', 'HEAD', 'OPTIONS'].includes(req.method)
     if (req.headers['content-type']?.startsWith('multipart/form-data') && Number(req.headers['content-length'] || 0) > config.requestBytes + 2 * 1024 ** 2) throw new HttpError(413, '请求总量超过上限')
     if (writes && req.headers.origin !== config.origin) throw new HttpError(403, '请求来源不正确，请从集屿页面操作')
-    const publicRoute = url.startsWith('/api/public/') || ['/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/health'].includes(url)
+    const publicRoute = url.startsWith('/api/public/') || (req.method === 'GET' && /^\/api\/storage\/oauth\/(onedrive|gdrive)\/callback$/.test(url)) || ['/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/health'].includes(url)
     if (!publicRoute) {
       const auth = session(req)
       if (!auth) throw new HttpError(401, '登录已过期，请重新登录')
@@ -141,10 +143,11 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   })
   app.get('/api/workspace', async req => { const workspace = store.workspace(config.quotaBytes); if (session(req)?.role === 'viewer') { workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c); workspace.lastRenameId = undefined }; return workspace })
   app.patch('/api/settings', async req => { store.set('displayName', text(object(req.body).displayName, '显示名称', 20)); return store.workspace(config.quotaBytes) })
-  app.post('/api/collections', async req => { const c = collectionInput(req.body); store.transaction(() => { store.saveCollection(c); store.activity(`创建了「${c.title}」`) }); return store.workspace(config.quotaBytes) })
+  app.post('/api/collections', async req => { const c = { ...collectionInput(req.body), storage: requireStorage(store, object(req.body).storage) }; store.transaction(() => { store.saveCollection(c); store.activity(`创建了「${c.title}」`) }); return store.workspace(config.quotaBytes) })
   const getCollection = (id: string) => { const c = store.collection(id); if (!c) throw new HttpError(404, '没有找到这项收集'); return c }
   app.patch('/api/collections/:id', async req => {
-    const c = collectionInput(req.body, getCollection(String(object(req.params).id)))
+    const current = getCollection(String(object(req.params).id))
+    const c = { ...collectionInput(req.body, current), storage: requireStorage(store, object(req.body).storage ?? current.storage) }
     store.transaction(() => { store.saveCollection(c); store.activity(`修改了「${c.title}」的规则`) })
     return store.workspace(config.quotaBytes)
   })
@@ -182,7 +185,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
         if (!owner || part.fieldname !== 'files') { part.file.resume(); throw new HttpError(400, '请先填写提交者姓名，再选择文件') }
         if (store.files().length + budget.files + store.pendingFiles() >= 10000) { part.file.resume(); throw new HttpError(413, '已达到第一版 10000 个文件的上限，请备份后整理数据') }
         const name = safeName(part.filename), key = randomUUID(), tempPath = join(config.dataDir, 'tmp', key), hash = createHash('sha256')
-        const entry = { file: { id: randomUUID(), name, originalName: name, size: 0, collectionId: c.id, owner, createdAt: new Date().toISOString(), storage: 'local', status: 'pending' } as CollectedFile, key, path: tempPath }
+        const entry = { file: { id: randomUUID(), name, originalName: name, size: 0, collectionId: c.id, owner, createdAt: new Date().toISOString(), storage: c.storage, ...(c.storage !== 'local' ? { remoteStatus: 'queued' } : {}), status: 'pending' } as CollectedFile, key, path: tempPath }
         staged.push(entry)
         budget.files++
         const invalid = submissionError(c, staged.map(s => s.file))
@@ -207,7 +210,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
         const finalError = submissionError(finalCollection, staged.map(s => s.file))
         if (finalError || finalCollection.uploadToken !== c.uploadToken) throw new HttpError(410, finalError || '收集链接已更换，请使用新链接')
         if (store.usedBytes(c.id) + bytes > (finalCollection.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务容量超过上限')
-        for (const entry of staged) store.addFile(entry.file, entry.key)
+        for (const entry of staged) store.addFile({ ...entry.file, storage: finalCollection.storage, remoteStatus: finalCollection.storage === 'local' ? undefined : 'queued' }, entry.key)
         store.saveCollection({ ...finalCollection, received: finalCollection.received + staged.length })
         store.db.prepare('INSERT INTO submissions VALUES (?,?,?,?)').run(requestId, c.id, '', JSON.stringify(receipt))
         store.activity(`${owner}向「${finalCollection.title}」提交了 ${staged.length} 份文件`)
@@ -287,7 +290,8 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   registerUsers(app, store)
   const stopBackups = await registerBackups(app, store, config.backupDir || resolve(config.dataDir, '..', 'backups'))
   const stopContent = registerContent(app, store, options.contentExtractor)
-  app.addHook('onClose', async () => { await stopContent(); await stopBackups(); store.close() })
+  const stopStorage = registerStorage(app, store, options.storageHTTP, config.origin)
+  app.addHook('onClose', async () => { await stopStorage(); await stopContent(); await stopBackups(); store.close() })
   if (options.serveFrontend !== false && existsSync(resolve('dist/index.html'))) {
     await app.register(staticFiles, { root: resolve('dist'), index: ['index.html'], cacheControl: false })
   }
