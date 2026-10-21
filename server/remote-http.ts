@@ -30,5 +30,9 @@ export async function remoteBody(response: RemoteResponse, limit = 256 * 1024) {
   catch (e) { response.body.destroy?.(); throw e }
 }
 export function remoteOK(response: RemoteResponse, allowed: number[] = []) {
-  if ((response.status < 200 || response.status >= 300) && !allowed.includes(response.status)) { response.body.destroy?.(); throw new HttpError(response.status === 429 ? 429 : 502, response.status === 401 || response.status === 403 ? '远端拒绝授权，请检查凭证和目录权限' : response.status >= 300 && response.status < 400 ? '远端返回重定向，请填写最终服务地址' : `远端请求失败（HTTP ${response.status}）`) }
+  if ((response.status < 200 || response.status >= 300) && !allowed.includes(response.status)) {
+    response.body.destroy?.()
+    const message = response.status === 401 || response.status === 403 ? '远端拒绝授权，请检查凭证和目录权限' : response.status === 429 ? '远端请求过于频繁，请稍后重试' : response.status >= 500 ? `远端服务暂时不可用（HTTP ${response.status}），请稍后重试` : response.status === 404 ? '远端没有找到目标，请检查服务地址、存储桶或文件夹路径' : response.status >= 300 && response.status < 400 ? '远端返回重定向，请填写最终服务地址' : `远端请求失败（HTTP ${response.status}），请检查连接信息及目录权限`
+    throw new HttpError(response.status === 429 ? 429 : 502, message)
+  }
 }

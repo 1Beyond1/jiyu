@@ -24,7 +24,7 @@ test('成员角色由服务端约束，撤销旧会话并保留最后一位管�
     const editor = headers(await login('writer')), viewer = headers(await login('reader'))
     const taskDraft = { title: '团队收集', category: 'document', description: '', formats: 'TXT', deadline: '2099-12-31', target: 10, maxFileSizeMB: 1, maxFilesPerSubmission: 2 }
     assert.equal((await app.inject({ method: 'POST', url: '/api/collections', headers: editor, payload: taskDraft })).statusCode, 200)
-    for (const url of ['/api/users', '/api/backups', '/api/settings', '/api/ai/settings']) assert.equal((await app.inject({ method: 'PATCH', url, headers: editor, payload: {} })).statusCode, 403, url)
+    for (const url of ['/api/users', '/api/backups', '/api/settings', '/api/ai/settings', '/api/storage/connections/webdav']) assert.equal((await app.inject({ method: 'PATCH', url, headers: editor, payload: {} })).statusCode, 403, url)
     assert.equal((await app.inject({ method: 'GET', url: '/api/users', headers: viewer })).statusCode, 403)
     const view = await app.inject({ method: 'GET', url: '/api/workspace', headers: viewer })
     assert.equal(view.statusCode, 200); assert.equal(view.json().collections[0].uploadToken, undefined)

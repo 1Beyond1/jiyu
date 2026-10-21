@@ -28,7 +28,7 @@ export function Collections({ collections, onOpen, onShare, onCreate }: { collec
   </>
 }
 
-export function CollectionForm({ collection, onClose, onSave, busy = false, serverError }: { collection?: Collection; onClose: () => void; onSave: (c: Collection) => void; busy?: boolean; serverError?: string }) {
+export function CollectionForm({ collection, initialStorage = 'local', onClose, onSave, busy = false, serverError }: { collection?: Collection; initialStorage?: Collection['storage']; onClose: () => void; onSave: (c: Collection) => void; busy?: boolean; serverError?: string }) {
   const [title, setTitle] = useState(collection?.title || '')
   const [description, setDescription] = useState(collection?.description || '')
   const [target, setTarget] = useState(collection?.target || 20)
@@ -39,8 +39,9 @@ export function CollectionForm({ collection, onClose, onSave, busy = false, serv
   const [maxFilesPerSubmission, setMaxFilesPerSubmission] = useState(collection?.maxFilesPerSubmission || defaultCollectionLimits.maxFilesPerSubmission)
   const [error, setError] = useState('')
   const [maxTotalSizeMB, setMaxTotalSizeMB] = useState(collection?.maxTotalSizeMB || 2048)
-  const [storage, setStorage] = useState<Collection['storage']>(collection?.storage || 'local'), [connections, setConnections] = useState<StorageProfile[]>([])
-  useEffect(() => { void api<{ profiles: StorageProfile[] }>('/api/storage/connections').then(s => setConnections(s.profiles.filter(p => p.enabled))).catch(() => {}) }, [])
+  const [storage, setStorage] = useState<Collection['storage']>(collection?.storage || initialStorage), [connections, setConnections] = useState<StorageProfile[]>([])
+  const [storageError, setStorageError] = useState('')
+  useEffect(() => { void api<{ profiles: StorageProfile[] }>('/api/storage/connections').then(s => { setConnections(s.profiles.filter(p => p.enabled)); setStorageError('') }).catch(() => setStorageError('暂时无法读取云端连接，可继续选择本机，或关闭后重试。')) }, [])
   return <Modal title={collection ? '编辑收集规则' : '发起一项新收集'} subtitle={collection ? '修改会同步到原有收集链接，已收到的记录会保留。' : '设置好规则，剩下的交给一个链接。'} onClose={onClose}>
     <form onSubmit={e => {
       e.preventDefault()
@@ -57,7 +58,8 @@ export function CollectionForm({ collection, onClose, onSave, busy = false, serv
       <div className="form-row"><label className="field">单文件上限（MB）<input type="number" required min={1} max={1024} value={maxFileSizeMB} onChange={e => setMaxFileSizeMB(Number(e.target.value))} /></label><label className="field">每次最多提交（个）<input type="number" required min={1} max={100} value={maxFilesPerSubmission} onChange={e => setMaxFilesPerSubmission(Number(e.target.value))} /></label></div>
       {(error || serverError) && <p className="error-text" role="alert">{error || serverError}</p>}
       <label className="field">任务总容量（MB）<input type="number" required min={1} max={1048576} value={maxTotalSizeMB} onChange={e => setMaxTotalSizeMB(Number(e.target.value))} /><small>已在回收站的文件也计入容量，避免隐藏文件继续占满磁盘。</small></label>
-      <div className="form-note">本机可靠接收后再同步到所选云端；云端传输状态在存储空间查看。当前保留完整本机副本。</div>
+      {storageError && <p role="alert" className="error-text">{storageError}</p>}
+      <div className="form-note">云端选项来自「存储空间」里已检查通过的连接。收到的文件先保存在本机，再同步到所选云端；同步状态可在存储空间查看。</div>
       <footer className="modal-footer"><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy} type="submit"><Check size={16} />{busy ? '正在保存…' : collection ? '保存修改' : '创建收集'}</button></footer>
     </form>
   </Modal>
@@ -65,12 +67,13 @@ export function CollectionForm({ collection, onClose, onSave, busy = false, serv
 
 export function ShareCollection({ collection, onClose, onRotate, busy, serverError }: { collection: Collection; onClose: () => void; onRotate: () => void; busy: boolean; serverError?: string }) {
   const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState('')
   const url = `${location.origin}/#/submit/${collection.uploadToken}`
   const [rotate, setRotate] = useState(false)
   return <Modal title="好文件，一个链接就能收齐" subtitle={collection.title} onClose={onClose}>
     <div className="share-art"><div><CollectionIcon category={collection.category} /><span className="share-art-link"><Link size={18} /></span></div><p>提交者无需登录，即可上传文件</p><small>持有链接的人可提交，请仅分享给参与本次收集的人。</small></div>
-    <label className="field">收集链接<div className="copy-field"><input value={url} readOnly aria-label="收集链接" /><button className="icon-button" aria-label="复制链接" onClick={async () => { try { await navigator.clipboard.writeText(url); setCopied(true) } catch { setCopied(false) } }}>{copied ? <Check size={18} /> : <Copy size={18} />}</button></div></label>
-    {copied && <p className="success-text" role="status">链接已复制</p>}
+    <label className="field">收集链接<div className="copy-field"><input value={url} readOnly aria-label="收集链接" /><button className="icon-button" aria-label="复制链接" onClick={async () => { try { await navigator.clipboard.writeText(url); setCopied(true); setCopyError('') } catch { setCopied(false); setCopyError('无法自动复制，请选中上方链接手动复制。') } }}>{copied ? <Check size={18} /> : <Copy size={18} />}</button></div></label>
+    {copied && <p className="success-text" role="status">链接已复制</p>}{copyError && <p className="error-text" role="alert">{copyError}</p>}
     {serverError && <p className="error-text" role="alert">{serverError}</p>}
     <div className="form-note">链接只允许提交文件，不提供文件列表或下载权限。暂停或结束收集可立即停止接收。</div>
     {rotate ? <div className="rotate-confirm"><p>重新生成后，之前分享的链接会立即失效。</p><button className="button" disabled={busy} onClick={() => setRotate(false)}>取消</button><button className="button" disabled={busy} onClick={() => { onRotate(); setRotate(false); setCopied(false) }}>确认更换链接</button></div> : <button className="text-button" onClick={() => setRotate(true)}>更换收集链接</button>}

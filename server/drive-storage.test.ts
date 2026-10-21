@@ -36,6 +36,10 @@ test('Microsoft/Google OAuth 使用 PKCE 和一次性状态，回调不依赖跨
       assert.equal((await app.inject({ method: 'GET', url: `/api/storage/oauth/${id}/callback?${new URLSearchParams({ state, code: 'fixture-code' })}` })).statusCode, 410)
       const saved = JSON.parse(store.get(`storage.${id}`)!)
       assert.equal(saved.enabled, false); assert.notEqual(saved.revision, profile.json().revision); assert.equal(JSON.stringify(saved).includes('fixture-drive-access'), false)
+      const connections = await app.inject({ method: 'GET', url: '/api/storage/connections', headers })
+      assert.equal(connections.json().profiles.find((p: StorageProfile) => p.id === id).authorized, true)
+      assert.equal(connections.json().callbackUrls[id], `${origin}/api/storage/oauth/${id}/callback`)
+      assert.equal(connections.body.includes('fixture-drive-access'), false)
     }
   } finally { await app.close(); if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true }) }
 })

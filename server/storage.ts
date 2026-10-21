@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { encrypt, decrypt } from './secrets.ts'
 import type { Store } from './store.ts'
 import type { StorageProfile, StorageId, TransferInfo } from '../src/types.ts'
+import { cloudStorageIds } from '../src/types.ts'
 import { HttpError, object, text } from './security.ts'
 import { endpointBase } from './ai.ts'
 import { remoteHTTP, remoteBody, remoteOK } from './remote-http.ts'
@@ -16,7 +17,7 @@ import { exchangeToken, registerDriveOAuth } from './drive-oauth.ts'
 
 type Provider = StorageProfile['id']
 interface SavedProfile extends Omit<StorageProfile, 'hasCredentials'> { encryptedCredentials?: string }
-const providers: Provider[] = ['webdav', 's3', 'baidu', 'quark', 'onedrive', 'gdrive']
+const providers: readonly Provider[] = cloudStorageIds
 const implemented = new Set<Provider>(providers)
 export function storageProfile(store: Store, provider: Provider) { const value = store.get(`storage.${provider}`); return value ? JSON.parse(value) as SavedProfile : undefined }
 export function requireStorage(store: Store, value: unknown): StorageId {
@@ -35,7 +36,12 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
   let running: Promise<void> | undefined, stopping = false, testing = false
   const controller = new AbortController()
   const credentials = (p: SavedProfile) => p.encryptedCredentials ? JSON.parse(decrypt(store, p.encryptedCredentials)) as StorageCredentials : {}
-  const safe = (p: SavedProfile): StorageProfile => { const { encryptedCredentials, ...data } = p; return { ...data, hasCredentials: !!encryptedCredentials } }
+  const safe = (p: SavedProfile): StorageProfile => {
+    const { encryptedCredentials, ...data } = p
+    let authorized = false
+    if (['baidu', 'onedrive', 'gdrive'].includes(p.id)) { try { authorized = !!credentials(p).accessToken } catch { /* Re-enter credentials if the master key is unavailable. */ } }
+    return { ...data, hasCredentials: !!encryptedCredentials, authorized }
+  }
   const profiles = () => providers.map(id => { const p = storageProfile(store, id); return p ? safe(p) : { id, endpoint: '', root: '/集屿', enabled: false, hasCredentials: false, revision: '' } })
   const get = (id: unknown) => { if (!providers.includes(String(id) as Provider)) throw new HttpError(400, '存储类型无效'); const profile = storageProfile(store, String(id) as Provider); if (!profile) throw new HttpError(400, '请先保存连接设置'); return profile }
   const saveCredentials = (p: SavedProfile, value: StorageCredentials, reauthorize = false) => { const current = get(p.id); if (current.revision !== p.revision) throw new HttpError(409, '连接设置已变更，请重新操作'); const saved = { ...current, ...(reauthorize ? { enabled: false, verifiedAt: undefined, revision: randomUUID() } : {}), encryptedCredentials: encrypt(store, JSON.stringify(value)) }; store.set(`storage.${p.id}`, JSON.stringify(saved)); return saved }
@@ -60,14 +66,14 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
   }
   const adapter = (p: SavedProfile, c: StorageCredentials) => p.id === 'baidu' ? new BaiduStorage(safe(p), c, http, controller.signal) : (p.id === 'onedrive' || p.id === 'gdrive') && !p.via ? new DriveStorage(safe(p), c, http, controller.signal) : new StandardStorage(safe(p), c, http, controller.signal)
   registerDriveOAuth(app, store, { origin, http, signal: controller.signal, get, credentials, save: saveCredentials })
-  app.get('/api/storage/connections', async () => ({ profiles: profiles(), supported: [...implemented], transfers: store.db.prepare('SELECT * FROM remote_transfers ORDER BY updated_at DESC LIMIT 100').all() }))
+  app.get('/api/storage/connections', async () => ({ profiles: profiles(), supported: [...implemented], callbackUrls: { onedrive: `${origin}/api/storage/oauth/onedrive/callback`, gdrive: `${origin}/api/storage/oauth/gdrive/callback` }, transfers: store.db.prepare('SELECT * FROM remote_transfers ORDER BY updated_at DESC LIMIT 100').all() }))
   app.put('/api/storage/connections/:id', async req => {
     const id = String(object(req.params).id) as Provider, body = object(req.body)
     if (!implemented.has(id)) throw new HttpError(400, '此平台的独立应用授权适配尚未完成，暂不能配置为收集目标')
     const old = storageProfile(store, id), root = rootInput(body.root)
     const endpoint = id === 'baidu' ? 'https://pan.baidu.com' : id === 'onedrive' ? 'https://graph.microsoft.com' : id === 'gdrive' ? 'https://www.googleapis.com' : endpointBase(body.endpoint)
-    const dav = id === 'webdav' || id === 'quark', oauth = ['baidu', 'onedrive', 'gdrive'].includes(id)
-    const p: SavedProfile = { id, endpoint, root, enabled: false, revision: randomUUID(), ...(id === 's3' ? { region: text(body.region ?? 'us-east-1', '区域', 64), bucket: text(body.bucket, '存储桶', 63) } : {}), ...(dav ? { username: text(body.username, '账号', 100), ...(id !== 'webdav' ? { via: 'webdav' as const } : {}) } : {}), ...(oauth ? { clientId: text(body.clientId, '应用 ID', 200) } : {}) }
+    const dav = id === 'webdav', oauth = ['baidu', 'onedrive', 'gdrive'].includes(id)
+    const p: SavedProfile = { id, endpoint, root, enabled: false, revision: randomUUID(), ...(id === 's3' ? { region: text(body.region ?? 'us-east-1', '区域', 64), bucket: text(body.bucket, '存储桶', 63) } : {}), ...(dav ? { username: text(body.username, '账号', 100) } : {}), ...(oauth ? { clientId: text(body.clientId, '应用 ID', 200) } : {}) }
     if (p.bucket && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(p.bucket)) throw new HttpError(400, '存储桶名称无效')
     if (p.region && !/^[a-z0-9-]{1,64}$/.test(p.region)) throw new HttpError(400, '区域名称无效')
     if (p.username?.includes(':')) throw new HttpError(400, 'WebDAV 账号不能包含冒号')
@@ -81,6 +87,7 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
     for (const key of keys) { const value = supplied[key]; if (typeof value === 'string' && value.trim()) { if (/[\x00-\x1f\x7f]/.test(value)) throw new HttpError(400, '连接凭证不能包含控制字符'); (next as Record<string, unknown>)[key] = text(value, '连接凭证', 8192) } else if (!changedAccount) (next as Record<string, unknown>)[key] = (prior as Record<string, unknown>)[key] }
     if (oauth && next.accessToken === prior.accessToken) next.expiresAt = prior.expiresAt
     if (dav && !next.password || id === 's3' && (!next.accessKeyId || !next.secretAccessKey) || oauth && !next.clientSecret) throw new HttpError(400, '请填写连接凭证，更换地址或账号需重新填写')
+    if (old && (['endpoint', 'root', 'region', 'bucket', 'username', 'clientId', 'via'] as const).every(key => old[key] === p[key]) && keys.every(key => (next as Record<string, unknown>)[key] === (prior as Record<string, unknown>)[key])) return safe(old)
     p.encryptedCredentials = encrypt(store, JSON.stringify(next))
     store.set(`storage.${id}`, JSON.stringify(p)); store.activity('保存远端存储连接，等待验证')
     return safe(p)
@@ -91,6 +98,7 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
     if (object(req.body).revision !== p.revision) throw new HttpError(409, '连接设置已变更，请刷新并重新确认测试')
     testing = true
     try { await adapter(p, await refresh(p)).test(); const current = get(p.id); if (p.revision !== current.revision) throw new HttpError(409, '连接设置已变更，请重新测试'); const saved = { ...current, enabled: true, verifiedAt: new Date().toISOString() }; store.set(`storage.${p.id}`, JSON.stringify(saved)); store.activity('远端存储连接验证通过'); return safe(saved) }
+    catch (error) { const current = get(p.id); if (current.revision === p.revision) store.set('storage.' + p.id, JSON.stringify({ ...current, enabled: false, verifiedAt: undefined })); throw error }
     finally { testing = false }
   })
   app.post('/api/storage/connections/:id/disable', async req => { const p = get(object(req.params).id); store.set(`storage.${p.id}`, JSON.stringify({ ...p, enabled: false, verifiedAt: undefined, revision: randomUUID() })); return { ok: true } })
@@ -137,7 +145,7 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
       const row = store.db.prepare("SELECT * FROM remote_transfers WHERE state='queued' ORDER BY updated_at LIMIT 1").get() as unknown as (TransferInfo & { revision: string }) | undefined
       if (!row) return
       const file = store.files().find(f => f.id === row.file_id && !f.deletedAt), p = storageProfile(store, row.provider as Provider)
-      if (!file || !p?.enabled || !p.verifiedAt || row.revision !== p.revision) { store.db.prepare("UPDATE remote_transfers SET state='failed',error='文件已移除，或连接配置已变更，请检查后重试' WHERE file_id=?").run(row.file_id); continue }
+      if (!implemented.has(row.provider as Provider) || !file || !p?.enabled || !p.verifiedAt || row.revision !== p.revision) { store.db.prepare("UPDATE remote_transfers SET state='failed',error='文件已移除，或连接已停用 / 变更；本机原件保留',updated_at=? WHERE file_id=?").run(new Date().toISOString(), row.file_id); continue }
       store.db.prepare("UPDATE remote_transfers SET state='transferring',attempts=attempts+1,updated_at=? WHERE file_id=?").run(new Date().toISOString(), row.file_id)
       try {
         const path = join(store.dataDir, 'objects', store.fileKey(file.id)!), hash = createHash('sha256'); let bytes = 0

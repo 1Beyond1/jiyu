@@ -25,7 +25,7 @@ export function AdminGate({ children }: { children: ReactNode }) {
 function AuthForm({ setup, onAuthenticated }: { setup: boolean; onAuthenticated: (value: Session) => void }) {
   const [password, setPassword] = useState(''), [confirmation, setConfirmation] = useState(''), [setupToken, setSetupToken] = useState(''), [displayName, setDisplayName] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   const [username, setUsername] = useState('admin')
-  return <main className="auth-page"><Brand /><section className="auth-card"><span className="auth-symbol"><LockKeyhole size={24} strokeWidth={1.4} /></span><p className="eyebrow">YOUR PRIVATE WORKSPACE</p><h1>{setup ? '让文件，从这里归屿。' : '欢迎回到集屿。'}</h1><p>{setup ? '设置管理员，开启你的私人文件工作台。' : '输入管理员密码，继续收集与整理。'}</p><form onSubmit={async e => {
+  return <main className="auth-page"><Brand /><section className="auth-card"><span className="auth-symbol"><LockKeyhole size={24} strokeWidth={1.4} /></span><p className="eyebrow">YOUR PRIVATE WORKSPACE</p><h1>{setup ? '让文件，从这里归屿。' : '欢迎回到集屿。'}</h1><p>{setup ? '设置管理员，开启你的私人文件工作台。' : '使用你的成员账号登录，继续收集与整理。'}</p><form onSubmit={async e => {
     e.preventDefault(); if (setup && password !== confirmation) { setError('两次输入的密码不一致'); return }
     setBusy(true); setError('')
     try { onAuthenticated(await api<Session>(setup ? '/api/auth/setup' : '/api/auth/login', 'POST', { password, ...(setup ? { setupToken, displayName } : { username }) })) } catch (e) { setError((e as Error).message) } finally { setBusy(false) }

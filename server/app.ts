@@ -4,7 +4,7 @@ import cookie from '@fastify/cookie'
 import rateLimit from '@fastify/rate-limit'
 import staticFiles from '@fastify/static'
 import { createReadStream, createWriteStream, existsSync } from 'node:fs'
-import { rename, rm, statfs } from 'node:fs/promises'
+import { rename, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { Transform } from 'node:stream'
@@ -27,6 +27,7 @@ import { registerContent } from './content.ts'
 import type { ContentExtractor } from './content.ts'
 import { registerStorage, requireStorage } from './storage.ts'
 import type { RemoteHTTP } from './remote-http.ts'
+import { storageSpace } from './storage-space.ts'
 
 function collectionInput(value: unknown, current?: Collection): Collection {
   const body = object(value)
@@ -283,7 +284,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     store.transaction(() => { for (const f of files) { const p = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: p.oldName, ...(p.oldTags ? { tags: p.oldTags } : {}) }) }; store.db.prepare('UPDATE renames SET undone=1 WHERE id=?').run(id); store.activity(`撤销了 ${files.length} 个文件的整理操作`) })
     return store.workspace(config.quotaBytes)
   })
-  app.get('/api/storage', async () => { const disk = await statfs(config.dataDir); return { usedBytes: store.usedBytes(), quotaBytes: config.quotaBytes, availableBytes: disk.bavail * disk.bsize } })
+  app.get('/api/storage', async () => storageSpace(config.dataDir, store.usedBytes(), config.quotaBytes, store.pendingBytes() + budget.bytes))
   registerAI(app, store, options.aiTransport)
   registerArchives(app, store)
   await registerUploads(app, store, config, budget)

@@ -64,6 +64,7 @@ export function FileDetail({ file, collection, onClose, onRename, onReview, onTr
     <div className="file-detail-title"><FileIcon name={file.name} large /><h3>{file.name}</h3><span className={`status ${file.status === 'ready' ? 'active' : 'paused'}`}><i />{file.status === 'ready' ? '已整理' : '待整理'}</span></div>
     <FilePreview file={file} />
     <dl className="detail-list"><div><dt>所属收集</dt><dd>{collection?.title}</dd></div><div><dt>提交人</dt><dd>{file.owner}</dd></div><div><dt>文件大小</dt><dd>{formatSize(file.size)}</dd></div><div><dt>提交时间</dt><dd>{formatDate(file.createdAt)}</dd></div><div><dt>存储位置</dt><dd>{storageNames[file.storage]}</dd></div></dl>
+    {file.storage !== 'local' && <p className="form-note">本机原件已保存。云端同步：{({ queued: '等待同步', transferring: '正在传输并校验', ready: '云端已保存', failed: '同步失败，可在存储空间重试' })[file.remoteStatus || 'queued']}。</p>}
     <div className="checksum"><span>SHA-256 内容校验</span><code>{file.sha256}</code></div>
     {!!file.tags?.length && <div className="file-tags">{file.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
     <footer className="modal-footer file-detail-actions">{canEdit && <><button className="icon-button" onClick={onTrash} aria-label="移入回收站"><Trash2 size={17} /></button><button className="button" onClick={onRename}>重命名<ArrowUpRight size={15} /></button><button className="button" onClick={onReview}><Check size={15} />已整理</button></>}<a className="button primary" href={`/api/files/${file.id}/download`}><Download size={15} />下载</a></footer>

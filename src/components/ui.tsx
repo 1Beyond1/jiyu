@@ -10,7 +10,7 @@ export function Modal({ title, subtitle, children, onClose, wide = false }: { ti
   const ref = useRef<HTMLDialogElement>(null)
   const id = useId()
   useEffect(() => { const dialog = ref.current!; dialog.showModal(); return () => dialog.close() }, [])
-  return <dialog ref={ref} className={`modal ${wide ? 'wide' : ''}`} aria-labelledby={id} onCancel={onClose} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+  return <dialog ref={ref} className={`modal ${wide ? 'wide' : ''}`} aria-labelledby={id} onCancel={e => { e.preventDefault(); onClose() }} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
     <div className="modal-inner"><header className="modal-heading"><div><h2 id={id}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="icon-button" onClick={onClose} aria-label="关闭弹窗"><X size={19} /></button></header>{children}</div>
   </dialog>
 }

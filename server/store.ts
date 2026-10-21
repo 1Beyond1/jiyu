@@ -3,6 +3,12 @@ import { mkdirSync, readdirSync, rmSync, existsSync, writeFileSync, readFileSync
 import { join } from 'node:path'
 import { token } from './security.ts'
 import type { Workspace, Collection, CollectedFile } from '../src/types.ts'
+import { cloudStorageIds } from '../src/types.ts'
+
+// Removed providers fall back to the immutable local copy; keep stored history intact.
+function normalizeStorage<T extends { storage: string }>(record: T): T {
+  return record.storage === 'local' || cloudStorageIds.some(id => id === record.storage) ? record : { ...record, storage: 'local' }
+}
 
 export class Store {
   db: DatabaseSync
@@ -62,14 +68,14 @@ export class Store {
   collection(id: string) { return this.collections().find(c => c.id === id) }
   byToken(value: string) {
     const row = this.db.prepare('SELECT data,token FROM collections WHERE token=?').get(value) as { data: string; token: string } | undefined
-    return row ? { ...JSON.parse(row.data), uploadToken: row.token } as Collection : undefined
+    return row ? normalizeStorage({ ...JSON.parse(row.data), uploadToken: row.token }) as Collection : undefined
   }
-  collections(): Collection[] { return (this.db.prepare('SELECT data,token FROM collections ORDER BY rowid DESC').all() as { data: string; token: string }[]).map(r => ({ ...JSON.parse(r.data), uploadToken: r.token })) }
+  collections(): Collection[] { return (this.db.prepare('SELECT data,token FROM collections ORDER BY rowid DESC').all() as { data: string; token: string }[]).map(r => normalizeStorage({ ...JSON.parse(r.data), uploadToken: r.token })) }
   saveCollection(collection: Collection) {
     const { uploadToken, ...data } = collection
     this.db.prepare('INSERT INTO collections VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,data=excluded.data').run(collection.id, uploadToken || token(), JSON.stringify(data))
   }
-  files(): CollectedFile[] { return (this.db.prepare('SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id ORDER BY f.rowid DESC').all() as { data: string; state: string | null; remote_path: string | null }[]).map(r => ({ ...JSON.parse(r.data), ...(r.state ? { remoteStatus: r.state, ...(r.remote_path ? { remotePath: r.remote_path } : {}) } : {}) })) }
+  files(): CollectedFile[] { return (this.db.prepare('SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id ORDER BY f.rowid DESC').all() as { data: string; state: string | null; remote_path: string | null }[]).map(r => normalizeStorage({ ...JSON.parse(r.data), ...(r.state ? { remoteStatus: r.state, ...(r.remote_path ? { remotePath: r.remote_path } : {}) } : {}) })) }
   saveFile(file: CollectedFile) { this.db.prepare('UPDATE files SET data=? WHERE id=?').run(JSON.stringify(file), file.id) }
   addFile(file: CollectedFile, key: string) {
     this.db.prepare('INSERT INTO files VALUES (?,?,?,?)').run(file.id, file.collectionId, key, JSON.stringify(file))

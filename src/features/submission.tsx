@@ -8,14 +8,15 @@ import type { Collection, UploadReceipt } from '../types'
 
 export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
   const [info, setInfo] = useState<{ collection: Collection; ownerName: string } | null>(null), [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
   useEffect(() => {
     let alive = true
     const load = async () => { try { const data = await api<{ collection: Collection; ownerName: string }>(`/api/public/${encodeURIComponent(uploadToken)}`); if (alive) { setInfo(data); setError('') } } catch (e) { if (alive) setError((e as Error).message) } }
     void load(); const timer = setInterval(() => void load(), 15000)
     return () => { alive = false; clearInterval(timer) }
-  }, [uploadToken])
-  if (error || !info) return <main className="auth-page"><Brand /><section className="auth-card"><h1>{error ? '暂时无法打开这项收集' : '正在打开收集…'}</h1><p>{error || '正在读取最新的收集规则。'}</p>{error && <button className="button" onClick={() => location.reload()}>重新打开</button>}</section></main>
-  return <Submission key={uploadToken} collection={info.collection} ownerName={info.ownerName} uploadToken={uploadToken} />
+  }, [uploadToken, retry])
+  if (!info) return <main className="auth-page"><Brand /><section className="auth-card"><h1>{error ? '暂时无法打开这项收集' : '正在打开收集…'}</h1><p>{error || '正在读取最新的收集规则。'}</p>{error && <button className="button" onClick={() => setRetry(n => n + 1)}>重新打开</button>}</section></main>
+  return <>{error && <div className="submission-refresh-error" role="alert">收集信息暂未更新：{error}。已选文件和上传进度已保留。<button className="text-button" onClick={() => setRetry(n => n + 1)}>重试读取</button></div>}<Submission key={uploadToken} collection={info.collection} ownerName={info.ownerName} uploadToken={uploadToken} /></>
 }
 
 function Submission({ collection: c, ownerName, uploadToken }: { collection: Collection; ownerName: string; uploadToken: string }) {
