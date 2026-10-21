@@ -18,6 +18,7 @@ COPY --from=build --chown=node:node /app/server ./server
 COPY --from=build --chown=node:node /app/src/types.ts ./src/types.ts
 COPY --from=build --chown=node:node /app/src/lib/collections.ts ./src/lib/collections.ts
 COPY --from=build --chown=node:node /app/package*.json ./
+COPY --chown=node:node LICENSE ./LICENSE
 RUN mkdir -p /data /backups && chown node:node /data /backups
 USER node
 VOLUME ["/data", "/backups"]

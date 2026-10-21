@@ -1,6 +1,8 @@
 {
   "name": "jiyu",
   "version": "0.3.0",
+  "license": "MIT",
+  "author": "1Beyond1",
   "private": true,
   "type": "module",
   "scripts": {
