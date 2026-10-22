@@ -24,7 +24,7 @@ async function writeSnapshot(db: DatabaseSync, dataDir: string, destination: str
   let rows: { storage_key: string; data: string }[], schema: number
   try {
     schema = (snapshot.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-    if (schema < 1 || schema > 4) throw new Error('数据库版本不受当前备份工具支持')
+    if (schema < 1 || schema > 5) throw new Error('数据库版本不受当前备份工具支持')
     const ai = snapshot.prepare("SELECT value FROM settings WHERE key='ai.settings'").get() as { value: string } | undefined
     if (ai && JSON.parse(ai.value).encryptedKey && !existsSync(join(dataDir, 'secrets.key'))) throw new Error('模型凭证主密钥缺失，备份未完成')
     const storage = snapshot.prepare("SELECT value FROM settings WHERE key LIKE 'storage.%'").all() as { value: string }[]

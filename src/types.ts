@@ -21,7 +21,21 @@ export interface Collection {
   maxTotalSizeMB?: number
   uploadToken?: string
   requestLimitMB?: number
+  fields?: CollectionField[]
+  identityField?: string
+  expectedSubmitters?: string[]
+  naming?: { parts: string[]; separator: '_' | '-' }
+  submissionMode?: 'append' | 'single'
+  allowReplacement?: boolean
 }
+
+export interface CollectionField { id: string; label: string; required: boolean }
+export interface CollectionTemplate { id: string; name: string; rules: Partial<Collection>; archived: boolean }
+export interface SubmissionMetadata { fields?: Record<string, string>; replace?: { receiptId: string; key: string } }
+export interface Participant { identity: string; owner: string; expected: boolean; fileIds: string[]; bytes: number; submissions: number; latestAt: string; duplicates: number }
+export interface ReceiptDetail { receipt: UploadReceipt; owner: string; fields: Record<string, string>; files: Pick<CollectedFile, 'id' | 'name' | 'size'>[]; superseded: boolean }
+export interface DiagnosticItem { id: string; label: string; state: 'ok' | 'attention'; detail: string; action?: string }
+export interface Diagnostics { checkedAt: string; items: DiagnosticItem[] }
 
 export interface CollectedFile {
   id: string
@@ -38,6 +52,10 @@ export interface CollectedFile {
   tags?: string[]
   remoteStatus?: 'queued' | 'transferring' | 'ready' | 'failed'
   remotePath?: string
+  submissionId?: string
+  submissionFields?: Record<string, string>
+  fieldLabels?: Record<string, string>
+  participant?: string
 }
 
 export interface Activity {
@@ -57,7 +75,7 @@ export interface Workspace {
   lastRenameId?: string
 }
 
-export interface UploadReceipt { receiptId: string; filesCount: number; bytes: number; createdAt: string }
+export interface UploadReceipt { receiptId: string; filesCount: number; bytes: number; createdAt: string; editKey?: string }
 export interface BackupSettings { enabled: boolean; intervalHours: number; keep: number }
 export interface BackupInfo { id: string; createdAt: string; files: number; bytes: number }
 export interface BackupRun { id: string; status: 'running' | 'succeeded' | 'failed'; startedAt: string; finishedAt?: string; error?: string }

@@ -28,6 +28,8 @@ import type { ContentExtractor } from './content.ts'
 import { registerStorage, requireStorage } from './storage.ts'
 import type { RemoteHTTP } from './remote-http.ts'
 import { storageSpace } from './storage-space.ts'
+import { collectionRules, registerCollectionWorkflows } from './collection-workflows.ts'
+import { diagnostics } from './diagnostics.ts'
 
 function collectionInput(value: unknown, current?: Collection): Collection {
   const body = object(value)
@@ -42,7 +44,7 @@ function collectionInput(value: unknown, current?: Collection): Collection {
   if (formats.length > 20 || !formats.length || formats.some(f => !/^[a-z0-9]{1,12}$/.test(f))) throw new HttpError(400, '文件后缀无效')
   const category = body.category
   if (category !== 'design' && category !== 'document' && category !== 'photo') throw new HttpError(400, '收集类型无效')
-  return { id: current?.id || randomUUID(), uploadToken: current?.uploadToken || token(), title: text(body.title, '收集名称', 50), description: typeof body.description === 'string' ? text(body.description, '收集说明', 150, 0) : '', category, target: integer('target', 10000), deadline, formats: formats.join(', ').toUpperCase(), maxFileSizeMB: integer('maxFileSizeMB', 1024), maxFilesPerSubmission: integer('maxFilesPerSubmission', 100), maxTotalSizeMB: integer('maxTotalSizeMB', 1048576, current?.maxTotalSizeMB || 2048), storage: 'local', received: current?.received || 0, status: current?.status || 'active' }
+  return { ...collectionRules(body, current), id: current?.id || randomUUID(), uploadToken: current?.uploadToken || token(), title: text(body.title, '收集名称', 50), description: typeof body.description === 'string' ? text(body.description, '收集说明', 150, 0) : '', category, target: integer('target', 10000), deadline, formats: formats.join(', ').toUpperCase(), maxFileSizeMB: integer('maxFileSizeMB', 1024), maxFilesPerSubmission: integer('maxFilesPerSubmission', 100), maxTotalSizeMB: integer('maxTotalSizeMB', 1048576, current?.maxTotalSizeMB || 2048), storage: 'local', received: current?.received || 0, status: current?.status || 'active' }
 }
 
 export async function createApp(config: Config, options: { serveFrontend?: boolean; aiTransport?: AITransport; contentExtractor?: ContentExtractor; storageHTTP?: RemoteHTTP } = {}) {
@@ -111,7 +113,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     reply.raw.once('finish', () => { req.raw.removeListener('data', count); if (exceeded) req.raw.destroy() })
     done()
   })
-  app.get('/api/health', async () => ({ ok: true, version: '0.3.0' }))
+  app.get('/api/health', async () => ({ ok: true, version: '0.4.0-dev.0' }))
   app.get('/api/auth/status', async req => { const auth = session(req); return { setupRequired: !store.get('password'), authenticated: !!auth, csrf: auth?.csrf, user: auth ? publicUser(auth) : undefined } })
   app.post('/api/auth/setup', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (req, reply) => {
     if (store.get('password')) throw new HttpError(409, '管理员已经初始化')
@@ -144,6 +146,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   })
   app.get('/api/workspace', async req => { const workspace = store.workspace(config.quotaBytes); if (session(req)?.role === 'viewer') { workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c); workspace.lastRenameId = undefined }; return workspace })
   app.patch('/api/settings', async req => { store.set('displayName', text(object(req.body).displayName, '显示名称', 20)); return store.workspace(config.quotaBytes) })
+  app.post('/api/settings/diagnostics', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async () => diagnostics(store, config, budget.bytes))
   app.post('/api/collections', async req => { const c = { ...collectionInput(req.body), storage: requireStorage(store, object(req.body).storage) }; store.transaction(() => { store.saveCollection(c); store.activity(`创建了「${c.title}」`) }); return store.workspace(config.quotaBytes) })
   const getCollection = (id: string) => { const c = store.collection(id); if (!c) throw new HttpError(404, '没有找到这项收集'); return c }
   app.patch('/api/collections/:id', async req => {
@@ -166,12 +169,13 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   })
   const publicCollection = (value: string) => { const c = store.byToken(value); if (!c) throw new HttpError(404, '收集链接无效或已撤销'); return c }
   app.get('/api/public/:token', async req => {
-    const { uploadToken: _secret, ...c } = publicCollection(String(object(req.params).token))
+    const { uploadToken: _secret, expectedSubmitters: _roster, ...c } = publicCollection(String(object(req.params).token))
     return { collection: { ...c, requestLimitMB: config.requestBytes / 1024 ** 2 }, ownerName: store.get('displayName') || '管理员' }
   })
   app.post('/api/public/:token/upload', { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } }, async (req, reply) => {
     const c = publicCollection(String(object(req.params).token))
     if (c.status !== 'active' || isExpired(c)) throw new HttpError(410, '这项收集已暂停、结束或超过截止时间')
+    if (c.fields?.length || c.naming?.parts.length || c.submissionMode === 'single') throw new HttpError(400, '此任务有新提交规则，请使用新版提交页')
     const requestId = text(req.headers['idempotency-key'], '提交编号', 36)
     if (!/^[a-f0-9-]{36}$/.test(requestId)) throw new HttpError(400, '提交编号无效')
     const previous = store.db.prepare('SELECT collection_id,receipt FROM submissions WHERE id=?').get(requestId) as { collection_id: string; receipt: string } | undefined
@@ -208,6 +212,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
       store.transaction(() => {
         if (store.db.prepare('SELECT id FROM submissions WHERE id=?').get(requestId)) throw new HttpError(409, '该提交已完成，请重试获取回执')
         const finalCollection = getCollection(c.id)
+        if (finalCollection.fields?.length || finalCollection.naming?.parts.length || finalCollection.submissionMode === 'single') throw new HttpError(409, '提交规则已更新，请使用新版提交页')
         const finalError = submissionError(finalCollection, staged.map(s => s.file))
         if (finalError || finalCollection.uploadToken !== c.uploadToken) throw new HttpError(410, finalError || '收集链接已更换，请使用新链接')
         if (store.usedBytes(c.id) + bytes > (finalCollection.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务容量超过上限')
@@ -287,6 +292,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   app.get('/api/storage', async () => storageSpace(config.dataDir, store.usedBytes(), config.quotaBytes, store.pendingBytes() + budget.bytes))
   registerAI(app, store, options.aiTransport)
   registerArchives(app, store)
+  registerCollectionWorkflows(app, store)
   await registerUploads(app, store, config, budget)
   registerUsers(app, store)
   const stopBackups = await registerBackups(app, store, config.backupDir || resolve(config.dataDir, '..', 'backups'))

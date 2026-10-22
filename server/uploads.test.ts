@@ -21,6 +21,9 @@ test('分片续传跨重启、逐片校验、原子提交、私有凭证与配�
     const resumeHeaders = { ...origin, 'x-upload-key': key }
     const start = await service.app.inject({ method: 'POST', url, headers: resumeHeaders, payload: draft })
     assert.equal(start.statusCode, 200, start.body)
+    // A batch persisted by v0.3 has no custom-field metadata; retry remains compatible.
+    service.store.db.prepare('UPDATE uploads SET data=? WHERE id=?').run(JSON.stringify(draft), batchId)
+    assert.equal((await service.app.inject({ method: 'POST', url, headers: resumeHeaders, payload: draft })).statusCode, 200)
     assert.equal(service.store.pendingBytes(), CHUNK_BYTES + 6)
     const second = await service.app.inject({ method: 'POST', url: `/api/public/${c.uploadToken}/uploads/${randomUUID()}`, headers: resumeHeaders, payload: { owner: '另一人', files: [{ name: '另一份.txt', size: CHUNK_BYTES, lastModified: 2 }] } })
     assert.equal(second.statusCode, 413)

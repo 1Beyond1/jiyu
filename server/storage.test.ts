@@ -64,7 +64,8 @@ test('WebDAV/S3 完整校验、加密配置、云端队列、失败保留原件�
     assert.equal(store.files().find(f => f.id === secondId)?.remoteStatus, 'failed')
     assert.equal((await call('GET', `/api/files/${secondId}/download`)).rawPayload.toString(), bytes.toString())
     corrupt = false
-    assert.equal((await call('POST', '/api/storage/transfers/retry', { ids: [secondId] })).statusCode, 200)
+    const retried = await call('POST', '/api/storage/transfers/retry', { ids: [secondId, secondId, id] })
+    assert.equal(retried.statusCode, 200); assert.equal(retried.json().retried, 1, '只重试失败项，并去重；成功项不重复传输')
     for (let n = 0; n < 200; n++) { if (store.files().find(f => f.id === secondId)?.remoteStatus === 'ready') break; await new Promise(r => setTimeout(r, 10)) }
     assert.equal(store.files().find(f => f.id === secondId)?.remoteStatus, 'ready')
     corrupt = true

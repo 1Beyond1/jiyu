@@ -1,0 +1,15 @@
+import { useEffect, useState } from 'react'
+import type { CollectionTemplate } from '../types'
+import { api } from '../lib/api'
+import { Modal } from '../components/ui'
+
+export function TemplatePicker({ onSelect }: { onSelect: (t: CollectionTemplate) => void }) {
+  const [templates, setTemplates] = useState<CollectionTemplate[]>([]), [error, setError] = useState(''), [busy, setBusy] = useState(false), [manage, setManage] = useState(false)
+  useEffect(() => { void api<{ templates: CollectionTemplate[] }>('/api/templates').then(s => setTemplates(s.templates)).catch(e => setError(e.message)) }, [])
+  return <div className="template-picker"><label className="field">从模板开始<select aria-label="选择收集模板" defaultValue="" onChange={e => { const t = templates.find(t => t.id === e.target.value); if (t) onSelect(t); e.target.value = '' }}><option value="">选择模板（选填）</option>{templates.filter(t => !t.archived).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select><small>在任务详情中可将规则保存为模板。</small></label>{!!templates.length && <button className="text-button" type="button" onClick={() => setManage(!manage)}>{manage ? '收起模板管理' : '管理模板'}</button>}{manage && <div className="template-list">{templates.map(t => <div key={t.id}><span>{t.name}{t.archived ? ' · 已归档' : ''}</span><button className="text-button" type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { const next = await api<CollectionTemplate>(`/api/templates/${t.id}`, 'PATCH', { archived: !t.archived }); setTemplates(old => old.map(v => v.id === t.id ? next : v)) } catch (e) { setError((e as Error).message) } finally { setBusy(false) } }}>{t.archived ? '恢复' : '归档'}</button></div>)}</div>}{error && <p className="error-text" role="alert">{error}</p>}</div>
+}
+
+export function SaveTemplate({ collectionId, title, onClose }: { collectionId: string; title: string; onClose: () => void }) {
+  const [name, setName] = useState(title.slice(0, 40)), [error, setError] = useState(''), [busy, setBusy] = useState(false), [saved, setSaved] = useState(false)
+  return <Modal title={saved ? '模板已保存' : '保存为收集模板'} subtitle="以后创建同类收集，可以直接复用这些规则。" onClose={() => { if (!busy) onClose() }}><form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(''); try { await api('/api/templates', 'POST', { collectionId, name }); setSaved(true) } catch (e) { setError((e as Error).message) } finally { setBusy(false) } }}>{saved ? <p className="success-text" role="status">新建收集时选择「{name}」即可使用。</p> : <label className="field">模板名称<input required maxLength={40} value={name} onChange={e => setName(e.target.value)} autoFocus /></label>}<div className="form-note">复制字段、命名和提交规则。名单、截止日期、分享链接和存储连接将在新任务单独设置。</div>{error && <p className="error-text" role="alert">{error}</p>}<footer className="modal-footer"><button type="button" className="button" disabled={busy} onClick={onClose}>{saved ? '完成' : '取消'}</button>{!saved && <button className="button primary" disabled={busy}>{busy ? '保存中…' : '保存模板'}</button>}</footer></form></Modal>
+}

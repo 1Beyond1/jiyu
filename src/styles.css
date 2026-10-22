@@ -801,3 +801,58 @@ tr.selected td { background: #f4ece2; }
   .archive-preview > div { grid-template-columns: minmax(0, 1fr); gap: 7px; }
   .archive-preview-labels span:first-child { display: none; }
 }
+
+/* Collection workflows: reuse the paper palette and compact form rhythm. */
+.collection-rules-editor { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 22px; }
+.rule-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 16px; }
+.rule-heading h3 { font-family: var(--display-font); font-size: 17px; font-weight: 500; }
+.rule-heading small { font-size: 11px; color: var(--muted); }
+.custom-field-row { display: flex; align-items: center; gap: 14px; }
+.custom-field-row > .field { flex: 1; min-width: 0; }
+.check-field { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.8; margin: 12px 0 20px; color: var(--secondary); }
+.check-field input { accent-color: var(--accent); }
+.collection-rules-editor > .button { margin-bottom: 20px; }
+.naming-tokens { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.naming-tokens .chosen { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.naming-example { display: grid; gap: 8px; padding: 16px; margin-bottom: 20px; background: var(--surface); border-radius: 8px; font-size: 12px; }
+.naming-example span, .naming-example small { color: var(--secondary); line-height: 1.8; }
+.naming-example code { overflow-wrap: anywhere; }
+.template-picker { padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 22px; }
+.template-picker > .field { margin-bottom: 6px; }
+.template-list > div { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.collection-workflow-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 30px; }
+.collection-workflow-bar .tabs { margin-bottom: 0; }
+.participant-ledger { padding: 24px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); margin: 20px 0; }
+.ledger-summary { display: flex; gap: 40px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+.ledger-summary > div { display: grid; gap: 5px; }
+.ledger-summary strong { font-family: var(--display-font); font-size: 30px; font-weight: 500; }
+.ledger-summary span { font-size: 12px; color: var(--secondary); }
+.ledger-summary > button { margin-left: auto; }
+.ledger-scroll { overflow-x: auto; }
+.ledger-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.ledger-table th { color: var(--muted); font-weight: 400; white-space: nowrap; }
+.ledger-table td, .ledger-table th { padding: 16px 12px; border-bottom: 1px solid var(--line-soft); }
+.ledger-table small { display: block; margin-top: 6px; color: var(--secondary); line-height: 1.8; }
+.ledger-table strong { font-weight: 500; overflow-wrap: anywhere; }
+.empty-ledger { padding: 30px 0; text-align: center; font-size: 12px; color: var(--secondary); line-height: 1.9; }
+.receipt-manager { margin: 20px 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.receipt-manager > div { margin-top: 18px; padding: 16px; background: var(--surface); border-radius: 8px; }
+.receipt-manager small { display: block; color: var(--secondary); font-size: 11px; line-height: 1.8; margin-top: 12px; }
+.receipt-result { font-size: 12px; margin-top: 18px; line-height: 1.9; overflow-wrap: anywhere; }
+.receipt-result p { margin: 8px 0; }
+.receipt-actions { display: grid; justify-items: center; gap: 16px; margin-top: 20px; }
+.receipt-actions .field-hint { line-height: 1.9; }
+.replacement-note { padding: 16px; background: var(--accent-soft); color: var(--secondary); font-size: 12px; line-height: 1.9; margin-bottom: 20px; border-radius: 8px; }
+@media (max-width: 600px) {
+  .rule-heading, .collection-workflow-bar { align-items: flex-start; flex-direction: column; }
+  .custom-field-row { gap: 8px; }
+  .participant-ledger { padding: 16px; }
+  .ledger-summary { gap: 20px; }
+  .ledger-summary > button { margin-left: 0; }
+  .ledger-table { min-width: 580px; }
+  .collection-workflow-bar .tabs { max-width: 100%; }
+}
+.diagnostic-list { display: grid; gap: 18px; margin: 22px 0; }
+.diagnostic-list > div { display: flex; gap: 16px; align-items: flex-start; padding-bottom: 16px; border-bottom: 1px solid var(--line-soft); }
+.diagnostic-list strong { font-size: 13px; font-weight: 500; }
+.diagnostic-list p, .diagnostic-list small { margin: 6px 0 0; font-size: 12px; line-height: 1.8; color: var(--secondary); overflow-wrap: anywhere; }

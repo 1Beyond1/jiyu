@@ -1,4 +1,4 @@
-import type { UploadReceipt } from '../types'
+import type { UploadReceipt, SubmissionMetadata } from '../types'
 
 let csrf = ''
 export function setCsrf(value: string) { csrf = value }
@@ -49,9 +49,12 @@ export async function discardUpload(uploadToken: string) {
   forgetUpload(uploadToken)
 }
 export function hasPendingUpload(uploadToken: string) { try { const r = JSON.parse(localStorage.getItem(resumeStorage(uploadToken)) || 'null') as ResumeRecord | null; return !!r && r.savedAt > Date.now() - 24 * 60 * 60 * 1000 } catch { return false } }
+export function pendingSubmission(uploadToken: string): SubmissionMetadata & { owner?: string } {
+  try { const r = JSON.parse(localStorage.getItem(resumeStorage(uploadToken)) || 'null') as ResumeRecord | null; return r && r.savedAt > Date.now() - 24 * 60 * 60 * 1000 ? JSON.parse(r.signature) : {} } catch { return {} }
+}
 
-export async function uploadFiles(uploadToken: string, files: File[], owner: string, _requestId: string, onProgress: (value: number) => void, signal: AbortSignal): Promise<UploadReceipt> {
-  const signature = JSON.stringify({ owner, files: files.map(f => ({ name: f.name, size: f.size, lastModified: f.lastModified })) })
+export async function uploadFiles(uploadToken: string, files: File[], owner: string, _requestId: string, onProgress: (value: number) => void, signal: AbortSignal, metadata: SubmissionMetadata = {}): Promise<UploadReceipt> {
+  const signature = JSON.stringify({ owner, files: files.map(f => ({ name: f.name, size: f.size, lastModified: f.lastModified })), ...metadata })
   let record: ResumeRecord | null = null
   try { record = JSON.parse(localStorage.getItem(resumeStorage(uploadToken)) || 'null') as ResumeRecord | null } catch { /* Continue without local persistence. */ }
   if (record && record.signature !== signature) { await discardUpload(uploadToken); record = null }
@@ -74,8 +77,13 @@ export async function uploadFiles(uploadToken: string, files: File[], owner: str
     throw lastError || new Error('网络连接中断，重新提交可从已完成的分片继续')
   }
   try {
+    const completed = (receipt: UploadReceipt) => {
+      const saved = { ...receipt, editKey: record!.key }
+      try { localStorage.setItem(`jiyu:receipt:${uploadToken}`, JSON.stringify(saved)) } catch { /* The user can save the receipt manually. */ }
+      forgetUpload(uploadToken); onProgress(100); return saved
+    }
     const state = await request<UploadState>(base, 'POST', signature, { 'Content-Type': 'application/json' })
-    if (state.receipt) { forgetUpload(uploadToken); onProgress(100); return state.receipt }
+    if (state.receipt) return completed(state.receipt)
     const total = files.reduce((sum, f) => sum + f.size, 0); let sent = 0
     for (let index = 0; index < files.length; index++) {
       const file = files[index]
@@ -90,6 +98,6 @@ export async function uploadFiles(uploadToken: string, files: File[], owner: str
       }
     }
     const result = await request<UploadReceipt>(`${base}/complete`, 'POST', '{}', { 'Content-Type': 'application/json' })
-    forgetUpload(uploadToken); onProgress(100); return result
+    return completed(result)
   } catch (error) { if (signal.aborted) throw new Error('上传已暂停，已完成的分片保留 24 小时，重新提交即可继续'); throw error }
 }

@@ -10,11 +10,13 @@ import type { Config } from './config.ts'
 import type { Collection, CollectedFile, UploadReceipt } from '../src/types.ts'
 import { digest, equalToken, HttpError, object, safeName, text } from './security.ts'
 import { submissionError, isExpired } from '../src/lib/collections.ts'
+import { submissionContext, commitSubmission } from './collection-workflows.ts'
+import type { SubmissionContext } from './collection-workflows.ts'
 
 export const CHUNK_BYTES = 4 * 1024 ** 2
 const UUID = /^[a-f0-9-]{36}$/
 interface DraftFile { name: string; size: number; lastModified: number }
-interface Batch { owner: string; files: DraftFile[] }
+interface Batch extends SubmissionContext { owner: string; files: DraftFile[] }
 interface Row { id: string; collection_id: string; token_hash: string; key_hash: string; data: string; bytes: number; expires: number }
 interface Part { file_index: number; part_index: number; sha256: string; size: number }
 
@@ -71,8 +73,9 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
     const invalid = submissionError(c, files), bytes = files.reduce((sum, f) => sum + f.size, 0)
     if (invalid) throw new HttpError(400, invalid)
     if (bytes > config.requestBytes) throw new HttpError(413, '单次提交总量超过上限')
-    const data = JSON.stringify({ owner, files }), existing = store.db.prepare('SELECT * FROM uploads WHERE id=?').get(id(req)) as unknown as Row | undefined
-    if (existing) { const { row } = authorize(req); if (row.data !== data) throw new HttpError(409, '文件或提交人已改变，请创建新批次'); return status(row) }
+    const context = submissionContext(store, c, owner, body)
+    const data = JSON.stringify({ owner, files, ...context }), existing = store.db.prepare('SELECT * FROM uploads WHERE id=?').get(id(req)) as unknown as Row | undefined
+    if (existing) { const { row } = authorize(req); const old = JSON.parse(row.data); if (JSON.stringify({ fields: {}, ...old }) !== JSON.stringify({ fields: {}, ...JSON.parse(data) })) throw new HttpError(409, '文件或提交人已改变，请创建新批次'); return status(row) }
     const count = (store.db.prepare('SELECT COUNT(*) AS n FROM uploads WHERE expires>?').get(Date.now()) as { n: number }).n
     if (count >= 20) throw new HttpError(429, '待续传批次较多，请完成已有提交或稍后重试')
     limits(c, bytes, files.length)
@@ -142,6 +145,7 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
       limits(latest, 0, 0)
       const result: UploadReceipt = { receiptId: randomUUID(), filesCount: staged.length, bytes: row.bytes, createdAt: new Date().toISOString() }
       store.transaction(() => {
+        commitSubmission(store, latest, batch.owner, { ...batch, fields: batch.fields || {} }, result, row.key_hash, staged.map(e => e.file))
         for (const entry of staged) store.addFile({ ...entry.file, storage: latest.storage, remoteStatus: latest.storage === 'local' ? undefined : 'queued' }, entry.key)
         store.saveCollection({ ...latest, received: latest.received + staged.length })
         store.db.prepare('INSERT INTO submissions VALUES (?,?,?,?)').run(row.id, c.id, row.key_hash, JSON.stringify(result))

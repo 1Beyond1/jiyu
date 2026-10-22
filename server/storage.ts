@@ -137,8 +137,15 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
   app.post('/api/storage/transfers/retry', async req => {
     const ids = object(req.body).ids
     if (!Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some(id => typeof id !== 'string')) throw new HttpError(400, '请选择 1–100 项传输')
-    for (const id of ids) { const row = store.db.prepare('SELECT provider,state FROM remote_transfers WHERE file_id=?').get(String(id)) as { provider: Provider; state: string } | undefined; if (!row || row.state === 'transferring') continue; const p = get(row.provider); if (!p.enabled) throw new HttpError(400, '请先验证并启用连接'); store.db.prepare("UPDATE remote_transfers SET state='queued',revision=?,attempts=0,error=NULL WHERE file_id=?").run(p.revision, String(id)) }
-    return { ok: true }
+    const active = new Set(store.files().filter(f => !f.deletedAt).map(f => f.id))
+    const entries = [...new Set(ids)].map(id => {
+      const row = store.db.prepare('SELECT provider,state FROM remote_transfers WHERE file_id=?').get(String(id)) as { provider: Provider; state: string } | undefined
+      if (!active.has(id) || !row || row.state !== 'failed') return undefined
+      const p = get(row.provider); if (!p.enabled) throw new HttpError(400, '请先验证并启用所有选中文件的连接')
+      return { id, revision: p.revision }
+    }).filter(e => e !== undefined)
+    store.transaction(() => { for (const e of entries) store.db.prepare("UPDATE remote_transfers SET state='queued',revision=?,attempts=0,error=NULL,updated_at=? WHERE file_id=?").run(e.revision, new Date().toISOString(), e.id) })
+    return { ok: true, retried: entries.length }
   })
   const work = async () => {
     while (!stopping) {

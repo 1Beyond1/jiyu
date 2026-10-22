@@ -23,7 +23,7 @@ test('升级前备份保留 v0.2 schema，恢复后才迁移且不修改旧快�
     }
     await restoreBackup(backupDir, join(dir, 'restored'))
     const restored = new Store(join(dir, 'restored'))
-    try { assert.equal(restored.db.prepare('PRAGMA user_version').get()!.user_version, 4); assert.equal(restored.get('fixture'), '升级前的设置') } finally { restored.close() }
+    try { assert.equal(restored.db.prepare('PRAGMA user_version').get()!.user_version, 5); assert.equal(restored.get('fixture'), '升级前的设置') } finally { restored.close() }
     const snapshot = new DatabaseSync(join(backupDir, 'jiyu.sqlite'), { readOnly: true })
     try { assert.equal(snapshot.prepare('PRAGMA user_version').get()!.user_version, 1) } finally { snapshot.close() }
   } finally { if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true }) }

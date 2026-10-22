@@ -35,5 +35,5 @@ function AuthForm({ setup, onAuthenticated }: { setup: boolean; onAuthenticated:
     <label className="field">{setup ? '管理员密码' : '密码'}<input type="password" required minLength={setup ? 12 : 1} maxLength={128} value={password} onChange={e => setPassword(e.target.value)} autoComplete={setup ? 'new-password' : 'current-password'} autoFocus />{setup && <small>至少 12 个字符，初始管理员登录名为 admin。</small>}</label>
     {setup && <label className="field">确认密码<input type="password" required minLength={12} maxLength={128} value={confirmation} onChange={e => setConfirmation(e.target.value)} autoComplete="new-password" /></label>}
     {error && <p className="error-text" role="alert">{error}</p>}<button className="button primary submit-button">{busy ? '请稍候…' : setup ? '创建管理员' : '进入工作台'}<ArrowRight size={16} /></button>
-  </fieldset></form></section><p className="auth-footnote">文件保存在你自己的服务器 · 集屿 v0.3</p></main>
+  </fieldset></form></section><p className="auth-footnote">文件保存在你自己的服务器 · 集屿 v0.4 开发版</p></main>
 }

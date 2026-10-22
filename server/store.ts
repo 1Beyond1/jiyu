@@ -21,7 +21,7 @@ export class Store {
     try { this.lock.exec('BEGIN EXCLUSIVE') } catch { this.lock.close(); throw new Error('数据目录正被使用，请先停止集屿服务') }
     this.db = new DatabaseSync(join(dataDir, 'jiyu.sqlite'))
     const schema = this.db.prepare('PRAGMA user_version').get() as { user_version: number }
-    if (schema.user_version > 4) { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close(); throw new Error('数据库版本高于当前应用，请使用匹配版本，禁止降级覆盖') }
+    if (schema.user_version > 5) { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close(); throw new Error('数据库版本高于当前应用，请使用匹配版本，禁止降级覆盖') }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS collections (id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
@@ -40,7 +40,10 @@ export class Store {
       CREATE TABLE IF NOT EXISTS ai_plans (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS remote_transfers (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE, provider TEXT NOT NULL, state TEXT NOT NULL, revision TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, updated_at TEXT NOT NULL, remote_path TEXT);
       CREATE TABLE IF NOT EXISTS storage_oauth (id TEXT PRIMARY KEY, provider TEXT NOT NULL, data TEXT NOT NULL, expires INTEGER NOT NULL);
-      PRAGMA user_version=4;`)
+      CREATE TABLE IF NOT EXISTS collection_templates (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS submission_records (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL REFERENCES collections(id), key_hash TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS submission_collection ON submission_records(collection_id);
+      PRAGMA user_version=5;`)
     const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]
     if (!sessionColumns.some(c => c.name === 'user_id')) this.db.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'primary'")
     if (this.get('password')) this.db.prepare("INSERT OR IGNORE INTO users VALUES ('primary','admin',?,?,'admin',0)").run(this.get('displayName') || '管理员', this.get('password')!)
