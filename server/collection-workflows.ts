@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Collection, CollectedFile, CollectionTemplate, Participant, UploadReceipt } from '../src/types.ts'
 import type { Store } from './store.ts'
 import { digest, equalToken, HttpError, object, text } from './security.ts'
+import { fileNameKey, submissionFileName } from '../src/lib/submission-naming.ts'
 
 const normalized = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase('en-US')
 const uuid = /^[a-f0-9-]{36}$/
@@ -71,7 +72,6 @@ export function validateSubmission(store: Store, c: Collection, owner: string, c
   } else if (c.submissionMode === 'single' && store.files().some(f => f.collectionId === c.id && !f.deletedAt && normalized(f.participant || f.owner) === normalized(value))) throw new HttpError(409, '此标识已提交，请使用本人回执替换，或联系发起人')
 }
 
-const segment = (value: string) => value.normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '-').replace(/[. ]+$/g, '').trim().slice(0, 45) || '未填写'
 // Called inside the same transaction that adds the files. No file-system rename.
 export function commitSubmission(store: Store, c: Collection, owner: string, context: SubmissionContext, receipt: UploadReceipt, keyHash: string, files: CollectedFile[]) {
   validateSubmission(store, c, owner, context)
@@ -81,17 +81,10 @@ export function commitSubmission(store: Store, c: Collection, owner: string, con
     for (const f of store.files()) if (f.submissionId === context.replace.receiptId && !f.deletedAt) store.saveFile({ ...f, deletedAt: receipt.createdAt })
     store.db.prepare('UPDATE submission_records SET data=? WHERE id=?').run(JSON.stringify({ ...old, superseded: true }), context.replace.receiptId)
   }
-  const occupied = new Set(store.files().filter(f => f.collectionId === c.id && !f.deletedAt).map(f => normalized(f.name)))
+  const occupied = new Set(store.files().filter(f => f.collectionId === c.id && !f.deletedAt).map(f => fileNameKey(f.name)))
   files.forEach((f, i) => {
     f.submissionId = receipt.receiptId; f.submissionFields = context.fields; f.fieldLabels = Object.fromEntries((c.fields || []).map(v => [v.id, v.label])); f.participant = person
-    if (!c.naming?.parts.length) return
-    const dot = f.name.lastIndexOf('.'), ext = dot > 0 ? f.name.slice(dot) : '', original = dot > 0 ? f.name.slice(0, dot) : f.name
-    const values: Record<string, string> = { ...context.fields, owner, collection: c.title, date: new Date(receipt.createdAt).toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' }).replaceAll('-', ''), sequence: String(c.received + i + 1).padStart(3, '0'), original }
-    let base = c.naming.parts.map(p => segment(values[p] || '')).join(c.naming.separator).slice(0, 150)
-    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(base)) base = `_${base}`
-    let name = base + ext, n = 2
-    while (occupied.has(normalized(name))) name = `${base}_${n++}${ext}`
-    f.name = name; occupied.add(normalized(name))
+    f.name = submissionFileName(c, f.name, owner, context.fields, c.received + i + 1, receipt.createdAt, occupied)
   })
   const data: SubmissionRecord = { owner, fields: context.fields, identity: person, receipt }
   store.db.prepare('INSERT INTO submission_records VALUES (?,?,?,?)').run(receipt.receiptId, c.id, keyHash, JSON.stringify(data))

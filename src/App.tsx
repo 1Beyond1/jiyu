@@ -56,6 +56,7 @@ function WorkspaceApp() {
   const [renaming, setRenaming] = useState<CollectedFile[] | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
   const [assistantFileIds, setAssistantFileIds] = useState<string[]>([])
+  const [assistantCollectionId, setAssistantCollectionId] = useState('')
   const [aiProposal, setAiProposal] = useState<AIReply | null>(null)
   const [notifications, setNotifications] = useState(false)
   const [help, setHelp] = useState(false)
@@ -117,7 +118,7 @@ function WorkspaceApp() {
   const fileProps = { files: workspace.files, collections: workspace.collections, onRename: setRenaming, onReview: review, onDetail: setDetail, onTrash: setTrashing, onAI: openAssistant }
   function startCollection(storage: StorageId = 'local') { if (!canEdit) return; setCreateStorage(storage); setCreateOpen(true) }
   function openRename() { if (!canEdit) return; const list = workspace.files.filter(f => f.status === 'pending'); if (workspace.files.length) setRenaming(list.length ? list : workspace.files); else notify('先添加一些文件，再来试试重命名') }
-  function openAssistant(files: CollectedFile[] = []) { if (!canEdit) return; setAssistantFileIds(files.slice(0, 30).map(f => f.id)); setAiOpen(true) }
+  function openAssistant(files: CollectedFile[] = []) { if (!canEdit) return; setAssistantCollectionId(viewedCollection?.id || (files.length && files.every(f => f.collectionId === files[0].collectionId) ? files[0].collectionId : '')); setAssistantFileIds(files.slice(0, 30).map(f => f.id)); setAiOpen(true) }
   async function changeCollectionStatus(id: string, status: CollectionStatus) {
     const current = workspace.collections.find(c => c.id === id)
     if (!current) return
@@ -165,7 +166,7 @@ function WorkspaceApp() {
       </main>
     </div>
     {canEdit && !aiOpen && <button className="ai-fab" onClick={() => openAssistant()}><Sparkles size={19} strokeWidth={1.6} /><span>集屿 AI</span><span className="ai-fab-dot" /></button>}
-    {aiOpen && <Assistant workspace={workspace} initialFileIds={assistantFileIds} onClose={() => setAiOpen(false)} onRename={files => files.length ? setRenaming(files) : openRename()} onConfigure={() => { setAiOpen(false); navigate('settings') }} onProposal={setAiProposal} />}
+    {aiOpen && <Assistant workspace={workspace} initialFileIds={assistantFileIds} initialCollectionId={assistantCollectionId} onClose={() => setAiOpen(false)} onRename={files => files.length ? setRenaming(files) : openRename()} onConfigure={() => { setAiOpen(false); navigate('settings') }} onProposal={setAiProposal} />}
     {aiProposal && <AIPlan proposal={aiProposal} busy={busy} error={operationError} onClose={() => { if (!busy) setAiProposal(null) }} onApply={async () => { if (await action('/api/files/rename', { changes: aiProposal.changes, tags: aiProposal.tags, aiRunId: aiProposal.runId })) { setAiProposal(null); notify('AI 整理方案已应用，可撤销上次整理') } }} />}
     {(createOpen || editing) && <CollectionForm initialStorage={createStorage} collection={editing || undefined} busy={busy} serverError={operationError} onClose={() => { if (!busy) { setCreateOpen(false); setEditing(null) } }} onSave={async updated => {
       const saved = await action(editing ? `/api/collections/${editing.id}` : '/api/collections', updated, editing ? 'PATCH' : 'POST')

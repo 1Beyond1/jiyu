@@ -76,6 +76,9 @@ export interface Workspace {
 }
 
 export interface UploadReceipt { receiptId: string; filesCount: number; bytes: number; createdAt: string; editKey?: string }
+export type UploadFileState = 'queued' | 'checking' | 'uploading' | 'retrying' | 'uploaded' | 'saving' | 'received' | 'paused' | 'failed'
+export interface UploadFileProgress { state: UploadFileState; sentBytes: number; totalBytes: number; message?: string }
+export interface UploadFeedback { phase: 'preparing' | 'uploading' | 'saving' | 'received' | 'paused' | 'failed'; files: UploadFileProgress[] }
 export interface BackupSettings { enabled: boolean; intervalHours: number; keep: number }
 export interface BackupInfo { id: string; createdAt: string; files: number; bytes: number }
 export interface BackupRun { id: string; status: 'running' | 'succeeded' | 'failed'; startedAt: string; finishedAt?: string; error?: string }
