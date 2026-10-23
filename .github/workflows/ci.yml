@@ -61,6 +61,14 @@ jobs:
           docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -e JIYU_DOMAIN=files.example.com caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Verify native PDF and OCR in runtime image
         run: docker exec -e JIYU_REQUIRE_NATIVE_TESTS=1 jiyu-test node --experimental-strip-types --test --test-timeout=30000 server/content-native.test.ts
+      - name: Verify v0.3 upgrade and rollback in runtime image
+        run: |
+          git fetch --no-tags origin tag v0.3.0
+          mkdir -p .artifacts/legacy-v0.3
+          git archive v0.3.0 server src package.json | tar -x -C .artifacts/legacy-v0.3
+          docker exec jiyu-test mkdir -p /app/.artifacts
+          docker cp .artifacts/legacy-v0.3 jiyu-test:/app/.artifacts/legacy-v0.3
+          docker exec -e JIYU_LEGACY_ROOT=/app/.artifacts/legacy-v0.3 jiyu-test node --experimental-strip-types --test --test-timeout=30000 server/upgrade.test.ts
       - name: Clean up
         if: always()
         run: docker rm -f jiyu-test || true

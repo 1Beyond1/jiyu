@@ -88,9 +88,10 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   })
   app.setErrorHandler((error, _req, reply) => {
     if (reply.sent) return
-    const e = error as Error & { statusCode?: number; code?: string }
+    const e = error as Error & { statusCode?: number; code?: string; errcode?: number }
     const limit = e.code?.includes('LIMIT') || e.code === 'FST_REQ_FILE_TOO_LARGE'
-    const status = limit ? 413 : e.statusCode && e.statusCode >= 400 && (e.statusCode < 500 || (error instanceof HttpError && e.statusCode <= 599)) ? e.statusCode : e.code === 'ENOSPC' ? 507 : 500
+    const full = e.code === 'ENOSPC' || e.code === 'EDQUOT' || e.code === 'ERR_SQLITE_ERROR' && e.errcode === 13
+    const status = limit ? 413 : e.statusCode && e.statusCode >= 400 && (e.statusCode < 500 || (error instanceof HttpError && e.statusCode <= 599)) ? e.statusCode : full ? 507 : 500
     const message = error instanceof HttpError ? error.message : limit ? '文件大小、数量或请求总量超过限制' : status === 500 ? '服务暂时无法完成操作，请稍后重试' : status === 507 ? '服务器磁盘空间不足' : '请求无效，请检查输入后重试'
     if (/^\/api\/archives\/[^/]+\/download$/.test(_req.url.split('?')[0])) {
       const escaped = message.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!)

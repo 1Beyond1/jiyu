@@ -62,7 +62,11 @@ export class Store {
   set(key: string, value: string) { this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value) }
   transaction<T>(operation: () => T): T {
     this.db.exec('BEGIN IMMEDIATE')
-    try { const result = operation(); this.db.exec('COMMIT'); return result } catch (error) { this.db.exec('ROLLBACK'); throw error }
+    try { const result = operation(); this.db.exec('COMMIT'); return result } catch (error) {
+      // SQLITE_FULL may already roll back the transaction. Keep the original failure.
+      try { this.db.exec('ROLLBACK') } catch { /* No active transaction after SQLite's automatic rollback. */ }
+      throw error
+    }
   }
   activity(text: string) {
     this.db.prepare('INSERT INTO activities(text,time) VALUES (?,?)').run(text, new Date().toISOString())
