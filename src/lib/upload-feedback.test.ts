@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { randomUUID, createHash } from 'node:crypto'
-import { uploadFiles } from './api.ts'
+import { uploadFiles, recoverUploadReceipt } from './api.ts'
 import type { UploadFeedback, UploadReceipt } from '../types.ts'
 
 function environment(t: TestContext) {
@@ -15,6 +15,7 @@ function environment(t: TestContext) {
   const feedback: UploadFeedback[] = []
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input), headers = new Headers(init?.headers)
+    if (!init?.method || init.method === 'GET') return Response.json(receipt ? { receipt } : { chunkBytes: 3, parts: [...parts.values()] })
     if (init?.method === 'DELETE') { deletes++; return Response.json({ ok: true }) }
     if (path.endsWith('/complete')) {
       completions++; receipt ||= { receiptId: randomUUID(), filesCount: files.length, bytes: 10, createdAt: new Date().toISOString() }
@@ -75,4 +76,14 @@ test('临时失败显示自动重试，恢复后继续并取得回执', async t 
   const e = environment(t); e.setFail('transient'); await e.run()
   assert.ok(e.feedback.some(f => f.files[1].state === 'retrying' && f.files[1].message?.includes('自动重试')))
   assert.equal(e.feedback.at(-1)!.phase, 'received'); assert.equal(e.puts.get('0/0'), 1)
+})
+
+test('不重选文件也能确认已保存回执，未完成批次不能假报成功', async t => {
+  const e = environment(t); e.setFail('1/0'); await assert.rejects(e.run())
+  assert.equal(await recoverUploadReceipt('fixture'), null)
+  e.setFail('receipt'); await assert.rejects(e.run())
+  const puts = [...e.puts.values()].reduce((a, b) => a + b, 0)
+  const r = await recoverUploadReceipt('fixture')
+  assert.equal(r!.filesCount, 2); assert.equal(e.completions(), 1); assert.equal([...e.puts.values()].reduce((a, b) => a + b, 0), puts)
+  assert.equal(e.values.has('jiyu:upload:fixture'), false)
 })

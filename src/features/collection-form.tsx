@@ -35,6 +35,7 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
     setRules({ ...r, expectedSubmitters: [] }); setError('')
   }
   function validate() {
+    if (step === 0 && !title.trim()) { setError('请填写收集名称。'); return false }
     const invalid = form.current?.querySelector<HTMLInputElement>('input:invalid, select:invalid, textarea:invalid')
     if (invalid) { const details = invalid.closest('details'); if (details) details.open = true; setError('请检查当前步骤中标记的输入内容。'); invalid.reportValidity(); invalid.focus(); return false }
     if (step === 1) {

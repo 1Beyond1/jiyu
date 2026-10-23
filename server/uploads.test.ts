@@ -47,6 +47,16 @@ test('分片续传跨重启、逐片校验、原子提交、私有凭证与配�
     assert.deepEqual(await readdir(join(config.dataDir, 'chunks')), [])
     assert.equal(service.store.files().find(f => f.size)?.sha256, createHash('sha256').update(Buffer.alloc(CHUNK_BYTES, 65)).update('集屿').digest('hex'))
     assert.equal(service.store.collection(c.id)!.received, 2)
+    const original = service.store.collection(c.id)!
+    for (const stopped of [{ ...original, status: 'paused' as const }, { ...original, deadline: '2020-01-01' }]) {
+      service.store.saveCollection(stopped)
+      assert.equal((await service.app.inject({ method: 'GET', url, headers: resumeHeaders })).json().receipt.receiptId, complete.json().receiptId)
+      assert.equal((await service.app.inject({ method: 'POST', url, headers: resumeHeaders, payload: draft })).json().receipt.receiptId, complete.json().receiptId)
+      assert.equal((await service.app.inject({ method: 'POST', url: `${url}/complete`, headers: resumeHeaders, payload: {} })).json().receiptId, complete.json().receiptId)
+      assert.equal((await service.app.inject({ method: 'GET', url, headers: { 'x-upload-key': 'z'.repeat(64) } })).statusCode, 403)
+      assert.equal((await service.app.inject({ method: 'POST', url: `/api/public/${c.uploadToken}/uploads/${randomUUID()}`, headers: resumeHeaders, payload: draft })).statusCode, 410)
+    }
+    service.store.saveCollection(original)
     const freshUrl = `/api/public/${c.uploadToken}/uploads/${randomUUID()}`
     const freshDraft = { owner: '过期', files: [{ name: 'a.txt', size: 10, lastModified: 2 }] }
     await service.app.inject({ method: 'POST', url: freshUrl, headers: resumeHeaders, payload: freshDraft })

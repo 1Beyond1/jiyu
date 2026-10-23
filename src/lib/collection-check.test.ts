@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { checkCollection } from './collection-check.ts'
+import { checkCollection, filesForAction } from './collection-check.ts'
 import type { Collection, CollectedFile } from '../types.ts'
 
 test('任务检查按规范化标识核对名单，重复统计排除回收站与其他任务', () => {
@@ -9,4 +9,7 @@ test('任务检查按规范化标识核对名单，重复统计排除回收站�
   const r = checkCollection(c, [f, { ...f, id: 'f2', name: '作业.TXT' }, { ...f, id: 'trash', participant: 'A02', deletedAt: '2026-10-22' }, { ...f, id: 'other', collectionId: 'other', participant: 'A02' }])
   assert.equal(r.files, 2); assert.equal(r.submitted, 1); assert.deepEqual(r.missing, ['A02']); assert.equal(r.contentGroups.length, 1); assert.equal(r.nameGroups.length, 1)
   const noRoster = checkCollection({ ...c, expectedSubmitters: [] }, [f]); assert.equal(noRoster.hasRoster, false); assert.deepEqual(noRoster.missing, [])
+  // A historical action stays bound to its original IDs after the user switches scope.
+  assert.deepEqual(filesForAction(['f'], [f, { ...f, id: 'other', collectionId: 'other' }]).map(v => v.id), ['f'])
+  assert.deepEqual(filesForAction(['f'], [{ ...f, deletedAt: '2026-10-23' }]), [])
 })

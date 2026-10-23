@@ -39,10 +39,10 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
   const timer = setInterval(() => { void cleanup().catch(() => {}) }, 60 * 60 * 1000); timer.unref()
   app.addHook('onClose', async () => clearInterval(timer))
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: CHUNK_BYTES }, (_req, body, done) => done(null, body))
-  const collection = (req: FastifyRequest) => {
+  const collection = (req: FastifyRequest, allowClosed = false) => {
     const value = String(object(req.params).token), c = store.byToken(value)
     if (!c) throw new HttpError(404, '收集链接无效或已撤销')
-    if (c.status !== 'active' || isExpired(c)) throw new HttpError(410, '这项收集已暂停、结束或截止')
+    if (!allowClosed && (c.status !== 'active' || isExpired(c))) throw new HttpError(410, '这项收集已暂停、结束或截止')
     return c
   }
   const key = (req: FastifyRequest) => { const value = text(req.headers['x-upload-key'], '续传凭证', 100); if (!/^[a-zA-Z0-9_-]{32,100}$/.test(value)) throw new HttpError(400, '续传凭证无效'); return digest(value) }
@@ -65,8 +65,9 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
     if (store.files().length + store.pendingFiles() + budget.files + count > 10000) throw new HttpError(413, '已达到 10000 个文件的上限')
   }
   app.post('/api/public/:token/uploads/:id', { config: { rateLimit: { max: 60, timeWindow: '1 hour' } } }, async req => {
-    const c = collection(req), saved = receipt(req, c)
+    const c = collection(req, true), saved = receipt(req, c)
     if (saved) return { receipt: saved }
+    collection(req)
     const body = object(req.body), owner = text(body.owner, '你的姓名', 30)
     if (!Array.isArray(body.files) || !body.files.length || body.files.length > c.maxFilesPerSubmission) throw new HttpError(400, '提交数量超过任务限制')
     const files: DraftFile[] = body.files.map(value => { const f = object(value); if (!Number.isSafeInteger(f.size) || Number(f.size) < 0 || !Number.isSafeInteger(f.lastModified) || Number(f.lastModified) < 0) throw new HttpError(400, '文件大小或修改时间无效'); return { name: safeName(text(f.name, '文件名称', 240)), size: Number(f.size), lastModified: Number(f.lastModified) } })
@@ -82,7 +83,7 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
     store.db.prepare('INSERT INTO uploads VALUES (?,?,?,?,?,?,?,?)').run(id(req), c.id, digest(c.uploadToken!), key(req), data, bytes, files.length, Date.now() + 24 * 60 * 60 * 1000)
     return status(store.db.prepare('SELECT * FROM uploads WHERE id=?').get(id(req)) as unknown as Row)
   })
-  app.get('/api/public/:token/uploads/:id', async req => { const c = collection(req), saved = receipt(req, c); return saved ? { receipt: saved } : status(authorize(req).row) })
+  app.get('/api/public/:token/uploads/:id', async req => { const c = collection(req, true), saved = receipt(req, c); return saved ? { receipt: saved } : status(authorize(req).row) })
   app.delete('/api/public/:token/uploads/:id', async req => {
     const { row } = authorize(req)
     if (active.has(row.id)) throw new HttpError(409, '仍有分片写入，请稍后取消')
@@ -114,7 +115,7 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
     } finally { active.delete(row.id); budget.active--; await rm(`${target}.tmp`, { force: true }).catch(() => {}) }
   })
   app.post('/api/public/:token/uploads/:id/complete', async (req, reply) => {
-    const c = collection(req), saved = receipt(req, c)
+    const c = collection(req, true), saved = receipt(req, c)
     if (saved) return saved
     const { row, batch } = authorize(req)
     if (active.has(row.id) || budget.active >= 4) throw new HttpError(429, '文件正在写入，请稍后重试')

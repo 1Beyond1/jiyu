@@ -1,6 +1,8 @@
 import type { Collection, CollectedFile } from '../types.ts'
 import { fileNameKey } from './submission-naming.ts'
 
+export function filesForAction(ids: string[], files: CollectedFile[]) { return files.filter(f => ids.includes(f.id) && !f.deletedAt) }
+
 export function checkCollection(c: Collection, files: CollectedFile[]) {
   const list = files.filter(f => f.collectionId === c.id && !f.deletedAt)
   const submitted = new Set(list.map(f => fileNameKey(f.participant || f.owner)))

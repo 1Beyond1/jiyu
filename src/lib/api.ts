@@ -43,6 +43,21 @@ function comparableSignature(signature: string) {
   return JSON.stringify({ owner: b.owner, files: b.files, fields: Object.fromEntries(Object.entries(b.fields || {}).sort(([a], [z]) => a.localeCompare(z))), ...(b.replace ? { replace: { receiptId: b.replace.receiptId, key: b.replace.key } } : {}) })
 }
 export function forgetUpload(uploadToken: string) { try { localStorage.removeItem(resumeStorage(uploadToken)) } catch { /* Private browsing may disable persistence. */ } }
+function saveUploadReceipt(uploadToken: string, record: ResumeRecord, receipt: UploadReceipt, files: { size: number }[]) {
+  if (!receipt || !/^[a-f0-9-]{36}$/.test(receipt.receiptId) || receipt.filesCount !== files.length || receipt.bytes !== files.reduce((sum, f) => sum + f.size, 0) || !Number.isFinite(Date.parse(receipt.createdAt))) throw new Error('尚未取得有效提交回执，请重试确认结果；已传分片会保留。')
+  const saved = { ...receipt, editKey: record.key }
+  try { localStorage.setItem(`jiyu:receipt:${uploadToken}`, JSON.stringify(saved)) } catch { /* Manual receipt download remains available. */ }
+  forgetUpload(uploadToken); return saved
+}
+export async function recoverUploadReceipt(uploadToken: string): Promise<UploadReceipt | null> {
+  const record = JSON.parse(localStorage.getItem(resumeStorage(uploadToken)) || 'null') as ResumeRecord | null
+  if (!record) return null
+  const response = await fetch(`/api/public/${encodeURIComponent(uploadToken)}/uploads/${record.id}`, { credentials: 'same-origin', headers: { 'X-Upload-Key': record.key } })
+  const data = await response.json()
+  if (!response.ok) throw new Error(data.error || '暂时无法确认提交结果，请稍后重试')
+  if (!data.receipt) return null
+  return saveUploadReceipt(uploadToken, record, data.receipt, JSON.parse(record.signature).files)
+}
 export async function discardUpload(uploadToken: string) {
   let record: ResumeRecord | null = null
   try { record = JSON.parse(localStorage.getItem(resumeStorage(uploadToken)) || 'null') as ResumeRecord | null } catch { /* No resumable metadata. */ }
@@ -92,9 +107,7 @@ export async function uploadFiles(uploadToken: string, files: File[], owner: str
   }
   try {
     const completed = (receipt: UploadReceipt) => {
-      if (!receipt || !/^[a-f0-9-]{36}$/.test(receipt.receiptId) || receipt.filesCount !== files.length || receipt.bytes !== files.reduce((sum, f) => sum + f.size, 0) || !Number.isFinite(Date.parse(receipt.createdAt))) throw new Error('尚未取得有效提交回执，请重试确认结果；已传分片会保留。')
-      const saved = { ...receipt, editKey: record!.key }
-      try { localStorage.setItem(`jiyu:receipt:${uploadToken}`, JSON.stringify(saved)) } catch { /* The user can save the receipt manually. */ }
+      const saved = saveUploadReceipt(uploadToken, record!, receipt, files)
       phase = 'received'; feedback.forEach(f => { f.state = 'received'; f.sentBytes = f.totalBytes; delete f.message }); emit()
       forgetUpload(uploadToken); onProgress(100); return saved
     }
