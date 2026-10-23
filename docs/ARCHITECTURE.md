@@ -117,4 +117,4 @@ SQLite 适合服务端管理的中小规模网站，但同一时刻只支持一�
 
 悬浮面板是操作入口，不自动获得整个磁盘和网盘权限。模型给出结构化操作计划，服务端按白名单工具重新鉴权、校验路径和作用范围，前端预览后确认。文件文本与模型输出均视为不可信内容；不能把文件里的指令当系统命令。删除、外发、跨存储搬移应有明确的单独确认。
 
-默认以文件元数据辅助命名。涉及正文识别时需另行设计开关和授权范围，当前未实现。接口协议依据 [Responses 迁移说明](https://developers.openai.com/api/docs/guides/migrate-to-responses) 与 [JSON 输出说明](https://developers.openai.com/api/docs/guides/structured-outputs)；JSON 模式不替代服务端结构校验。
+默认以文件元数据辅助命名。正文识别在本机完成；向模型发送已识别摘录须单独授权，遵守上述范围及字数限制。接口协议依据 [Responses 迁移说明](https://developers.openai.com/api/docs/guides/migrate-to-responses) 与 [JSON 输出说明](https://developers.openai.com/api/docs/guides/structured-outputs)；JSON 模式不替代服务端结构校验。

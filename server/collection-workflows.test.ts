@@ -88,6 +88,18 @@ test('收集字段、名单隐私、自动命名、私密回执替换、并发�
     await service.app.close(); await createBackup(config.dataDir, join(dir, 'backup')); await restoreBackup(join(dir, 'backup'), join(dir, 'restored'))
     const restored = new Store(join(dir, 'restored'))
     try { assert.equal(restored.db.prepare('SELECT COUNT(*) AS n FROM collection_templates').get()!.n, 1); assert.equal(restored.db.prepare('SELECT COUNT(*) AS n FROM submission_records').get()!.n, 2); assert.equal(restored.pendingBytes(), 0); assert.equal(restored.files().length, 4) } finally { restored.close() }
+    const restoredService = await createApp({ ...config, dataDir: join(dir, 'restored') }, { serveFrontend: false })
+    try {
+      // Restore keeps receipt capabilities but revokes administrator sessions and unfinished batches.
+      assert.equal((await restoredService.app.inject({ method: 'GET', url: '/api/templates', headers })).statusCode, 401)
+      const recovered = await restoredService.app.inject({ method: 'GET', url: `/api/public/${c.uploadToken}/receipts/${currentReceipt.receiptId}`, headers: { 'x-receipt-key': secret } })
+      assert.equal(recovered.statusCode, 200, recovered.body)
+      assert.equal(recovered.json().files.length, 2)
+      assert.equal(recovered.json().superseded, false)
+      assert.equal((await restoredService.app.inject({ method: 'GET', url: `/api/public/${c.uploadToken}/receipts/${currentReceipt.receiptId}`, headers: { 'x-receipt-key': 'z'.repeat(64) } })).statusCode, 403)
+      assert.equal((await restoredService.app.inject({ method: 'GET', url: blocked.url, headers: blocked.h })).statusCode, 410)
+      assert.equal((await restoredService.app.inject({ method: 'GET', url: first.url, headers: first.h })).json().receipt.receiptId, receipt.receiptId)
+    } finally { await restoredService.app.close() }
     service = await createApp(config, { serveFrontend: false })
     const login = await service.app.inject({ method: 'POST', url: '/api/auth/login', headers: origin, payload: { username: 'admin', password: 'test-workflow-password' } })
     headers = { ...origin, cookie: login.headers['set-cookie']!.toString().split(';')[0], 'x-csrf-token': login.json().csrf }

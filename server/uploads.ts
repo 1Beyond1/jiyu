@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { isDeepStrictEqual } from 'node:util'
 import type { Store } from './store.ts'
 import type { Config } from './config.ts'
 import type { Collection, CollectedFile, UploadReceipt } from '../src/types.ts'
@@ -76,7 +77,12 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
     if (bytes > config.requestBytes) throw new HttpError(413, '单次提交总量超过上限')
     const context = submissionContext(store, c, owner, body)
     const data = JSON.stringify({ owner, files, ...context }), existing = store.db.prepare('SELECT * FROM uploads WHERE id=?').get(id(req)) as unknown as Row | undefined
-    if (existing) { const { row } = authorize(req); const old = JSON.parse(row.data); if (JSON.stringify({ fields: {}, ...old }) !== JSON.stringify({ fields: {}, ...JSON.parse(data) })) throw new HttpError(409, '文件或提交人已改变，请创建新批次'); return status(row) }
+    if (existing) {
+      const { row } = authorize(req)
+      // Object key order is not submission content; file array order still identifies each chunk.
+      if (!isDeepStrictEqual({ fields: {}, ...JSON.parse(row.data) }, { fields: {}, ...JSON.parse(data) })) throw new HttpError(409, '文件或提交人已改变，请创建新批次')
+      return status(row)
+    }
     const count = (store.db.prepare('SELECT COUNT(*) AS n FROM uploads WHERE expires>?').get(Date.now()) as { n: number }).n
     if (count >= 20) throw new HttpError(429, '待续传批次较多，请完成已有提交或稍后重试')
     limits(c, bytes, files.length)
