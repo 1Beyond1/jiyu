@@ -4,6 +4,7 @@ import type { Collection, CollectedFile, CollectionTemplate, Participant, Upload
 import type { Store } from './store.ts'
 import { digest, equalToken, HttpError, object, text } from './security.ts'
 import { fileNameKey, submissionFileName } from '../src/lib/submission-naming.ts'
+import { collectionParticipants } from '../src/lib/participants.ts'
 
 const normalized = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase('en-US')
 const uuid = /^[a-f0-9-]{36}$/
@@ -91,17 +92,7 @@ export function commitSubmission(store: Store, c: Collection, owner: string, con
 }
 
 export function participants(store: Store, c: Collection): Participant[] {
-  const groups = new Map<string, Participant>()
-  for (const name of c.expectedSubmitters || []) groups.set(normalized(name), { identity: name, owner: '', expected: true, fileIds: [], bytes: 0, submissions: 0, latestAt: '', duplicates: 0 })
-  const hashes = new Map<string, Set<string>>(), submissions = new Map<string, Set<string>>()
-  for (const f of store.files().filter(f => f.collectionId === c.id && !f.deletedAt)) {
-    const name = f.participant || f.owner, key = normalized(name)
-    const p = groups.get(key) || { identity: name, owner: f.owner, expected: false, fileIds: [], bytes: 0, submissions: 0, latestAt: '', duplicates: 0 }
-    p.owner = f.owner; p.fileIds.push(f.id); p.bytes += f.size; p.latestAt = p.latestAt > f.createdAt ? p.latestAt : f.createdAt
-    const seen = hashes.get(key) || new Set<string>(); if (f.sha256 && seen.has(f.sha256)) p.duplicates++; if (f.sha256) seen.add(f.sha256); hashes.set(key, seen)
-    const batches = submissions.get(key) || new Set<string>(); batches.add(f.submissionId || f.createdAt); submissions.set(key, batches); p.submissions = batches.size; groups.set(key, p)
-  }
-  return [...groups.values()]
+  return collectionParticipants(c, store.files())
 }
 
 export function registerCollectionWorkflows(app: FastifyInstance, store: Store) {

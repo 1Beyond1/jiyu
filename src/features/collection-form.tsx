@@ -8,7 +8,7 @@ import { defaultCollectionLimits, fileExtensions, localDate, nextWeek } from '..
 import { CollectionRules } from './collection-rules'
 import { TemplatePicker } from './collection-templates'
 
-export function CollectionForm({ collection, initialStorage = 'local', onClose, onSave, busy = false, serverError }: { collection?: Collection; initialStorage?: Collection['storage']; onClose: () => void; onSave: (c: Collection) => void; busy?: boolean; serverError?: string }) {
+export function CollectionForm({ collection, initialStorage = 'local', onClose, onSave, busy = false, serverError, requestLimitMB }: { collection?: Collection; initialStorage?: Collection['storage']; onClose: () => void; onSave: (c: Collection) => void; busy?: boolean; serverError?: string; requestLimitMB?: number }) {
   const [title, setTitle] = useState(collection?.title || '')
   const [description, setDescription] = useState(collection?.description || '')
   const [target, setTarget] = useState(collection?.target || 20)
@@ -67,13 +67,14 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
         {storageError && <p role="alert" className="error-text">{storageError}</p>}
       </>}
       {step === 1 && <>
+        {requestLimitMB !== undefined && <p className="field-hint">服务器每次最多接收 {requestLimitMB} MB；当前单文件实际可传 {Math.min(maxFileSizeMB, requestLimitMB)} MB，多份文件合计也须在单次上限内。</p>}
         <label className="field">允许的文件格式<input required maxLength={260} value={formats} onChange={e => setFormats(e.target.value)} /><small>多个后缀用逗号分隔，例如 PDF, JPG, ZIP。</small></label>
         <details className="collection-limits"><summary>大小与数量：每个 ≤ {maxFileSizeMB} MB，每次 ≤ {maxFilesPerSubmission} 个</summary><div className="form-row"><label className="field">单文件上限（MB）<input type="number" required min={1} max={1024} value={maxFileSizeMB} onChange={e => setMaxFileSizeMB(Number(e.target.value))} /></label><label className="field">每次最多提交（个）<input type="number" required min={1} max={100} value={maxFilesPerSubmission} onChange={e => setMaxFilesPerSubmission(Number(e.target.value))} /></label></div><label className="field">任务总容量（MB）<input type="number" required min={1} max={1048576} value={maxTotalSizeMB} onChange={e => setMaxTotalSizeMB(Number(e.target.value))} /><small>回收站文件也计入容量。</small></label></details>
         <CollectionRules section="submission" value={rules} onChange={setRules} locked={!!collection?.received} />
       </>}
       {step === 2 && <>
         <CollectionRules section="naming" value={rules} onChange={setRules} locked={!!collection?.received} title={title} received={collection?.received || 0} />
-        <dl className="collection-confirm"><div><dt>收集</dt><dd>{title} · {deadline} 截止</dd></div><div><dt>提交</dt><dd>{formats} · 单文件 ≤ {maxFileSizeMB} MB · 每次 {maxFilesPerSubmission} 个</dd></div><div><dt>提交人</dt><dd>按{rules.fields?.find(f => f.id === rules.identityField)?.label || '姓名'}识别 · {(rules.expectedSubmitters || []).filter(v => v.trim()).length} 人应交名单</dd></div><div><dt>存储</dt><dd>{storageNames[storage]}{storage !== 'local' && ' + 本机副本'}</dd></div></dl>
+        <dl className="collection-confirm"><div><dt>收集</dt><dd>{title} · {deadline} 截止</dd></div><div><dt>提交</dt><dd>{formats} · 单文件 ≤ {Math.min(maxFileSizeMB, requestLimitMB ?? maxFileSizeMB)} MB · 每次 {maxFilesPerSubmission} 个</dd></div><div><dt>提交人</dt><dd>按{rules.fields?.find(f => f.id === rules.identityField)?.label || '姓名'}识别 · {(rules.expectedSubmitters || []).filter(v => v.trim()).length} 人应交名单</dd></div><div><dt>存储</dt><dd>{storageNames[storage]}{storage !== 'local' && ' + 本机副本'}</dd></div></dl>
         <p className="field-hint">规则影响后续提交；已有文件保持原名。创建后可预览提交页再分享。</p>
       </>}
       </fieldset>

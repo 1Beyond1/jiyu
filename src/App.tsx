@@ -12,6 +12,7 @@ import { ContentPanel } from './features/content'
 import { Assistant } from './features/assistant'
 import { AIPlan } from './features/ai-plan'
 import { PublicSubmission } from './features/submission'
+import { StartChecklist } from './features/start-checklist'
 import { AdminGate, useAccount } from './features/auth'
 import { formatSize, useWorkspace } from './lib/workspace'
 import { api } from './lib/api'
@@ -38,8 +39,8 @@ export default function App() {
 }
 
 function WorkspaceApp() {
-  const { canEdit, user } = useAccount()
-  const { workspace, loading, error, refresh, mutate } = useWorkspace()
+  const { canEdit, user, isAdmin } = useAccount()
+  const { workspace, loading, error, refresh, refreshing, updatedAt, mutate } = useWorkspace()
   const [busy, setBusy] = useState(false)
   const [operationError, setOperationError] = useState('')
   const busyRef = useRef(false)
@@ -140,12 +141,14 @@ function WorkspaceApp() {
     </aside>
     <div className="main-shell"><header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="展开导航"><Menu size={20} /></button><span>我的工作空间</span><ChevronRight size={13} /><strong>{pageNames[page]}</strong></div><div className="topbar-right"><span className="preview-badge"><i />自托管工作台</span><form className="global-search" onSubmit={e => { e.preventDefault(); setCollectionId(''); navigate('files') }}><Search size={15} /><input aria-label="全局搜索" placeholder="搜索文件、提交人…" value={search} onChange={e => { setSearch(e.target.value); setCollectionId(''); if (e.target.value) navigate('files') }} /><span>⌕</span></form><div className="notification-container" ref={notificationRef}><button className={`icon-button notification-button ${notifications ? 'on' : ''}`} aria-label="查看最近动态" aria-expanded={notifications} onClick={() => setNotifications(!notifications)}><Bell size={19} strokeWidth={1.6} /><i /></button>{notifications && <div className="notification-popover"><h3>最近动态<span>{workspace.activities.length}</span></h3>{workspace.activities.map(a => <div key={a.id}><span className="activity-dot" /><p>{a.text}<small>{a.time}</small></p></div>)}</div>}</div><span className="topbar-avatar">{(user?.displayName || workspace.displayName).slice(0, 1)}</span></div></header>
       <main className="main-content" id="main-content">
+        <div className="workspace-refresh"><span>{updatedAt ? `更新于 ${new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })} · 每 15 秒刷新` : '尚未更新'}</span><button className="text-button" disabled={refreshing || busy} onClick={() => void refresh()}>{refreshing ? '刷新中…' : '刷新工作台'}</button></div>
         {!canEdit && <div className="action-notice">{user?.displayName} · 只读访问，可查看、预览和下载文件。</div>}
         {error && <div className="error-banner" role="alert">{error}<button className="text-button" onClick={() => void refresh()}>重新连接</button></div>}
         {busy && <div className="operation-progress" role="status">正在保存，请稍候…</div>}
         {workspace.lastRenameId && <div className="action-notice"><span>最近的批量整理可撤销</span><button className="text-button" onClick={async () => { if (await action(`/api/files/rename/${workspace.lastRenameId}/undo`, {})) notify('已撤销批量命名') }}>撤销上次整理</button></div>}
         {page === 'overview' && <>
           <div className="page-title home-title"><div><p className="greeting"><span className="greeting-line" />{workspace.displayName}，欢迎回到集屿</p><h1>每一份文件，都有归处<span className="title-dot">。</span></h1><p>收集、整理、妥善存放。把时间留给更重要的事。</p></div><button className="button primary" onClick={() => startCollection()}><Plus size={17} />新建收集</button></div>
+          {isAdmin && <StartChecklist workspace={workspace} onCreate={() => startCollection()} onSettings={() => navigate('settings')} onFiles={() => navigate('files')} />}
           <div className="overview-stats"><div><span><FolderClosed size={16} />进行中的收集</span><p>{active.length}<small>项</small><em><span />正在有序进行</em></p></div><div><span><ArrowDownToLine size={16} />累计收到文件</span><p>{total}<small>份</small><em className="stat-note">来自 {workspace.collections.length} 项收集</em></p></div><div><span><Clock3 size={16} />待整理文件</span><p>{pending}<small>份</small><button onClick={() => navigate('tools')}>去整理<ArrowUpRight size={13} /></button></p></div><div><span><HardDrive size={16} />已用存储空间</span><p className="real-storage-value">{formatSize(usedBytes)}<em className="stat-note">配额 {formatSize(quotaBytes)}</em></p></div></div>
           <section className="collections-section"><div className="section-heading"><h2>进行中的收集<span className="count-badge">{active.length}</span></h2><button className="text-button" onClick={() => navigate('collections')}>全部收集<ArrowRight size={15} /></button></div>{active.length ? <div className="collection-grid">{active.slice(0, 3).map(c => <CollectionCard key={c.id} collection={c} onOpen={openCollection} onShare={setShare} />)}</div> : <Empty title="从第一项收集开始" text="点击新建收集，告别零散的文件消息。" />}</section>
           <section className="recent-section"><div className="section-heading"><div className="heading-with-note"><h2>最近收到</h2><span>每一份新提交，都在这里</span></div><button className="text-button" onClick={() => { setCollectionId(''); navigate('files') }}>查看全部文件<ArrowRight size={15} /></button></div><FileTable {...fileProps} compact /></section>
@@ -168,7 +171,7 @@ function WorkspaceApp() {
     {canEdit && !aiOpen && <button className="ai-fab" onClick={() => openAssistant()}><Sparkles size={19} strokeWidth={1.6} /><span>集屿 AI</span><span className="ai-fab-dot" /></button>}
     {aiOpen && <Assistant workspace={workspace} initialFileIds={assistantFileIds} initialCollectionId={assistantCollectionId} onClose={() => setAiOpen(false)} onRename={files => files.length ? setRenaming(files) : openRename()} onConfigure={() => { setAiOpen(false); navigate('settings') }} onProposal={setAiProposal} />}
     {aiProposal && <AIPlan proposal={aiProposal} busy={busy} error={operationError} onClose={() => { if (!busy) setAiProposal(null) }} onApply={async () => { if (await action('/api/files/rename', { changes: aiProposal.changes, tags: aiProposal.tags, aiRunId: aiProposal.runId })) { setAiProposal(null); notify('AI 整理方案已应用，可撤销上次整理') } }} />}
-    {(createOpen || editing) && <CollectionForm initialStorage={createStorage} collection={editing || undefined} busy={busy} serverError={operationError} onClose={() => { if (!busy) { setCreateOpen(false); setEditing(null) } }} onSave={async updated => {
+    {(createOpen || editing) && <CollectionForm requestLimitMB={workspace.requestLimitMB} initialStorage={createStorage} collection={editing || undefined} busy={busy} serverError={operationError} onClose={() => { if (!busy) { setCreateOpen(false); setEditing(null) } }} onSave={async updated => {
       const saved = await action(editing ? `/api/collections/${editing.id}` : '/api/collections', updated, editing ? 'PATCH' : 'POST')
       if (!saved) return
       if (editing) { setEditing(null); notify('收集规则已更新，原链接保持有效') }

@@ -2,6 +2,10 @@ import type { Collection } from '../types'
 
 export const defaultCollectionLimits = { maxFileSizeMB: 100, maxFilesPerSubmission: 20 }
 
+export function effectiveFileLimit(collection: Pick<Collection, 'maxFileSizeMB' | 'requestLimitMB'>) {
+  return Math.min(collection.maxFileSizeMB, collection.requestLimitMB ?? collection.maxFileSizeMB)
+}
+
 export function localDate(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Taipei' }).format(date)
 }
@@ -32,7 +36,7 @@ export function submissionError(collection: Collection, files: { name: string; s
   const extensions = fileExtensions(collection.formats)
   for (const file of files) {
     if (!extensions.includes(file.name.split('.').pop()?.toLowerCase() || '')) return `「${file.name}」的格式不符合要求，请选择 ${collection.formats} 文件。`
-    if (file.size > collection.maxFileSizeMB * 1024 * 1024) return `「${file.name}」超过单文件 ${collection.maxFileSizeMB} MB 上限。`
+    if (file.size > effectiveFileLimit(collection) * 1024 * 1024) return `「${file.name}」超过单文件 ${effectiveFileLimit(collection)} MB 上限。`
   }
   return ''
 }

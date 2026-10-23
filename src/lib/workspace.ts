@@ -6,32 +6,36 @@ const empty: Workspace = { version: 1, displayName: '', collections: [], files: 
 export function useWorkspace() {
   const [workspace, setWorkspace] = useState<Workspace>(empty)
   const [loading, setLoading] = useState(true), [error, setError] = useState('')
+  const [refreshing, setRefreshing] = useState(false), [updatedAt, setUpdatedAt] = useState('')
   const sequence = useRef(0)
   const inFlight = useRef(0)
+  const reading = useRef(false)
   const refresh = useCallback(async () => {
-    if (inFlight.current) return
+    if (inFlight.current || reading.current) return
+    reading.current = true; setRefreshing(true)
     const current = ++sequence.current
-    try { const data = await api<Workspace>('/api/workspace'); if (current === sequence.current) { setWorkspace(data); setError('') } }
+    try { const data = await api<Workspace>('/api/workspace'); if (current === sequence.current) { setWorkspace(data); setUpdatedAt(new Date().toISOString()); setError('') } }
     catch (e) { if (current === sequence.current) setError((e as Error).message) }
-    finally { setLoading(false) }
+    finally { reading.current = false; setRefreshing(false); setLoading(false) }
   }, [])
   useEffect(() => {
     void refresh()
     const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh() }, 15000)
-    const focus = () => void refresh()
+    const focus = () => { if (document.visibilityState === 'visible') void refresh() }
     window.addEventListener('focus', focus)
-    return () => { clearInterval(timer); window.removeEventListener('focus', focus) }
+    document.addEventListener('visibilitychange', focus)
+    return () => { clearInterval(timer); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus) }
   }, [refresh])
   const mutate = async (path: string, body: unknown, method = 'POST') => {
     inFlight.current++
     const current = ++sequence.current
     try {
       const result = await api<Workspace | { workspace: Workspace; operationId: string }>(path, method, body)
-      if (current === sequence.current) setWorkspace('workspace' in result ? result.workspace : result)
+      if (current === sequence.current) { setWorkspace('workspace' in result ? result.workspace : result); setUpdatedAt(new Date().toISOString()); setError('') }
       return result
     } finally { inFlight.current-- }
   }
-  return { workspace, loading, error, refresh, mutate }
+  return { workspace, loading, error, refresh, refreshing, updatedAt, mutate }
 }
 export function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`

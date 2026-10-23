@@ -66,6 +66,7 @@ export interface Activity {
 
 export interface Workspace {
   version: 1
+  requestLimitMB?: number
   collections: Collection[]
   files: CollectedFile[]
   activities: Activity[]

@@ -15,6 +15,8 @@ test('部署检查读取真实环境、提示 HTTP 与未配置备份，临时�
     assert.equal((await app.inject({ method: 'POST', url: '/api/settings/diagnostics', headers: origin, payload: {} })).statusCode, 401)
     const setup = await app.inject({ method: 'POST', url: '/api/auth/setup', headers: origin, payload: { setupToken: store.setupToken(), password: 'test-diagnostics-password', displayName: '环境测试' } })
     const headers = { ...origin, cookie: setup.headers['set-cookie']!.toString().split(';')[0], 'x-csrf-token': setup.json().csrf }
+    const workspace = await app.inject({ method: 'GET', url: '/api/workspace', headers })
+    assert.equal(workspace.json().requestLimitMB, 1)
     const checked = await app.inject({ method: 'POST', url: '/api/settings/diagnostics', headers, payload: {} })
     assert.equal(checked.statusCode, 200, checked.body)
     const rows = checked.json().items as DiagnosticItem[]

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, CheckCircle2, FileUp, LockKeyhole } from 'lucide-react'
 import { Brand } from '../components/ui'
 import { api, uploadFiles, discardUpload, recoverUploadReceipt, hasPendingUpload, pendingSubmission } from '../lib/api'
-import { fileExtensions, isExpired, submissionError } from '../lib/collections'
+import { fileExtensions, isExpired, submissionError, effectiveFileLimit } from '../lib/collections'
 import { formatSize } from '../lib/workspace'
 import { ReceiptManager } from './submission-receipt'
 import { UploadList } from './upload-list'
@@ -60,9 +60,10 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     <label className="field">你的姓名<input value={name} onChange={e => { setName(e.target.value); requestId.current = crypto.randomUUID() }} required maxLength={30} placeholder="方便发起人知道文件来自你" autoComplete="name" /></label>
     {(c.fields || []).map(f => <label className="field" key={f.id}>{f.label}{!f.required && '（选填）'}<input value={fields[f.id] || ''} required={f.required} maxLength={80} onChange={e => setFields(old => ({ ...old, [f.id]: e.target.value }))} /></label>)}
     {replacement && <div className="replacement-note"><strong>正在替换原批次</strong><p>请重新选择这批完整文件。提交成功后原批次进入回收站，其他补交批次保持保留。</p><button type="button" className="text-button" onClick={() => setReplacement(undefined)}>取消替换，改为普通提交</button></div>}
+    {c.maxFileSizeMB > effectiveFileLimit(c) && <p className="field-hint">当前服务器单次接收上限为 {c.requestLimitMB ?? 512} MB，单文件可上传上限已按此调整。</p>}
     {!!c.naming?.parts.length && <p className="field-hint">发起人已设置自动命名，原扩展名和原名记录会保留。</p>}
     <input ref={picker} type="file" multiple accept={fileExtensions(c.formats).map(s => `.${s}`).join(',')} className="sr-only" onChange={e => { addFiles(e.target.files); e.target.value = '' }} aria-label="选择提交文件" />
-    <button type="button" className={`drop-zone ${dragging ? 'dragging' : ''}`} onClick={() => picker.current?.click()} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files) }}><span><FileUp size={29} strokeWidth={1.5} /></span><strong>点击选择，或把文件拖到这里</strong><p>{c.formats}<br />单文件 ≤ {c.maxFileSizeMB} MB · 每次最多 {c.maxFilesPerSubmission} 个<br />单次总量 ≤ {c.requestLimitMB || 512} MB</p></button>
+    <button type="button" className={`drop-zone ${dragging ? 'dragging' : ''}`} onClick={() => picker.current?.click()} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files) }}><span><FileUp size={29} strokeWidth={1.5} /></span><strong>点击选择，或把文件拖到这里</strong><p>{c.formats}<br />单文件 ≤ {effectiveFileLimit(c)} MB · 每次最多 {c.maxFilesPerSubmission} 个<br />单次总量 ≤ {c.requestLimitMB || 512} MB</p></button>
     <UploadList files={files} feedback={feedback} busy={busy} onRetry={() => void submit()} onRemove={i => { setFiles(old => old.filter((_, index) => index !== i)); setFeedback(null); setError(''); requestId.current = crypto.randomUUID() }} />
     <div className="form-note">文件将保存到发起人的服务器，仅工作台授权成员可查看和下载。</div><button className="button primary submit-button" type="submit" disabled={!files.length}>{busy ? `上传中 ${progress}%` : feedback?.phase === 'paused' ? '继续上传' : error ? '重试并确认回执' : replacement ? `确认替换为 ${files.length} 份文件` : `提交${files.length ? ` ${files.length} 份` : ''}文件`}<ArrowRight size={16} /></button>
   </fieldset>{busy && <div className="upload-progress" role="status"><div className="progress"><span style={{ width: `${progress}%` }} /></div><p>{feedback?.phase === 'saving' ? '文件已传完，正在等待整批回执…' : feedback?.phase === 'preparing' ? '正在连接并读取续传记录…' : `已确认传输 ${progress}%`}<button type="button" className="text-button" onClick={() => controller.current?.abort()}>暂停上传</button></p></div>}{error && <p className="error-text" role="alert">{error}</p>}</form>}</>}</section><footer className="submission-bottom"><span><LockKeyhole size={13} />仅工作台授权成员可见</span><span>由集屿提供支持</span></footer></main>

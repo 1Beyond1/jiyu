@@ -3,6 +3,7 @@ import { ArrowUpRight, CalendarDays, Link, Plus, Check, Copy, ExternalLink } fro
 import { CollectionIcon, Empty, Modal } from '../components/ui'
 import type { Collection } from '../types'
 import { collectionState, collectionStateNames } from '../lib/collections'
+import { shareAddress } from '../lib/share-address'
 
 export function CollectionCard({ collection: c, onOpen, onShare }: { collection: Collection; onOpen: (id: string) => void; onShare: (c: Collection) => void }) {
   const percent = Math.min(100, Math.round(c.received / c.target * 100))
@@ -32,11 +33,13 @@ export function ShareCollection({ collection, onClose, onRotate, busy, serverErr
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState('')
   const url = `${location.origin}/#/submit/${collection.uploadToken}`
+  const address = shareAddress(location.origin)
   const [rotate, setRotate] = useState(false)
   return <Modal title="好文件，一个链接就能收齐" subtitle={collection.title} onClose={onClose}>
     <div className="share-art"><div><CollectionIcon category={collection.category} /><span className="share-art-link"><Link size={18} /></span></div><p>提交者无需登录，即可上传文件</p><small>持有链接的人可提交，请仅分享给参与本次收集的人。</small></div>
     <label className="field">收集链接<div className="copy-field"><input value={url} readOnly aria-label="收集链接" /><button className="icon-button" aria-label="复制链接" onClick={async () => { try { await navigator.clipboard.writeText(url); setCopied(true); setCopyError('') } catch { setCopied(false); setCopyError('无法自动复制，请选中上方链接手动复制。') } }}>{copied ? <Check size={18} /> : <Copy size={18} />}</button></div></label>
-    {copied && <p className="success-text" role="status">链接已复制</p>}{copyError && <p className="error-text" role="alert">{copyError}</p>}
+    <div className={`share-address-note ${address.kind === 'external' ? '' : 'attention'}`} role="note"><strong>{address.label}</strong><p>{address.detail}</p>{address.kind !== 'external' && <a className="text-button" href="https://github.com/1Beyond1/jiyu/blob/main/docs/DEPLOYMENT.md" target="_blank" rel="noreferrer">查看部署与访问配置<ExternalLink size={14} /></a>}</div>
+    {copied && <p className="success-text" role="status">{address.kind === 'local' ? '已复制本机预览链接；请勿发给其他人用于提交。' : '链接已复制，请先确认参与者可以访问。'}</p>}{copyError && <p className="error-text" role="alert">{copyError}</p>}
     {serverError && <p className="error-text" role="alert">{serverError}</p>}
     <div className="form-note">链接不提供他人文件列表或下载权限。提交者须凭本人私密回执查询或替换本批文件。暂停或结束收集可立即停止接收。</div>
     {rotate ? <div className="rotate-confirm"><p>重新生成后，之前分享的链接会立即失效。</p><button className="button" disabled={busy} onClick={() => setRotate(false)}>取消</button><button className="button" disabled={busy} onClick={() => { onRotate(); setRotate(false); setCopied(false) }}>确认更换链接</button></div> : <button className="text-button" onClick={() => setRotate(true)}>更换收集链接</button>}

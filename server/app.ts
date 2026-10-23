@@ -145,28 +145,28 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     store.transaction(() => { store.db.prepare('UPDATE users SET password=? WHERE id=?').run(hash, auth.id); if (auth.id === 'primary') store.set('password', hash); store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(auth.id); store.activity(`成员「${auth.display_name}」修改密码，撤销其旧会话`) })
     return setSession(reply, auth.id)
   })
-  app.get('/api/workspace', async req => { const workspace = store.workspace(config.quotaBytes); if (session(req)?.role === 'viewer') { workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c); workspace.lastRenameId = undefined }; return workspace })
-  app.patch('/api/settings', async req => { store.set('displayName', text(object(req.body).displayName, '显示名称', 20)); return store.workspace(config.quotaBytes) })
+  app.get('/api/workspace', async req => { const workspace = store.workspace(config.quotaBytes, config.requestBytes); if (session(req)?.role === 'viewer') { workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c); workspace.lastRenameId = undefined }; return workspace })
+  app.patch('/api/settings', async req => { store.set('displayName', text(object(req.body).displayName, '显示名称', 20)); return store.workspace(config.quotaBytes, config.requestBytes) })
   app.post('/api/settings/diagnostics', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async () => diagnostics(store, config, budget.bytes))
-  app.post('/api/collections', async req => { const c = { ...collectionInput(req.body), storage: requireStorage(store, object(req.body).storage) }; store.transaction(() => { store.saveCollection(c); store.activity(`创建了「${c.title}」`) }); return store.workspace(config.quotaBytes) })
+  app.post('/api/collections', async req => { const c = { ...collectionInput(req.body), storage: requireStorage(store, object(req.body).storage) }; store.transaction(() => { store.saveCollection(c); store.activity(`创建了「${c.title}」`) }); return store.workspace(config.quotaBytes, config.requestBytes) })
   const getCollection = (id: string) => { const c = store.collection(id); if (!c) throw new HttpError(404, '没有找到这项收集'); return c }
   app.patch('/api/collections/:id', async req => {
     const current = getCollection(String(object(req.params).id))
     const c = { ...collectionInput(req.body, current), storage: requireStorage(store, object(req.body).storage ?? current.storage) }
     store.transaction(() => { store.saveCollection(c); store.activity(`修改了「${c.title}」的规则`) })
-    return store.workspace(config.quotaBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.post('/api/collections/:id/status', async req => {
     const c = getCollection(String(object(req.params).id)), status = object(req.body).status
     if (!['active', 'paused', 'completed'].includes(String(status))) throw new HttpError(400, '收集状态无效')
     if (status === 'active' && isExpired(c)) throw new HttpError(400, '请先延长截止日期')
     store.transaction(() => { store.saveCollection({ ...c, status: status as Collection['status'] }); store.activity(`将「${c.title}」设为${status === 'active' ? '收集中' : status === 'paused' ? '暂停' : '完成'}`) })
-    return store.workspace(config.quotaBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.post('/api/collections/:id/rotate-token', async req => {
     const c = getCollection(String(object(req.params).id))
     store.transaction(() => { store.saveCollection({ ...c, uploadToken: token() }); store.activity(`更换了「${c.title}」的收集链接，旧链接失效`) })
-    return store.workspace(config.quotaBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes)
   })
   const publicCollection = (value: string) => { const c = store.byToken(value); if (!c) throw new HttpError(404, '收集链接无效或已撤销'); return c }
   app.get('/api/public/:token', async req => {
@@ -243,16 +243,16 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     if (list.length !== ids.length) throw new HttpError(404, '部分文件不存在，请刷新重试')
     return list
   }
-  app.post('/api/files/review', async req => { const list = chosenFiles(object(req.body).ids); store.transaction(() => { for (const f of list) store.saveFile({ ...f, status: 'ready' }); store.activity(`将 ${list.length} 个文件标记为已整理`) }); return store.workspace(config.quotaBytes) })
+  app.post('/api/files/review', async req => { const list = chosenFiles(object(req.body).ids); store.transaction(() => { for (const f of list) store.saveFile({ ...f, status: 'ready' }); store.activity(`将 ${list.length} 个文件标记为已整理`) }); return store.workspace(config.quotaBytes, config.requestBytes) })
   app.post('/api/files/trash', async req => {
     const list = chosenFiles(object(req.body).ids)
     store.transaction(() => { for (const f of list) store.saveFile({ ...f, deletedAt: new Date().toISOString() }); store.activity(`将 ${list.length} 个文件移入回收站`) })
-    return store.workspace(config.quotaBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.post('/api/files/restore', async req => {
     const list = chosenFiles(object(req.body).ids, true)
     store.transaction(() => { for (const f of list) { const { deletedAt: _deleted, ...rest } = f; store.saveFile(rest) } store.activity(`从回收站恢复 ${list.length} 个文件`) })
-    return store.workspace(config.quotaBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.post('/api/files/rename', async req => {
     const body = object(req.body), changes = body.changes
@@ -277,7 +277,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     for (const f of selected) { const next = plan.find(p => p.id === f.id)!.name; if (next.slice(next.lastIndexOf('.')).toLowerCase() !== f.name.slice(f.name.lastIndexOf('.')).toLowerCase()) throw new HttpError(400, '批量命名需保留文件扩展名') }
     const operationId = randomUUID()
     store.transaction(() => { for (const f of selected) { const change = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: change.name, ...(change.tags ? { tags: change.tags } : {}) }) }; store.db.prepare('INSERT INTO renames(id,data) VALUES (?,?)').run(operationId, JSON.stringify(plan)); if (aiRunId) store.db.prepare('UPDATE ai_runs SET status=? WHERE id=?').run('applied', String(aiRunId)); store.activity(`${aiRunId ? '确认 AI 方案，' : ''}整理 ${selected.length} 个文件的名称${tagPlan.length ? '与分类' : ''}`) })
-    return { workspace: store.workspace(config.quotaBytes), operationId }
+    return { workspace: store.workspace(config.quotaBytes, config.requestBytes), operationId }
   })
   app.post('/api/files/rename/:id/undo', async req => {
     const id = String(object(req.params).id), row = store.db.prepare('SELECT data,undone FROM renames WHERE id=?').get(id) as { data: string; undone: number } | undefined
@@ -288,7 +288,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     const targetNames = plan.map(p => p.oldName.toLowerCase()), unchanged = store.files().filter(f => !f.deletedAt && !plan.some(p => p.id === f.id))
     if (new Set(targetNames).size !== targetNames.length || unchanged.some(f => targetNames.includes(f.name.toLowerCase()))) throw new HttpError(409, '原文件名已被占用，无法撤销')
     store.transaction(() => { for (const f of files) { const p = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: p.oldName, ...(p.oldTags ? { tags: p.oldTags } : {}) }) }; store.db.prepare('UPDATE renames SET undone=1 WHERE id=?').run(id); store.activity(`撤销了 ${files.length} 个文件的整理操作`) })
-    return store.workspace(config.quotaBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.get('/api/storage', async () => storageSpace(config.dataDir, store.usedBytes(), config.quotaBytes, store.pendingBytes() + budget.bytes))
   registerAI(app, store, options.aiTransport)
