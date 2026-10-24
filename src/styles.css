@@ -45,12 +45,24 @@
 .share-address-note .text-button { padding-left: 0; margin-top: 5px; }
 .receipt-import { padding: 12px 0 18px; }
 .receipt-import p { font-size: 12px; line-height: 1.8; color: var(--secondary); margin-top: 10px; }
+.checklist-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; flex-shrink: 0; }
+.start-checklist.collapsed .section-heading { margin-bottom: 0; }
+.download-confirmation { margin-top: 12px; }
+.download-confirmation .field { font-size: 11px; }
+.download-confirmation select { width: 100%; max-width: 100%; font-size: 12px; }
+.download-confirmation .check-label { margin-top: 10px; font-size: 12px; line-height: 1.8; align-items: flex-start; }
+.download-confirmation input[type='checkbox'] { flex-shrink: 0; margin-top: 4px; }
+.settings-panel[id] { scroll-margin-top: 90px; }
+.receipt-next-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 18px; }
+.receipt-next-actions p { font-size: 12px; line-height: 1.8; color: var(--secondary); margin-top: 8px; }
 @media (max-width: 900px) {
   .start-checklist-items { grid-template-columns: 1fr; gap: 18px; }
 }
 @media (max-width: 600px) {
   .start-checklist { padding: 18px; }
   .workspace-refresh { justify-content: space-between; gap: 6px; font-size: 10px; }
+  .start-checklist .section-heading { flex-wrap: wrap; }
+  .receipt-next-actions { grid-template-columns: 1fr; }
 }
 
 * { box-sizing: border-box; }

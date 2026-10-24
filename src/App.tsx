@@ -72,7 +72,23 @@ function WorkspaceApp() {
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
   }, [])
-  useEffect(() => { window.scrollTo(0, 0) }, [page, hash])
+  useEffect(() => {
+    const section = page === 'settings' ? hash.split('/')[2] : ''
+    const targetId = section === 'diagnostics' ? 'settings-diagnostics' : section === 'backups' ? 'settings-backups' : ''
+    const target = targetId ? document.getElementById(targetId) : null
+    if (!target) { window.scrollTo(0, 0); return }
+    const align = () => target.scrollIntoView({ block: 'start' })
+    align(); target.focus({ preventScroll: true })
+    // Settings panels load independently. Keep the initial destination in view until interaction.
+    const observer = new ResizeObserver(align)
+    const layout = target.closest('.settings-layout')
+    if (layout) { observer.observe(layout); for (const panel of layout.children) observer.observe(panel) }
+    const stop = () => observer.disconnect()
+    const inputs = ['wheel', 'pointerdown', 'keydown', 'touchstart'] as const
+    for (const event of inputs) window.addEventListener(event, stop, { passive: true, once: true })
+    const timer = window.setTimeout(stop, 5000)
+    return () => { observer.disconnect(); clearTimeout(timer); for (const event of inputs) window.removeEventListener(event, stop) }
+  }, [page, hash, loading])
   useEffect(() => {
     const media = window.matchMedia('(max-width: 760px)')
     const resize = () => { setIsMobile(media.matches); setMenuOpen(false) }
@@ -107,6 +123,7 @@ function WorkspaceApp() {
     location.hash = `/${next}`
   }
   function openCollection(id: string) { setPage('collections'); setHash(`#/collections/${id}`); setMenuOpen(false); setSearch(''); location.hash = `/collections/${id}` }
+  function openSettings(section: 'diagnostics' | 'backups') { setPage('settings'); setHash(`#/settings/${section}`); setMenuOpen(false); setNotifications(false); setSearch(''); location.hash = `/settings/${section}` }
   async function review(ids: string[]) {
     if (await action('/api/files/review', { ids })) { setDetail(null); notify(`已将 ${ids.length} 个文件标记为已整理`) }
   }
@@ -148,7 +165,7 @@ function WorkspaceApp() {
         {workspace.lastRenameId && <div className="action-notice"><span>最近的批量整理可撤销</span><button className="text-button" onClick={async () => { if (await action(`/api/files/rename/${workspace.lastRenameId}/undo`, {})) notify('已撤销批量命名') }}>撤销上次整理</button></div>}
         {page === 'overview' && <>
           <div className="page-title home-title"><div><p className="greeting"><span className="greeting-line" />{workspace.displayName}，欢迎回到集屿</p><h1>每一份文件，都有归处<span className="title-dot">。</span></h1><p>收集、整理、妥善存放。把时间留给更重要的事。</p></div><button className="button primary" onClick={() => startCollection()}><Plus size={17} />新建收集</button></div>
-          {isAdmin && <StartChecklist workspace={workspace} onCreate={() => startCollection()} onSettings={() => navigate('settings')} onFiles={() => navigate('files')} />}
+          {isAdmin && <StartChecklist workspace={workspace} onCreate={() => startCollection()} onSettings={openSettings} onFiles={() => navigate('files')} />}
           <div className="overview-stats"><div><span><FolderClosed size={16} />进行中的收集</span><p>{active.length}<small>项</small><em><span />正在有序进行</em></p></div><div><span><ArrowDownToLine size={16} />累计收到文件</span><p>{total}<small>份</small><em className="stat-note">来自 {workspace.collections.length} 项收集</em></p></div><div><span><Clock3 size={16} />待整理文件</span><p>{pending}<small>份</small><button onClick={() => navigate('tools')}>去整理<ArrowUpRight size={13} /></button></p></div><div><span><HardDrive size={16} />已用存储空间</span><p className="real-storage-value">{formatSize(usedBytes)}<em className="stat-note">配额 {formatSize(quotaBytes)}</em></p></div></div>
           <section className="collections-section"><div className="section-heading"><h2>进行中的收集<span className="count-badge">{active.length}</span></h2><button className="text-button" onClick={() => navigate('collections')}>全部收集<ArrowRight size={15} /></button></div>{active.length ? <div className="collection-grid">{active.slice(0, 3).map(c => <CollectionCard key={c.id} collection={c} onOpen={openCollection} onShare={setShare} />)}</div> : <Empty title="从第一项收集开始" text="点击新建收集，告别零散的文件消息。" />}</section>
           <section className="recent-section"><div className="section-heading"><div className="heading-with-note"><h2>最近收到</h2><span>每一份新提交，都在这里</span></div><button className="text-button" onClick={() => { setCollectionId(''); navigate('files') }}>查看全部文件<ArrowRight size={15} /></button></div><FileTable {...fileProps} compact /></section>
