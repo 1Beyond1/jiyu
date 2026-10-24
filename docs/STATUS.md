@@ -1,8 +1,8 @@
 # 集屿当前交付状态
 
-更新：2026-10-24（Asia/Taipei）。project=J；control_run_id=manual-20261024-2；candidate-20261024-1。
+更新：2026-10-25（Asia/Taipei）。project=J；control_run_id=manual-20261024-2；candidate-20261024-1。
 
-- readiness: local_candidate_ready。第二阶段「有依据、可审阅的 AI 材料预核对」工程主线已完成，按 DELIVERY_EXIT_CRITERIA 冻结本轮功能，等待总控集中验收及用户体验。不开第三阶段，不循环增加测试或优化；最多按总控合并的一批必要阻断修复处理。
+- readiness: local_candidate_ready。第二阶段「有依据、可审阅的 AI 材料预核对」已完成；主控于 2026-10-25 亲自实际界面验收，有限合成主线未发现新的业务阻断。保持冻结供用户体验，不开第三阶段，不循环增加测试或优化。
 - external_validation: waiting_external_validation。当前无已授权产品模型 API，真实语义质量 / 成本 / 时延 / 采用均 not_run。当前可体验的是工程协议及人工处置闭环；内部注入不代表真实模型效果。
 - 原仓库 D:/Code-D/filegeter；Fastify / React / SQLite schema 5、npm、暖纸风格沿用，无新依赖 / 服务 / OCR / 网盘平台、子代理、新聊天或定时器。正式 data / 账号 / 上传未改；未发布 Release、部署或外联。
 
@@ -20,16 +20,22 @@
 - 新测试合并覆盖授权 / 未配置 / 客户端不能选夹具、精确引用及空白位置、错文件 / 伪片段 / 未读 / 超限位置 / 错材料 / 遗漏文件、401 / 403 / CSRF、跨任务、旧快照 / 晚回包、正文重提取、本人大批次变化、人工重试、共享额度及拒绝后的零调用；保存建议后故障注入 ERR_SQLITE_ERROR/13 返回 507，整笔计划回滚，不留下半份成功建议。
 - 浏览器主线：A01 两文件精确授权→电脑查看依据 / 原文并手动记需补充→手机单文件预核对并手动归为作品说明（仍待人工核对）→新建议→手机凭本人回执实际替换原两文件→双端旧建议过期，采用按钮禁用。A02 同时展示一个未读文件和长文件仅前 4,000 字符，未调用模型替未读部分下结论。
 - 360 / 390 / 430 / 768 / 1440 px 的新建议区域无整体横向溢出。viewport 覆盖已恢复；实际来源 / 处置数据读回已完成，后续不因非阻断截图定位再反复重演。
-- 隔离目录 D:/Code-D/filegeter/.artifacts/j-material-ai-qa/：independent-expected.json 在准备样本前写入；readback-results.json 独立核对 3 份计划的全部引用与实际 TXT 字节内容 / 位置 / SHA，2 次人工处置、0 自动通过、2 原文件入回收站、2 新文件无继承批准。last-authorized-request.json 只有明确 A01 两文件，不含 A02 或额外姓名字段。desktop-evidence.png 是实际桌面依据与上下文截图；layout-checks.json 保存五档布局测量。数据与截图均忽略，不进 Git。
+- 开发阶段隔离证据 D:/Code-D/filegeter/.artifacts/j-material-ai-qa/：independent-expected.json 在准备样本前写入；readback-results.json 保存当时 3 份计划的引用 / 实际 TXT 位置 / SHA、2 次人工处置、0 自动通过及 A01 替换读回。desktop-evidence.png 为当时桌面依据截图，layout-checks.json 为五档测量。主控后续已实际操作 A02，当前数据库及 last-authorized-request.json 已继续变化，不再将开发阶段计数当作当前计数。数据与截图均忽略，不进 Git。
+
+## 2026-10-25 主控实际验收后指引
+
+- controller-qa-20261024-1：主控亲自完成 A02 精确授权、新建议、390 px 原文核对 / 人工需补充、本人回执替换、旧建议过期且不可采用；未发现新的业务阻断。完整记录在 D:/Code-D/ai_competition/CONTROLLER_QA_20261025.md，证据在其 output/playwright/controller-qa/。本会话只准备了环境，没有代跑该验收。
+- 主控替换后，原 manifest 与先前 CONTROLLER_ACCESS.json 中的 A02 回执均已失效。当前有效合成私密回执仅在 D:/Code-D/ai_competition/output/playwright/controller-qa/j-synthetic-private-receipt.txt；凭证不复制到聊天或 Git。隔离 CONTROLLER_ACCESS.json 的 currentReceipt.sourceFile 与 EXPERIENCE.txt 已指向该文件，账号信息仍只在忽略目录。
+- 3002 隔离服务保留供体验，不重置数据、不生成新计划、不重跑检查、不改业务代码。390 px 浮动 AI 按钮遮少量底部说明已列非阻断待办；本轮实际核对 / 保存 / 替换可用，后续布局批次再处理。
 
 ## 体验入口及停止条件
 
 - 正常候选版：在原目录停止旧服务后运行 npm run build，再 npm start；打开 http://127.0.0.1:3000。使用自己的原账号；收集任务→材料收齐与核对→查看某人材料→选文件→AI材料预核对。未设置模型时明确不可发送；正文先在文件详情识别。
 - 无 API 本地工程样例：在原目录运行 node --experimental-strip-types .artifacts/j-material-ai-qa/run.mts，打开 http://127.0.0.1:3002。合成账号及样例现状见该忽略目录的 EXPERIENCE.txt；这是明确标记的内部注入，绝不访问真实服务商。已保留本人替换后的现状与历史记录，不自动重置样本或正式数据。
-- 非阻断待办：长名单定位、提示时机与历史查找便利性。真实 API / 质量评估 / 实体手机 / 微信或支付宝 / 真实网盘 / VPS 继续未测。不因这些外部条件寻找其他密钥或无限追加假场景。
+- 非阻断待办：390 px 浮动 AI 按钮遮少量底部说明、长名单定位、提示时机与历史查找便利性。真实 API / 质量评估 / 实体手机 / 微信或支付宝 / 真实网盘 / VPS 继续未测。不因这些外部条件寻找其他密钥或无限追加假场景。
 - 后续仅由用户明确体验问题、新需求或提供真实条件并要求继续时，界定有限阶段；本轮完成回报后停止改代码。
 
 ## Git 与回报
 
-- 本轮源码 0854fdb196c6a50a7d72def4748d36a557212bc5 已正常推送 origin/main（21f16e0..0854fdb），连同原先待同步状态文档一并上传；1Beyond1 与仓库隐私邮箱署名。无强制推送 / 证书降级，无标签 / Release。隔离进程已不再运行，保留按需启动样例，正式服务未改。
+- 本轮源码 0854fdb196c6a50a7d72def4748d36a557212bc5 已正常推送 origin/main（21f16e0..0854fdb），连同原先待同步状态文档一并上传；1Beyond1 与仓库隐私邮箱署名。无强制推送 / 证书降级，无标签 / Release。隔离服务于 2026-10-25 按总控要求恢复（准备时 PID 51268），当前保留供体验，正式服务未改。
 - 固定总控 01a162b9-3b6f-79a2-b30e-1e150a6ccc70（local）。event_id: J:material-ai-20261024:completed:1；已先保存状态，再通过 send_message_to_thread 向固定总控发送一次 PROJECT_EVENT 请求 candidate-20261024-1 集中验收，工具返回目标 threadId 且无错误。本轮停止改代码，不开启第三阶段。
