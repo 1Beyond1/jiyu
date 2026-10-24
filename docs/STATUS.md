@@ -3,7 +3,7 @@
 更新：2026-10-24（Asia/Taipei）；project=J；control_run_id=manual-20261024-2。
 
 - 固定总控：01a162b9-3b6f-79a2-b30e-1e150a6ccc70（local）。
-- 阶段：逐人逐材料收齐 / 显式分类 / 人工核对的完整切片已实现并集中验收，正在完成 Git 同步及一次阶段回报；未发布版本。
+- 阶段：逐人逐材料收齐 / 显式分类 / 人工核对的完整切片已完成并集中验收，源码已推送 main；未发布版本。
 - 基线：main e0f7676，开始时工作区干净。依照原 AGENTS / PROJECT / ARCHITECTURE 及 JIYU_FIRST_MILESTONE 推进；保留原仓库 / 技术栈和 schema 5，无新依赖、子代理、新聊天或定时任务。用户由固定总控管理原三个聊天和完成后回报的授权已只读核实。
 
 ## 本阶段交付
@@ -17,7 +17,7 @@
 
 ## 已验收
 
-- npm run build 通过。52 项本机测试中 49 通过，3 跳过：Windows 缺少 Poppler / Tesseract 的两项原生测试，以及需指定旧版源码目录的实际 v0.3 升级测试。这些容器 / 升级检查已有 CI 配置，本阶段远端结果尚未取得。
+- npm run build 通过。52 项本机测试中 49 通过，3 跳过：Windows 缺少 Poppler / Tesseract 的两项原生测试，以及需指定旧版源码目录的实际 v0.3 升级测试。这些容器 / 升级检查由 CI 的运行镜像流程执行；源码提交的 CI 40086023171 已返回 success。
 - 新后端闭环包含：4 个独立合成编号、2 必需 + 1 选填、缺件 / 未分类 / 重复、人工纠正、补交、替换、不沿用旧结论、规则回退仍过期、并发 [200,409]、批量原子失败、401 / 403、模板及备份恢复。原上传并发 / 配额 / 写满 / 续传 / 旧任务回归通过。
 - 浏览器：390 px 实际通过三步模板创建；A02 手机上传报名表→1440 px 电脑批量核对→390 px 凭回执补交作品说明→两端刷新一致→手机核对新文件。A03 需纠正→改归属→旧说明标过期；A04 相同内容不算齐→本人回执替换两文件→新文件待核对。随后电脑编辑材料要求，A02 两文件旧批准均过期。
 - 360 / 390 / 430 / 768 / 1440 px 的材料总览 / 材料详情 / 公开提交页均无整体横向溢出。≤900 px 用人员卡片而不是仅横滚表格，1440 px 使用材料矩阵。浏览器 viewport 临时覆盖已恢复。
@@ -25,13 +25,13 @@
 
 ## 隔离证据与限制
 
-- 唯一验收目录：D:/Code-D/filegeter/.artifacts/j-materials-qa/；独立服务 127.0.0.1:3002。期望在准备样本前写入 independent-expected.json，正式 data / 账号 / 上传保持未改，无样本进入 Git。
+- 唯一验收目录：D:/Code-D/filegeter/.artifacts/j-materials-qa/；独立服务 127.0.0.1:3002 已停止（仅核对并停止本轮 PID 40116），临时标签页已关闭，保留小型合成证据。期望在准备样本前写入 independent-expected.json，正式 data / 账号 / 上传保持未改，无样本进入 Git。
 - 可复核证据：layout-checks.json、detail-layout-checks.json、public-layout-checks.json、readback-results.json、export-readback.csv、receipt-readback.txt；截图 desktop-materials.png、mobile-stale.png。只供本地合成验收，含合成凭证，全部被忽略。
 - 未运行：真实 iOS / Android、微信 / 支付宝内浏览器、用户模型语义判断、真实网盘及 VPS / 公网部署。无正式用户使用或实际部署完成的宣称；当前不是自动语义 Agent。
 - 非阻断待办统一保留后续：手机长名单详情定位与成功提示时机的进一步打磨；无需为此中断或重演已通过主线。下一阶段先由总控统一验收，再决定语义辅助范围。
 
 ## Git 与阶段回报
 
-- 按既有授权准备提交 main；不打标签、不创建 Release。作者沿用 1Beyond1 的仓库配置。
-- 阶段末发现本机 gh auth status 报 GitHub keyring token 无效；GitHub 连接器的当前用户仍可读取为 1Beyond1。最终推送是否可用以实际 Git 结果为准，不能用旧 CI 冒充本阶段结果。
-- event_id：J:materials-20261024:completed:1；先保存本文件，再在收尾时向固定总控发送一次 PROJECT_EVENT；目前尚未发送。
+- 源码提交 21f16e0fb0569647bba8386a35f95b2db52ced7a 已实际推送 origin/main（push 返回 e0f7676..21f16e0 main -> main）。作者 1Beyond1 <142073741+1Beyond1@users.noreply.github.com>；不打标签、不创建 Release。
+- gh CLI 的 keyring token 报无效，但实际 Git 推送已成功，此项未阻断交付。后续 ls-remote 遇一次 TLS 握手失败；不关闭证书验证，不反复重试。源码提交 21f16e0 的远端 CI 已实际取得 success：https://github.com/1Beyond1/jiyu/actions/runs/40086023171 。阶段状态文档首次推送也遇到 TLS 失败，随后保留证书验证改用 OpenSSL 重试一次，仍返回 TLS unexpected EOF。功能源码已推送且 CI 成功；仅本次 STATUS 记录的后续本地文档提交尚待同步，下次网络恢复后正常 push 即可，无强制推送、证书绕过或循环重试。GitHub 连接器 create_commit 不支持指定仓库作者邮箱，未用它重新造提交以免改变已确认署名。
+- event_id：J:materials-20261024:completed:1；已先保存阶段状态，再通过 send_message_to_thread 向固定总控发送一次 PROJECT_EVENT，工具返回目标 threadId 且无错误。未向 A / B / 旧 C 或外部人发消息；本阶段结束，不空等或自动开始新阶段。
