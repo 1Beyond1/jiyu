@@ -35,7 +35,11 @@ export interface MaterialRequirement { id: string; name: string; required: boole
 export type MaterialReviewState = 'unclassified' | 'pending' | 'accepted' | 'needs_changes' | 'stale'
 export interface MaterialReview { decision: 'accepted' | 'needs_changes'; note: string; rulesRevision: string; fileVersion: string; operationId: string; reviewerId: string; reviewerName: string; reviewedAt: string }
 export interface MaterialAction { id: string; signature: string; resultVersion: string }
-export interface MaterialOperation { collectionId: string; rulesRevision: string; requestId: string; files: { id: string; expectedVersion: string; materialId?: string }[]; decision?: 'accepted' | 'needs_changes'; note?: string }
+export interface MaterialOperation { collectionId: string; rulesRevision: string; requestId: string; files: { id: string; expectedVersion: string; materialId?: string }[]; decision?: 'accepted' | 'needs_changes'; note?: string; aiReview?: { runId: string; fileId: string; acknowledged: boolean } }
+export interface MaterialAISource { id: string; alias: string; name: string; materialId: string; expectedVersion: string; sha256: string; contentVersion: string; extractionStatus: string; kind: string; coverage: 'full' | 'partial' | 'unread'; excerpt: string; start: number; end: number; reason: string }
+export interface MaterialAIPreview { previewId: string; collectionId: string; title: string; description: string; rulesRevision: string; materials: MaterialRequirement[]; sources: MaterialAISource[]; settingsRevision: string; expiresAt: string; testMode: boolean }
+export interface MaterialAIFinding { fileId: string; assessment: 'attention' | 'uncertain' | 'no_issue_in_excerpt'; materialId: string; message: string; suggestion: string; evidence: { fileId: string; start: number; end: number; quote: string }[] }
+export interface MaterialAIPlan { runId: string; preview: MaterialAIPreview; model: string; tokens: number; createdAt: string; findings: MaterialAIFinding[]; stale: boolean; staleReason?: string; dispositions?: Record<string, { kind: string; decision?: string; materialId?: string; note: string; at: string; by: string }> }
 export interface MaterialSlot { requirement: MaterialRequirement; files: CollectedFile[]; state: 'missing' | 'duplicate' | MaterialReviewState; duplicate: boolean }
 export interface MaterialParticipant { identity: string; owner: string; expected: boolean; files: CollectedFile[]; slots: MaterialSlot[]; unclassified: CollectedFile[]; receivedComplete: boolean; reviewComplete: boolean; status: 'missing' | 'needs_changes' | 'unclassified' | 'pending' | 'accepted'; duplicateCount: number }
 export interface CollectionField { id: string; label: string; required: boolean }
@@ -109,6 +113,7 @@ export interface ArchiveEntry { id: string; name: string; path: string; size: nu
 export interface ArchivePlan { id: string; fileName: string; layout: ArchiveLayout; totalBytes: number; entries: ArchiveEntry[]; expiresAt: string; status: ArchiveStatus; error?: string }
 
 export interface AISettings {
+  testMode?: boolean
   revision: string
   enabled: boolean
   protocol: 'responses' | 'chat'
