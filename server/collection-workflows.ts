@@ -5,10 +5,11 @@ import type { Store } from './store.ts'
 import { digest, equalToken, HttpError, object, text } from './security.ts'
 import { fileNameKey, submissionFileName } from '../src/lib/submission-naming.ts'
 import { collectionParticipants } from '../src/lib/participants.ts'
+import { materialReviewState } from '../src/lib/materials.ts'
 
 const normalized = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase('en-US')
 const uuid = /^[a-f0-9-]{36}$/
-export interface SubmissionContext { fields: Record<string, string>; replace?: { receiptId: string; keyHash: string } }
+export interface SubmissionContext { fields: Record<string, string>; replace?: { receiptId: string; keyHash: string }; materialIds?: string[] }
 interface SubmissionRecord { owner: string; fields: Record<string, string>; identity: string; superseded?: boolean; receipt: UploadReceipt }
 
 export function collectionRules(body: Record<string, unknown>, current?: Collection): Partial<Collection> {
@@ -31,10 +32,19 @@ export function collectionRules(body: Record<string, unknown>, current?: Collect
   if (mode !== 'append' && mode !== 'single') throw new HttpError(400, '重复提交规则无效')
   const allowReplacement = body.allowReplacement ?? current?.allowReplacement ?? true
   if (typeof allowReplacement !== 'boolean') throw new HttpError(400, '替换规则无效')
+  const rawMaterials = body.materials ?? current?.materials ?? []
+  if (!Array.isArray(rawMaterials) || rawMaterials.length > 8) throw new HttpError(400, '最多设置 8 项材料')
+  const materials = rawMaterials.map(value => {
+    const m = object(value), id = text(m.id, '材料编号', 40)
+    if (!/^mat_[a-zA-Z0-9_-]{1,34}$/.test(id) || typeof m.required !== 'boolean') throw new HttpError(400, '材料项配置无效')
+    return { id, name: text(m.name, '材料名称', 30), description: text(m.description ?? '', '材料要求', 200, 0), required: m.required }
+  })
+  if (new Set(materials.map(m => m.id)).size !== materials.length || new Set(materials.map(m => normalized(m.name))).size !== materials.length) throw new HttpError(400, '材料编号和名称不能重复')
+  if (materials.length && !materials.some(m => m.required)) throw new HttpError(400, '材料清单至少设置一项必需材料')
   const rawNaming = body.naming ?? current?.naming ?? { parts: [], separator: '_' }
   const naming = object(rawNaming)
   if (!Array.isArray(naming.parts) || naming.parts.length > 6 || !naming.parts.every(p => typeof p === 'string' && ['owner', 'collection', 'date', 'sequence', 'original', ...fields.map(f => f.id)].includes(p)) || !['_', '-'].includes(String(naming.separator))) throw new HttpError(400, '命名规则无效')
-  return { fields, identityField, expectedSubmitters, submissionMode: mode, allowReplacement, naming: { parts: naming.parts as string[], separator: naming.separator as '_' | '-' } }
+  return { fields, identityField, expectedSubmitters, submissionMode: mode, allowReplacement, materials, naming: { parts: naming.parts as string[], separator: naming.separator as '_' | '-' } }
 }
 
 function record(store: Store, collectionId: string, receiptId: string, keyHash: string) {
@@ -54,7 +64,12 @@ export function submissionContext(store: Store, c: Collection, owner: string, bo
     if (!uuid.test(receiptId) || !/^[a-zA-Z0-9_-]{32,100}$/.test(key)) throw new HttpError(400, '回执格式无效')
     replace = { receiptId, keyHash: digest(key) }
   }
-  const context = { fields, ...(replace ? { replace } : {}) }
+  let materialIds: string[] | undefined
+  if (body.materialIds !== undefined) {
+    if (!Array.isArray(body.materialIds) || !Array.isArray(body.files) || body.materialIds.length !== body.files.length) throw new HttpError(400, '请为本批每个文件设置材料归属，或选择未分类')
+    materialIds = body.materialIds.map(value => text(value, '材料归属', 40, 0))
+  }
+  const context = { fields, ...(replace ? { replace } : {}), ...(materialIds ? { materialIds } : {}) }
   validateSubmission(store, c, owner, context)
   return context
 }
@@ -63,6 +78,7 @@ function identity(c: Collection, owner: string, fields: Record<string, string>) 
 export function validateSubmission(store: Store, c: Collection, owner: string, context: SubmissionContext) {
   // Recheck the latest rules after uploads and before the atomic commit.
   for (const f of c.fields || []) text(context.fields[f.id] ?? '', f.label, 80, f.required ? 1 : 0)
+  if (context.materialIds?.some(id => id && !c.materials?.some(m => m.id === id))) throw new HttpError(400, '材料清单已变更，请刷新后重新选择归属')
   const value = identity(c, owner, context.fields)
   if (!value) throw new HttpError(400, '请填写提交人标识')
   if (context.replace) {
@@ -79,12 +95,13 @@ export function commitSubmission(store: Store, c: Collection, owner: string, con
   const person = identity(c, owner, context.fields)
   if (context.replace) {
     const old = record(store, c.id, context.replace.receiptId, context.replace.keyHash)
-    for (const f of store.files()) if (f.submissionId === context.replace.receiptId && !f.deletedAt) store.saveFile({ ...f, deletedAt: receipt.createdAt })
+    for (const f of store.files()) if (f.submissionId === context.replace.receiptId && !f.deletedAt) store.saveFile({ ...f, deletedAt: receipt.createdAt, materialVersion: (f.materialVersion || 0) + 1 })
     store.db.prepare('UPDATE submission_records SET data=? WHERE id=?').run(JSON.stringify({ ...old, superseded: true }), context.replace.receiptId)
   }
   const occupied = new Set(store.files().filter(f => f.collectionId === c.id && !f.deletedAt).map(f => fileNameKey(f.name)))
   files.forEach((f, i) => {
     f.submissionId = receipt.receiptId; f.submissionFields = context.fields; f.fieldLabels = Object.fromEntries((c.fields || []).map(v => [v.id, v.label])); f.participant = person
+    if (c.materials?.length || context.materialIds) { f.materialId = context.materialIds?.[i] || undefined; f.materialVersion = 1 }
     f.name = submissionFileName(c, f.name, owner, context.fields, c.received + i + 1, receipt.createdAt, occupied)
   })
   const data: SubmissionRecord = { owner, fields: context.fields, identity: person, receipt }
@@ -103,14 +120,14 @@ export function registerCollectionWorkflows(app: FastifyInstance, store: Store) 
   app.get('/api/public/:token/receipts/:receiptId', async req => {
     const p = object(req.params), c = store.byToken(String(p.token)); if (!c) throw new HttpError(404, '收集链接已失效')
     const key = text(req.headers['x-receipt-key'], '回执凭证', 100), r = record(store, c.id, String(p.receiptId), digest(key))
-    return { receipt: r.receipt, owner: r.owner, fields: r.fields, superseded: !!r.superseded, files: store.files().filter(f => f.submissionId === r.receipt.receiptId && !f.deletedAt).map(({ id, name, size }) => ({ id, name, size })) }
+    return { receipt: r.receipt, owner: r.owner, fields: r.fields, superseded: !!r.superseded, files: store.files().filter(f => f.submissionId === r.receipt.receiptId && !f.deletedAt).map(f => ({ id: f.id, name: f.name, size: f.size, ...(c.materials?.length ? { materialId: f.materialId, materialState: materialReviewState(c, f), materialNote: f.materialReview?.note || '' } : {}) })) }
   })
   app.get('/api/templates', async () => ({ templates: (store.db.prepare('SELECT data FROM collection_templates ORDER BY rowid DESC').all() as { data: string }[]).map(r => JSON.parse(r.data)) }))
   app.post('/api/templates', async req => {
     const b = object(req.body), c = store.collection(String(b.collectionId)); if (!c) throw new HttpError(404, '收集不存在')
     if ((store.db.prepare('SELECT COUNT(*) AS n FROM collection_templates').get() as { n: number }).n >= 50) throw new HttpError(400, '最多保存 50 个模板，请重用现有模板')
     const rules: Partial<Collection> = {}
-    for (const k of ['title', 'description', 'category', 'target', 'formats', 'maxFileSizeMB', 'maxFilesPerSubmission', 'maxTotalSizeMB', 'fields', 'identityField', 'naming', 'submissionMode', 'allowReplacement'] as const) Object.assign(rules, { [k]: c[k] })
+    for (const k of ['title', 'description', 'category', 'target', 'formats', 'maxFileSizeMB', 'maxFilesPerSubmission', 'maxTotalSizeMB', 'fields', 'identityField', 'naming', 'submissionMode', 'allowReplacement', 'materials'] as const) Object.assign(rules, { [k]: c[k] })
     const template: CollectionTemplate = { id: randomUUID(), name: text(b.name, '模板名称', 40), rules, archived: false }
     store.transaction(() => { store.db.prepare('INSERT INTO collection_templates VALUES (?,?)').run(template.id, JSON.stringify(template)); store.activity(`保存了收集模板「${template.name}」`) }); return template
   })

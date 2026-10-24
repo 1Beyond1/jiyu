@@ -1,6 +1,11 @@
 import type { CollectionTemplate } from '../types.ts'
 
 export const collectionPresets: (CollectionTemplate & { summary: string })[] = [
+  { id: 'builtin-club', name: '社团作品征集', summary: '两项必需材料 · 按报名编号核对 · 可分批补交', archived: false, rules: {
+    title: '社团作品征集', description: '请提交本次活动报名表和作品说明，补充附件选填。可以分批提交，请保留本人回执。', category: 'document', target: 20, formats: 'PDF, DOCX, TXT, JPG, PNG', maxFileSizeMB: 50, maxFilesPerSubmission: 10, maxTotalSizeMB: 2048,
+    fields: [{ id: 'field_registration', label: '报名编号', required: true }], identityField: 'field_registration', submissionMode: 'append', allowReplacement: true,
+    materials: [{ id: 'mat_form', name: '报名表', required: true, description: '本次社团活动的报名信息。' }, { id: 'mat_statement', name: '作品说明', required: true, description: '本次活动的作品主题与介绍。' }, { id: 'mat_extra', name: '补充附件', required: false, description: '选填的展示或补充材料。' }],
+  } },
   { id: 'builtin-homework', name: '作业收集', summary: '学号识别 · 班级信息 · 自动命名', archived: false, rules: {
     title: '作业收集', description: '请填写姓名、学号并上传作业。补交可继续提交，替换请保留本人私密回执。', category: 'document', target: 30, formats: 'PDF, DOCX, ZIP', maxFileSizeMB: 50, maxFilesPerSubmission: 5, maxTotalSizeMB: 2048,
     fields: [{ id: 'field_student', label: '学号', required: true }, { id: 'field_class', label: '班级', required: false }], identityField: 'field_student', naming: { parts: ['field_student', 'owner', 'original'], separator: '_' }, submissionMode: 'append', allowReplacement: true,

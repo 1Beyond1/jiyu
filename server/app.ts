@@ -30,6 +30,7 @@ import type { RemoteHTTP } from './remote-http.ts'
 import { storageSpace } from './storage-space.ts'
 import { collectionRules, registerCollectionWorkflows } from './collection-workflows.ts'
 import { diagnostics } from './diagnostics.ts'
+import { materialRuleKey, registerMaterials } from './materials.ts'
 
 function collectionInput(value: unknown, current?: Collection): Collection {
   const body = object(value)
@@ -44,7 +45,9 @@ function collectionInput(value: unknown, current?: Collection): Collection {
   if (formats.length > 20 || !formats.length || formats.some(f => !/^[a-z0-9]{1,12}$/.test(f))) throw new HttpError(400, '文件后缀无效')
   const category = body.category
   if (category !== 'design' && category !== 'document' && category !== 'photo') throw new HttpError(400, '收集类型无效')
-  return { ...collectionRules(body, current), id: current?.id || randomUUID(), uploadToken: current?.uploadToken || token(), title: text(body.title, '收集名称', 50), description: typeof body.description === 'string' ? text(body.description, '收集说明', 150, 0) : '', category, target: integer('target', 10000), deadline, formats: formats.join(', ').toUpperCase(), maxFileSizeMB: integer('maxFileSizeMB', 1024), maxFilesPerSubmission: integer('maxFilesPerSubmission', 100), maxTotalSizeMB: integer('maxTotalSizeMB', 1048576, current?.maxTotalSizeMB || 2048), storage: 'local', received: current?.received || 0, status: current?.status || 'active' }
+  const result: Collection = { ...collectionRules(body, current), id: current?.id || randomUUID(), uploadToken: current?.uploadToken || token(), title: text(body.title, '收集名称', 50), description: typeof body.description === 'string' ? text(body.description, '收集说明', 150, 0) : '', category, target: integer('target', 10000), deadline, formats: formats.join(', ').toUpperCase(), maxFileSizeMB: integer('maxFileSizeMB', 1024), maxFilesPerSubmission: integer('maxFilesPerSubmission', 100), maxTotalSizeMB: integer('maxTotalSizeMB', 1048576, current?.maxTotalSizeMB || 2048), storage: 'local', received: current?.received || 0, status: current?.status || 'active' }
+  if (result.materials?.length || current?.materials?.length || current?.materialRevision) result.materialRevision = current?.materialRevision && materialRuleKey(current) === materialRuleKey(result) ? current.materialRevision : randomUUID()
+  return result
 }
 
 export async function createApp(config: Config, options: { serveFrontend?: boolean; aiTransport?: AITransport; contentExtractor?: ContentExtractor; storageHTTP?: RemoteHTTP } = {}) {
@@ -176,7 +179,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   app.post('/api/public/:token/upload', { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } }, async (req, reply) => {
     const c = publicCollection(String(object(req.params).token))
     if (c.status !== 'active' || isExpired(c)) throw new HttpError(410, '这项收集已暂停、结束或超过截止时间')
-    if (c.fields?.length || c.naming?.parts.length || c.submissionMode === 'single') throw new HttpError(400, '此任务有新提交规则，请使用新版提交页')
+    if (c.fields?.length || c.materials?.length || c.naming?.parts.length || c.submissionMode === 'single') throw new HttpError(400, '此任务有新提交规则，请使用新版提交页')
     const requestId = text(req.headers['idempotency-key'], '提交编号', 36)
     if (!/^[a-f0-9-]{36}$/.test(requestId)) throw new HttpError(400, '提交编号无效')
     const previous = store.db.prepare('SELECT collection_id,receipt FROM submissions WHERE id=?').get(requestId) as { collection_id: string; receipt: string } | undefined
@@ -213,7 +216,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
       store.transaction(() => {
         if (store.db.prepare('SELECT id FROM submissions WHERE id=?').get(requestId)) throw new HttpError(409, '该提交已完成，请重试获取回执')
         const finalCollection = getCollection(c.id)
-        if (finalCollection.fields?.length || finalCollection.naming?.parts.length || finalCollection.submissionMode === 'single') throw new HttpError(409, '提交规则已更新，请使用新版提交页')
+        if (finalCollection.fields?.length || finalCollection.materials?.length || finalCollection.naming?.parts.length || finalCollection.submissionMode === 'single') throw new HttpError(409, '提交规则已更新，请使用新版提交页')
         const finalError = submissionError(finalCollection, staged.map(s => s.file))
         if (finalError || finalCollection.uploadToken !== c.uploadToken) throw new HttpError(410, finalError || '收集链接已更换，请使用新链接')
         if (store.usedBytes(c.id) + bytes > (finalCollection.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务容量超过上限')
@@ -246,12 +249,12 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   app.post('/api/files/review', async req => { const list = chosenFiles(object(req.body).ids); store.transaction(() => { for (const f of list) store.saveFile({ ...f, status: 'ready' }); store.activity(`将 ${list.length} 个文件标记为已整理`) }); return store.workspace(config.quotaBytes, config.requestBytes) })
   app.post('/api/files/trash', async req => {
     const list = chosenFiles(object(req.body).ids)
-    store.transaction(() => { for (const f of list) store.saveFile({ ...f, deletedAt: new Date().toISOString() }); store.activity(`将 ${list.length} 个文件移入回收站`) })
+    store.transaction(() => { for (const f of list) store.saveFile({ ...f, deletedAt: new Date().toISOString(), materialVersion: (f.materialVersion || 0) + 1 }); store.activity(`将 ${list.length} 个文件移入回收站`) })
     return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.post('/api/files/restore', async req => {
     const list = chosenFiles(object(req.body).ids, true)
-    store.transaction(() => { for (const f of list) { const { deletedAt: _deleted, ...rest } = f; store.saveFile(rest) } store.activity(`从回收站恢复 ${list.length} 个文件`) })
+    store.transaction(() => { for (const f of list) { const { deletedAt: _deleted, ...rest } = f; store.saveFile({ ...rest, materialVersion: (f.materialVersion || 0) + 1 }) } store.activity(`从回收站恢复 ${list.length} 个文件`) })
     return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.post('/api/files/rename', async req => {
@@ -276,7 +279,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     if (newNames.some(name => names.filter(n => n === name).length > 1)) throw new HttpError(409, '命名方案产生重名，请调整规则')
     for (const f of selected) { const next = plan.find(p => p.id === f.id)!.name; if (next.slice(next.lastIndexOf('.')).toLowerCase() !== f.name.slice(f.name.lastIndexOf('.')).toLowerCase()) throw new HttpError(400, '批量命名需保留文件扩展名') }
     const operationId = randomUUID()
-    store.transaction(() => { for (const f of selected) { const change = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: change.name, ...(change.tags ? { tags: change.tags } : {}) }) }; store.db.prepare('INSERT INTO renames(id,data) VALUES (?,?)').run(operationId, JSON.stringify(plan)); if (aiRunId) store.db.prepare('UPDATE ai_runs SET status=? WHERE id=?').run('applied', String(aiRunId)); store.activity(`${aiRunId ? '确认 AI 方案，' : ''}整理 ${selected.length} 个文件的名称${tagPlan.length ? '与分类' : ''}`) })
+    store.transaction(() => { for (const f of selected) { const change = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: change.name, materialVersion: (f.materialVersion || 0) + 1, ...(change.tags ? { tags: change.tags } : {}) }) }; store.db.prepare('INSERT INTO renames(id,data) VALUES (?,?)').run(operationId, JSON.stringify(plan)); if (aiRunId) store.db.prepare('UPDATE ai_runs SET status=? WHERE id=?').run('applied', String(aiRunId)); store.activity(`${aiRunId ? '确认 AI 方案，' : ''}整理 ${selected.length} 个文件的名称${tagPlan.length ? '与分类' : ''}`) })
     return { workspace: store.workspace(config.quotaBytes, config.requestBytes), operationId }
   })
   app.post('/api/files/rename/:id/undo', async req => {
@@ -287,13 +290,14 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     if (files.some(f => { const p = plan.find(p => p.id === f.id)!; return p.tags && JSON.stringify(p.tags) !== JSON.stringify(f.tags || []) })) throw new HttpError(409, '分类已有后续修改，不能直接撤销')
     const targetNames = plan.map(p => p.oldName.toLowerCase()), unchanged = store.files().filter(f => !f.deletedAt && !plan.some(p => p.id === f.id))
     if (new Set(targetNames).size !== targetNames.length || unchanged.some(f => targetNames.includes(f.name.toLowerCase()))) throw new HttpError(409, '原文件名已被占用，无法撤销')
-    store.transaction(() => { for (const f of files) { const p = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: p.oldName, ...(p.oldTags ? { tags: p.oldTags } : {}) }) }; store.db.prepare('UPDATE renames SET undone=1 WHERE id=?').run(id); store.activity(`撤销了 ${files.length} 个文件的整理操作`) })
+    store.transaction(() => { for (const f of files) { const p = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: p.oldName, materialVersion: (f.materialVersion || 0) + 1, ...(p.oldTags ? { tags: p.oldTags } : {}) }) }; store.db.prepare('UPDATE renames SET undone=1 WHERE id=?').run(id); store.activity(`撤销了 ${files.length} 个文件的整理操作`) })
     return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.get('/api/storage', async () => storageSpace(config.dataDir, store.usedBytes(), config.quotaBytes, store.pendingBytes() + budget.bytes))
   registerAI(app, store, options.aiTransport)
   registerArchives(app, store)
   registerCollectionWorkflows(app, store)
+  registerMaterials(app, store, config, session)
   await registerUploads(app, store, config, budget)
   registerUsers(app, store)
   const stopBackups = await registerBackups(app, store, config.backupDir || resolve(config.dataDir, '..', 'backups'))

@@ -72,6 +72,18 @@ test('无效回执不能将文件标记为已收到', async t => {
   assert.equal(e.feedback.some(f => f.phase === 'received'), false); assert.ok(e.values.has('jiyu:upload:fixture'))
 })
 
+test('续传保留逐文件材料归属，改变归属必须重建批次而不能偷偷复用旧分类', async t => {
+  const e = environment(t); e.setFail('1/0')
+  await assert.rejects(e.run(undefined, { materialIds: ['mat_form', 'mat_statement'] }))
+  const saved = JSON.parse(e.values.get('jiyu:upload:fixture')!)
+  assert.deepEqual(JSON.parse(saved.signature).materialIds, ['mat_form', 'mat_statement'])
+  await assert.rejects(e.run(undefined, { materialIds: ['mat_form', 'mat_statement'] }))
+  assert.equal(e.deletes(), 0)
+  e.setFail('')
+  await e.run(undefined, { materialIds: ['mat_statement', 'mat_form'] })
+  assert.equal(e.deletes(), 1)
+})
+
 test('临时失败显示自动重试，恢复后继续并取得回执', async t => {
   const e = environment(t); e.setFail('transient'); await e.run()
   assert.ok(e.feedback.some(f => f.files[1].state === 'retrying' && f.files[1].message?.includes('自动重试')))

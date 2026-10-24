@@ -26,6 +26,85 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* The material ledger keeps receipt coverage separate from manual decisions. */
+.material-workbench { margin-top: 24px; }
+.material-mode-note { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin-bottom: 24px; }
+.material-mode-note strong { font-family: var(--display-font); font-size: 19px; font-weight: 500; }
+.material-mode-note p, .material-mode-note small { display: block; margin-top: 8px; color: var(--secondary); font-size: 12px; line-height: 1.8; }
+.material-counters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--line); padding-block: 18px; margin-bottom: 24px; gap: 16px; }
+.material-counters strong { display: block; font: 30px var(--display-font); }
+.material-counters span { display: block; font-size: 12px; color: var(--secondary); margin-top: 8px; }
+.material-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; margin-bottom: 20px; }
+.material-toolbar .field { flex: 1; min-width: 180px; margin: 0; }
+.material-toolbar .button { margin-bottom: 1px; }
+.material-matrix { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
+.material-matrix table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.material-matrix th, .material-matrix td { padding: 16px 14px; border-bottom: 1px solid var(--line-soft); text-align: left; min-width: 130px; }
+.material-matrix th { background: var(--surface); font-weight: 500; }
+.material-matrix small { display: block; color: var(--muted); font-size: 11px; margin-top: 7px; }
+.material-matrix .status { white-space: normal; line-height: 1.7; }
+.material-people-cards { display: none; }
+.material-person-detail { margin-top: 24px; padding: 24px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); scroll-margin-top: 90px; }
+.material-person-detail > .section-heading { align-items: flex-start; }
+.material-person-detail h3 { font: 23px var(--display-font); }
+.material-person-detail .section-heading p, .material-detail-group > p { color: var(--secondary); font-size: 12px; line-height: 1.8; margin-top: 8px; }
+.material-detail-group { padding-block: 20px; border-top: 1px solid var(--line-soft); }
+.material-detail-group h4 { font-size: 14px; }
+.material-file { padding: 16px; margin-top: 12px; background: var(--canvas); border-radius: 8px; overflow-wrap: anywhere; }
+.material-file-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.material-file-heading strong { flex: 1; min-width: 100px; font-size: 13px; }
+.material-file input[type='checkbox'] { flex-shrink: 0; width: 20px; height: 20px; accent-color: var(--accent); }
+.material-file small { display: block; margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.material-file p { margin-top: 12px; font-size: 12px; line-height: 1.8; white-space: pre-wrap; }
+.material-file .button-row { margin-top: 14px; flex-wrap: wrap; }
+.material-file .button { overflow-wrap: anywhere; white-space: normal; text-align: left; }
+.material-actions { padding-top: 20px; border-top: 1px solid var(--line); }
+.material-actions .section-heading { flex-wrap: wrap; gap: 12px; }
+.material-actions fieldset { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: end; }
+.material-actions fieldset .field { margin: 0; }
+.material-actions fieldset > :nth-child(n+3) { grid-column: 1 / -1; }
+.material-actions textarea { resize: vertical; }
+.material-workbench > .error-text, .material-workbench > .success-text { padding: 16px 0; }
+.material-rules-editor { margin-block: 24px; border-top: 1px solid var(--line); padding-top: 20px; }
+.material-rules-editor .rule-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+.material-rules-editor .rule-heading small { color: var(--muted); }
+.material-rule { padding: 16px; margin-block: 16px; background: var(--surface); border-radius: 8px; }
+.material-rule .check-label { margin-block: 16px; }
+.submission-materials { padding: 18px; background: var(--surface); border-radius: var(--radius); margin-block: 20px; }
+.submission-materials h3 { font: 20px var(--display-font); }
+.submission-materials ul { list-style: none; padding: 0; margin-block: 16px; }
+.submission-materials li { padding-block: 10px; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.8; }
+.submission-materials li p { color: var(--secondary); font-size: 12px; }
+.submission-materials .field { overflow-wrap: anywhere; margin-top: 18px; }
+.submission-materials select { max-width: 100%; min-width: 0; }
+.receipt-material-file { padding-block: 10px; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+.receipt-material-file small { display: block; color: var(--accent-dark); line-height: 1.8; }
+@media (max-width: 900px) {
+  .material-matrix { display: none; }
+  .material-people-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .material-people-cards article { padding: 18px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; overflow-wrap: anywhere; }
+  .material-people-cards header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .material-people-cards h3 { font: 22px var(--display-font); }
+  .material-people-cards small, .material-people-cards p { color: var(--secondary); font-size: 12px; line-height: 1.8; }
+  .material-people-cards ul { list-style: none; padding: 0; margin-block: 16px; }
+  .material-people-cards li { display: flex; flex-direction: column; gap: 6px; padding-block: 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+  .material-people-cards li strong { font-weight: 500; }
+  .material-people-cards li span { color: var(--secondary); }
+  .material-people-cards .button { width: 100%; min-height: 42px; margin-top: 12px; }
+  .material-person-detail { padding: 18px; }
+  .material-file .button { min-height: 42px; }
+}
+@media (max-width: 550px) {
+  .material-counters { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 24px; }
+  .material-people-cards { grid-template-columns: minmax(0, 1fr); }
+  .material-toolbar { align-items: stretch; }
+  .material-toolbar .field, .material-toolbar .button { flex: 1 1 100%; }
+  .material-actions fieldset { grid-template-columns: minmax(0, 1fr); }
+  .material-actions fieldset > * { grid-column: 1; }
+  .material-person-detail > .section-heading { flex-wrap: wrap; gap: 16px; }
+  .material-file .button-row > * { width: 100%; }
+}
+
 .workspace-refresh { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-bottom: 16px; color: var(--muted); font-size: 11px; }
 .start-checklist { margin: 0 0 26px; padding: 24px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); }
 .start-checklist .section-heading { margin-bottom: 20px; align-items: flex-start; }

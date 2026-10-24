@@ -6,6 +6,7 @@ import { fileExtensions, isExpired, submissionError, effectiveFileLimit } from '
 import { formatSize } from '../lib/workspace'
 import { ReceiptManager } from './submission-receipt'
 import { UploadList } from './upload-list'
+import { descriptorKey } from '../lib/materials'
 import type { Collection, UploadReceipt, ReceiptDetail, SubmissionMetadata, UploadFeedback } from '../types'
 
 export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
@@ -22,6 +23,8 @@ export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
 }
 
 function Submission({ collection: c, ownerName, uploadToken }: { collection: Collection; ownerName: string; uploadToken: string }) {
+  const [draft] = useState(() => pendingSubmission(uploadToken))
+  const [materialChoices, setMaterialChoices] = useState<Record<string, string>>(() => Object.fromEntries((draft.files || []).map((f, i) => [descriptorKey(f), draft.materialIds?.[i] || ''])))
   const [files, setFiles] = useState<File[]>([]), [name, setName] = useState(() => pendingSubmission(uploadToken).owner || ''), [error, setError] = useState(''), [receipt, setReceipt] = useState<UploadReceipt | null>(null)
   const [dragging, setDragging] = useState(false), [progress, setProgress] = useState(0), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now)
   const [fields, setFields] = useState<Record<string, string>>(() => pendingSubmission(uploadToken).fields || {}), [replacement, setReplacement] = useState<SubmissionMetadata['replace']>(() => pendingSubmission(uploadToken).replace)
@@ -32,6 +35,7 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 15000); return () => { clearInterval(timer); controller.current?.abort() } }, [])
   const ended = c.status !== 'active' || isExpired(c, now)
   function continueSubmission(detail: ReceiptDetail, replace: boolean, key: string) {
+    setMaterialChoices({})
     setName(detail.owner); setFields(detail.fields); setReplacement(replace ? { receiptId: detail.receipt.receiptId, key } : undefined); setReceipt(null); setFeedback(null); setFiles([]); setError(''); setPending(hasPendingUpload(uploadToken)); requestId.current = crypto.randomUUID()
   }
   const receiptManager = <ReceiptManager c={c} uploadToken={uploadToken} receipt={receipt} onOpen={setReceipt} onContinue={continueSubmission} />
@@ -52,7 +56,7 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     const missing = c.fields?.find(f => f.required && !fields[f.id]?.trim())
     if (missing) { setError(`请填写${missing.label}`); return }
     setBusy(true); setPending(true); setError(''); setProgress(0); controller.current = new AbortController()
-    try { setReceipt(await uploadFiles(uploadToken, files, name.trim(), requestId.current, setProgress, controller.current.signal, { fields: Object.fromEntries((c.fields || []).map(f => [f.id, fields[f.id] || ''])), ...(replacement ? { replace: replacement } : {}) }, setFeedback)); setPending(false) }
+    try { setReceipt(await uploadFiles(uploadToken, files, name.trim(), requestId.current, setProgress, controller.current.signal, { fields: Object.fromEntries((c.fields || []).map(f => [f.id, fields[f.id] || ''])), ...(c.materials?.length ? { materialIds: files.map(f => c.materials!.some(m => m.id === materialChoices[descriptorKey(f)]) ? materialChoices[descriptorKey(f)] : '') } : {}), ...(replacement ? { replace: replacement } : {}) }, setFeedback)); setPending(false) }
     catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
   return <main className="submission-page"><div className="submission-top"><Brand /><span className="preview-badge">文件提交</span></div><section className="submission-card">{receipt ? <div className="submission-success"><CheckCircle2 size={52} strokeWidth={1.4} /><p className="eyebrow">ALL SET</p><h1>每一份认真，都已收到。</h1><p>{receipt.filesCount} 份文件已保存到发起人的服务器。</p><div className="receipt-box"><span>提交回执</span><code>{receipt.receiptId}</code><small>共 {formatSize(receipt.bytes)} · 请保留回执，方便联系发起人。</small></div>{receiptManager}</div> : <><span className="submission-kicker">{ownerName} 邀请你提交文件</span><h1>{c.title}</h1><p className="submission-description">{c.description}</p><div className="submission-meta"><span>截止 {c.deadline}</span><span>已收到 {c.received} 份</span></div>{!busy && receiptManager}{pending && !busy && <div className="form-note">上次提交未取得回执，可直接确认结果，无需重新选择文件。<button className="button" disabled={confirming} onClick={async () => { setConfirming(true); setError(''); try { const saved = await recoverUploadReceipt(uploadToken); if (saved) { setReceipt(saved); setPending(false) } else setError('这批文件尚未保存，请选择原文件继续上传。') } catch (e) { setError((e as Error).message) } finally { setConfirming(false) } }}>确认上次提交结果</button></div>}{ended && !busy ? <div className="empty"><LockKeyhole size={30} /><h3>{c.status === 'active' ? '这项收集已截止' : c.status === 'paused' ? '这项收集已暂停' : '这项收集已结束'}</h3><p>请联系发起人了解下一步安排。</p>{error && <p className="error-text" role="alert">{error}</p>}</div> : <form ref={form} onSubmit={e => { e.preventDefault(); void submit() }}><fieldset disabled={busy || confirming}>
@@ -62,8 +66,10 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     {replacement && <div className="replacement-note"><strong>正在替换原批次</strong><p>请重新选择这批完整文件。提交成功后原批次进入回收站，其他补交批次保持保留。</p><button type="button" className="text-button" onClick={() => setReplacement(undefined)}>取消替换，改为普通提交</button></div>}
     {c.maxFileSizeMB > effectiveFileLimit(c) && <p className="field-hint">当前服务器单次接收上限为 {c.requestLimitMB ?? 512} MB，单文件可上传上限已按此调整。</p>}
     {!!c.naming?.parts.length && <p className="field-hint">发起人已设置自动命名，原扩展名和原名记录会保留。</p>}
+    {!!c.materials?.length && <section className="submission-materials" aria-label="本批文件材料归属"><h3>本次要交的材料</h3><ul>{c.materials.map(m => <li key={m.id}><strong>{m.name} · {m.required ? '必需' : '选填'}</strong><p>{m.description}</p></li>)}</ul><p className="field-hint">可以分批提交。每份文件请明确选择归属；未分类文件仍会收到，但不计入必需材料收齐。人工核对通过与文件收到分别记录。</p>{files.map(f => <label className="field" key={descriptorKey(f)}>{f.name} 的材料归属<select value={c.materials!.some(m => m.id === materialChoices[descriptorKey(f)]) ? materialChoices[descriptorKey(f)] : ''} onChange={e => setMaterialChoices(old => ({ ...old, [descriptorKey(f)]: e.target.value }))}><option value="">未分类，交给发起人确认</option>{c.materials!.map(m => <option value={m.id} key={m.id}>{m.name}{m.required ? '（必需）' : '（选填）'}</option>)}</select></label>)}</section>}
     <input ref={picker} type="file" multiple accept={fileExtensions(c.formats).map(s => `.${s}`).join(',')} className="sr-only" onChange={e => { addFiles(e.target.files); e.target.value = '' }} aria-label="选择提交文件" />
     <button type="button" className={`drop-zone ${dragging ? 'dragging' : ''}`} onClick={() => picker.current?.click()} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files) }}><span><FileUp size={29} strokeWidth={1.5} /></span><strong>点击选择，或把文件拖到这里</strong><p>{c.formats}<br />单文件 ≤ {effectiveFileLimit(c)} MB · 每次最多 {c.maxFilesPerSubmission} 个<br />单次总量 ≤ {c.requestLimitMB || 512} MB</p></button>
+
     <UploadList files={files} feedback={feedback} busy={busy} onRetry={() => void submit()} onRemove={i => { setFiles(old => old.filter((_, index) => index !== i)); setFeedback(null); setError(''); requestId.current = crypto.randomUUID() }} />
     <div className="form-note">文件将保存到发起人的服务器，仅工作台授权成员可查看和下载。</div><button className="button primary submit-button" type="submit" disabled={!files.length}>{busy ? `上传中 ${progress}%` : feedback?.phase === 'paused' ? '继续上传' : error ? '重试并确认回执' : replacement ? `确认替换为 ${files.length} 份文件` : `提交${files.length ? ` ${files.length} 份` : ''}文件`}<ArrowRight size={16} /></button>
   </fieldset>{busy && <div className="upload-progress" role="status"><div className="progress"><span style={{ width: `${progress}%` }} /></div><p>{feedback?.phase === 'saving' ? '文件已传完，正在等待整批回执…' : feedback?.phase === 'preparing' ? '正在连接并读取续传记录…' : `已确认传输 ${progress}%`}<button type="button" className="text-button" onClick={() => controller.current?.abort()}>暂停上传</button></p></div>}{error && <p className="error-text" role="alert">{error}</p>}</form>}</>}</section><footer className="submission-bottom"><span><LockKeyhole size={13} />仅工作台授权成员可见</span><span>由集屿提供支持</span></footer></main>

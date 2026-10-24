@@ -42,6 +42,9 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
       const extensions = fileExtensions(formats)
       if (!extensions.length || extensions.length > 20 || extensions.some(ext => !/^[a-z0-9]{1,12}$/.test(ext))) { setError('请填写有效后缀，例如 PDF, JPG, ZIP，最多 20 种。'); return false }
       const fields = rules.fields || [], roster = (rules.expectedSubmitters || []).map(v => v.trim()).filter(Boolean)
+      const materials = rules.materials || []
+      if (materials.some(m => !m.name.trim()) || new Set(materials.map(m => m.name.normalize('NFKC').trim().toLowerCase())).size !== materials.length) { setError('请填写不重复的材料名称。'); return false }
+      if (materials.length && !materials.some(m => m.required)) { setError('材料清单至少设置一项必需材料。'); return false }
       if (fields.some(f => !f.label.trim())) { setError('请为每个提交字段填写名称。'); return false }
       if (new Set(fields.map(f => f.label.trim())).size !== fields.length) { setError('提交字段名称不能重复。'); return false }
       if (roster.length > 1000 || new Set(roster.map(v => v.normalize('NFKC').toLowerCase())).size !== roster.length) { setError('名单最多 1000 人，请移除重复标识。'); return false }
@@ -74,8 +77,8 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
       </>}
       {step === 2 && <>
         <CollectionRules section="naming" value={rules} onChange={setRules} locked={!!collection?.received} title={title} received={collection?.received || 0} />
-        <dl className="collection-confirm"><div><dt>收集</dt><dd>{title} · {deadline} 截止</dd></div><div><dt>提交</dt><dd>{formats} · 单文件 ≤ {Math.min(maxFileSizeMB, requestLimitMB ?? maxFileSizeMB)} MB · 每次 {maxFilesPerSubmission} 个</dd></div><div><dt>提交人</dt><dd>按{rules.fields?.find(f => f.id === rules.identityField)?.label || '姓名'}识别 · {(rules.expectedSubmitters || []).filter(v => v.trim()).length} 人应交名单</dd></div><div><dt>存储</dt><dd>{storageNames[storage]}{storage !== 'local' && ' + 本机副本'}</dd></div></dl>
-        <p className="field-hint">规则影响后续提交；已有文件保持原名。创建后可预览提交页再分享。</p>
+        <dl className="collection-confirm"><div><dt>收集</dt><dd>{title} · {deadline} 截止</dd></div><div><dt>提交</dt><dd>{formats} · 单文件 ≤ {Math.min(maxFileSizeMB, requestLimitMB ?? maxFileSizeMB)} MB · 每次 {maxFilesPerSubmission} 个</dd></div><div><dt>提交人</dt><dd>按{rules.fields?.find(f => f.id === rules.identityField)?.label || '姓名'}识别 · {(rules.expectedSubmitters || []).filter(v => v.trim()).length} 人应交名单</dd></div><div><dt>材料清单</dt><dd>{rules.materials?.length ? rules.materials.map(m => `${m.name}（${m.required ? '必需' : '选填'}）`).join('、') : '普通文件收集，未设置逐项核对'}</dd></div><div><dt>存储</dt><dd>{storageNames[storage]}{storage !== 'local' && ' + 本机副本'}</dd></div></dl>
+        <p className="field-hint">规则影响后续提交；已有文件保持原名。材料要求变化后，已有人工核对将过期。创建后可预览提交页再分享。</p>
       </>}
       </fieldset>
       {(error || serverError) && <p className="error-text" role="alert">{error || serverError} {serverError && '可返回前两步调整规则后重试。'}</p>}

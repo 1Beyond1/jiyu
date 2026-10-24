@@ -40,7 +40,7 @@ interface ResumeRecord { id: string; key: string; signature: string; savedAt: nu
 const resumeStorage = (uploadToken: string) => `jiyu:upload:${uploadToken}`
 function comparableSignature(signature: string) {
   const b = JSON.parse(signature)
-  return JSON.stringify({ owner: b.owner, files: b.files, fields: Object.fromEntries(Object.entries(b.fields || {}).sort(([a], [z]) => a.localeCompare(z))), ...(b.replace ? { replace: { receiptId: b.replace.receiptId, key: b.replace.key } } : {}) })
+  return JSON.stringify({ owner: b.owner, files: b.files, fields: Object.fromEntries(Object.entries(b.fields || {}).sort(([a], [z]) => a.localeCompare(z))), ...(b.materialIds ? { materialIds: b.materialIds } : {}), ...(b.replace ? { replace: { receiptId: b.replace.receiptId, key: b.replace.key } } : {}) })
 }
 export function forgetUpload(uploadToken: string) { try { localStorage.removeItem(resumeStorage(uploadToken)) } catch { /* Private browsing may disable persistence. */ } }
 function saveUploadReceipt(uploadToken: string, record: ResumeRecord, receipt: UploadReceipt, files: { size: number }[]) {
@@ -68,7 +68,7 @@ export async function discardUpload(uploadToken: string) {
   forgetUpload(uploadToken)
 }
 export function hasPendingUpload(uploadToken: string) { try { const r = JSON.parse(localStorage.getItem(resumeStorage(uploadToken)) || 'null') as ResumeRecord | null; return !!r && r.savedAt > Date.now() - 24 * 60 * 60 * 1000 } catch { return false } }
-export function pendingSubmission(uploadToken: string): SubmissionMetadata & { owner?: string } {
+export function pendingSubmission(uploadToken: string): SubmissionMetadata & { owner?: string; files?: { name: string; size: number; lastModified: number }[] } {
   try { const r = JSON.parse(localStorage.getItem(resumeStorage(uploadToken)) || 'null') as ResumeRecord | null; return r && r.savedAt > Date.now() - 24 * 60 * 60 * 1000 ? JSON.parse(r.signature) : {} } catch { return {} }
 }
 

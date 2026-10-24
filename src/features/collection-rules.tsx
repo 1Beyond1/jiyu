@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { submissionFileName } from '../lib/submission-naming'
 import type { Collection } from '../types'
+import { MaterialRulesEditor } from './material-rules'
 
 export function CollectionRules({ value, onChange, locked, section = 'all', title = '示例收集', received = 0 }: { value: Partial<Collection>; onChange: (v: Partial<Collection>) => void; locked: boolean; section?: 'all' | 'submission' | 'naming'; title?: string; received?: number }) {
   const fields = value.fields || [], naming = value.naming || { parts: [], separator: '_' as const }
@@ -13,7 +14,7 @@ export function CollectionRules({ value, onChange, locked, section = 'all', titl
     <div className="form-row"><label className="field">按什么识别提交人<select disabled={locked} value={value.identityField || 'owner'} onChange={e => update({ identityField: e.target.value })}><option value="owner">姓名</option>{fields.filter(f => f.required).map(f => <option key={f.id} value={f.id}>{f.label || '未命名字段'}</option>)}</select><small>{locked ? '已有提交，标识字段已锁定。' : '同名较多时，建议选择学号或项目编号。'}</small></label><label className="field">同一标识重复提交<select value={value.submissionMode || 'append'} onChange={e => update({ submissionMode: e.target.value as Collection['submissionMode'] })}><option value="append">允许补交，合并统计</option><option value="single">仅一次，后续凭回执替换</option></select></label></div>
     <label className="check-field"><input type="checkbox" checked={value.allowReplacement !== false} onChange={e => update({ allowReplacement: e.target.checked })} />允许提交者凭本人回执替换文件</label>
     <label className="field">应交名单（选填）<textarea rows={3} value={(value.expectedSubmitters || []).join('\n')} onChange={e => update({ expectedSubmitters: e.target.value.split('\n') })} placeholder="每行一个姓名或所选标识，例如学号" /><small>仅工作台成员可见；按上面选择的标识对照。最多 1000 人，不限制名单外的人提交。</small></label>
-    </>}{section !== 'submission' && <><div className="rule-heading"><h3>收到后自动命名</h3><small>按点击顺序组合，最多 6 段</small></div>
+    <MaterialRulesEditor value={value} onChange={onChange} /></>}{section !== 'submission' && <><div className="rule-heading"><h3>收到后自动命名</h3><small>按点击顺序组合，最多 6 段</small></div>
     <div className="naming-tokens">{Object.entries(labels).map(([id, label]) => <button className={`button ${naming.parts.includes(id) ? 'chosen' : ''}`} type="button" key={id} disabled={naming.parts.length >= 6 && !naming.parts.includes(id)} onClick={() => update({ naming: { ...naming, parts: naming.parts.includes(id) ? naming.parts.filter(p => p !== id) : [...naming.parts, id] } })}>{naming.parts.includes(id) ? `${naming.parts.indexOf(id) + 1}. ` : '+ '}{label || '未命名字段'}</button>)}</div>
     {!!naming.parts.length && <label className="field">分隔符<select value={naming.separator} onChange={e => update({ naming: { ...naming, separator: e.target.value as '_' | '-' } })}><option value="_">下划线 _</option><option value="-">短横线 -</option></select></label>}
     <div className="naming-example"><span>命名示意</span><code>{naming.parts.length ? naming.parts.map(p => labels[p] || p).join(naming.separator) + '.pdf' : '保留原文件名.pdf'}</code><small>保留原扩展名与原名记录，重名自动加序号。</small></div><NamingPreview value={value} title={title} received={received} /></>}

@@ -27,13 +27,22 @@ export interface Collection {
   naming?: { parts: string[]; separator: '_' | '-' }
   submissionMode?: 'append' | 'single'
   allowReplacement?: boolean
+  materials?: MaterialRequirement[]
+  materialRevision?: string
 }
 
+export interface MaterialRequirement { id: string; name: string; required: boolean; description: string }
+export type MaterialReviewState = 'unclassified' | 'pending' | 'accepted' | 'needs_changes' | 'stale'
+export interface MaterialReview { decision: 'accepted' | 'needs_changes'; note: string; rulesRevision: string; fileVersion: string; operationId: string; reviewerId: string; reviewerName: string; reviewedAt: string }
+export interface MaterialAction { id: string; signature: string; resultVersion: string }
+export interface MaterialOperation { collectionId: string; rulesRevision: string; requestId: string; files: { id: string; expectedVersion: string; materialId?: string }[]; decision?: 'accepted' | 'needs_changes'; note?: string }
+export interface MaterialSlot { requirement: MaterialRequirement; files: CollectedFile[]; state: 'missing' | 'duplicate' | MaterialReviewState; duplicate: boolean }
+export interface MaterialParticipant { identity: string; owner: string; expected: boolean; files: CollectedFile[]; slots: MaterialSlot[]; unclassified: CollectedFile[]; receivedComplete: boolean; reviewComplete: boolean; status: 'missing' | 'needs_changes' | 'unclassified' | 'pending' | 'accepted'; duplicateCount: number }
 export interface CollectionField { id: string; label: string; required: boolean }
 export interface CollectionTemplate { id: string; name: string; rules: Partial<Collection>; archived: boolean }
-export interface SubmissionMetadata { fields?: Record<string, string>; replace?: { receiptId: string; key: string } }
+export interface SubmissionMetadata { fields?: Record<string, string>; replace?: { receiptId: string; key: string }; materialIds?: string[] }
 export interface Participant { identity: string; owner: string; expected: boolean; fileIds: string[]; bytes: number; submissions: number; latestAt: string; duplicates: number }
-export interface ReceiptDetail { receipt: UploadReceipt; owner: string; fields: Record<string, string>; files: Pick<CollectedFile, 'id' | 'name' | 'size'>[]; superseded: boolean }
+export interface ReceiptDetail { receipt: UploadReceipt; owner: string; fields: Record<string, string>; files: (Pick<CollectedFile, 'id' | 'name' | 'size' | 'materialId'> & { materialState?: MaterialReviewState; materialNote?: string })[]; superseded: boolean }
 export interface DiagnosticItem { id: string; label: string; state: 'ok' | 'attention'; detail: string; action?: string }
 export interface Diagnostics { checkedAt: string; items: DiagnosticItem[] }
 
@@ -56,6 +65,10 @@ export interface CollectedFile {
   submissionFields?: Record<string, string>
   fieldLabels?: Record<string, string>
   participant?: string
+  materialId?: string
+  materialVersion?: number
+  materialReview?: MaterialReview
+  materialAction?: MaterialAction
 }
 
 export interface Activity {

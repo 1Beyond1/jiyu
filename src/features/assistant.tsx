@@ -27,7 +27,7 @@ export function Assistant({ workspace, initialFileIds, initialCollectionId = '',
   const chosen = workspace.files.filter(f => selected.includes(f.id))
   const task = workspace.collections.find(c => c.id === scopeFilter)
   const report = task ? checkCollection(task, workspace.files) : null
-  const summary = report ? `${report.files} 份有效文件，${report.submitted} 人已交；${report.hasRoster ? `${report.missing.length} 人未交` : '未设置应交名单，无法判断缺交'}；${report.contentGroups.length} 组内容重复，${report.nameGroups.length} 组文件名重复。` : ''
+  const summary = report ? `${report.files} 份有效文件，${report.materials ? `${report.materials.received} 人必需项收齐，${report.materials.reviewed} 人人工核对通过，${report.materials.unclassified} 份未分类` : `${report.submitted} 人已交`}；${report.hasRoster ? `${report.missing.length} 人${report.materials ? '必需项未齐' : '未交'}` : '未设置应交名单，无法判断缺交'}；${report.contentGroups.length} 组内容重复，${report.nameGroups.length} 组文件名重复。` : ''
   function changeScope(value: string) { setScopeFilter(value); setSelected(workspace.files.filter(f => f.collectionId === value).slice(0, 30).map(f => f.id)); setConsent(false); setInput('') }
   async function send(text: string) {
     if (!text.trim() || busy || (mode === 'model' && !consent)) return
@@ -43,7 +43,7 @@ export function Assistant({ workspace, initialFileIds, initialCollectionId = '',
       } finally { setBusy(false); setConsent(false); void api<AISettings>('/api/ai/settings').then(setSettings).catch(() => {}) }
     } else {
       let response = '', action = false
-      if (report && /缺交|重复|检查|进度|问题/.test(text)) { response = `「${task!.title}」：${summary}${report.missing.length ? `\n未交标识：${report.missing.slice(0, 30).join('、')}${report.missing.length > 30 ? '等，完整名单请看提交人台账' : ''}。` : ''}\n以上按名单和文件元数据在本机核对，未调用外部模型。`; action = !!report.nameGroups.length && !!chosen.length }
+      if (report && /缺交|重复|检查|进度|问题/.test(text)) { response = `「${task!.title}」：${summary}${report.missing.length ? `\n${report.materials ? '必需项未齐' : '未交'}标识：${report.missing.slice(0, 30).join('、')}${report.missing.length > 30 ? '等，完整名单请看提交人台账' : ''}。` : ''}\n以上按名单和文件元数据在本机核对，未调用外部模型。`; action = !!report.nameGroups.length && !!chosen.length }
       else if (/命名|文件名|改名|整理/.test(text)) { response = task && !chosen.length ? '这项收集尚未选中文件，收到文件后再预览命名。' : '可以试试「{任务}_{提交人}_{序号}」，自动保留原扩展名。下面会打开现有命名规则预览，确认后才应用。'; action = !task || !!chosen.length }
       else if (/进度|多少|情况|概览/.test(text)) {
         const active = workspace.collections.filter(c => collectionState(c) === 'active')

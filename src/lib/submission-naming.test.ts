@@ -6,7 +6,7 @@ import { collectionRules } from '../../server/collection-workflows.ts'
 
 test('内置模板能通过正式规则校验，示例命名保留扩展名并遵守 UTC+8 日期', () => {
   for (const preset of collectionPresets) assert.doesNotThrow(() => collectionRules(preset.rules as Record<string, unknown>))
-  const homework = collectionPresets[0].rules
+  const homework = collectionPresets.find(p => p.id === 'builtin-homework')!.rules
   assert.equal(submissionFileName({ title: '作业', naming: homework.naming }, '报告.PDF', '小/屿', { field_student: 'A01' }, 1, '2026-10-22T16:00:00Z'), 'A01_小-屿_报告.PDF')
   assert.equal(submissionFileName({ title: '交付', naming: { parts: ['date', 'sequence'], separator: '-' } }, '原文.zip', '', {}, 9, '2026-10-22T16:00:00Z'), '20261023-009.zip')
 })
