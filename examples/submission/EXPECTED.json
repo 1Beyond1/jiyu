@@ -1,0 +1,12 @@
+{
+  "source": "original synthetic text created for redistribution; no real person or organization",
+  "roster": ["DEMO-01", "DEMO-02"],
+  "template": "社团作品征集",
+  "required": ["报名表", "作品说明"],
+  "optional": ["补充附件"],
+  "afterFirstSubmission": { "DEMO-01": "必需项收齐，待人工核对", "DEMO-02": "缺项" },
+  "manualReviewNote": "请补充作品的使用过程，再替换本批材料。",
+  "afterReplacement": { "activeFiles": 2, "trashedFiles": 2, "newFileStates": ["pending", "pending"], "oldReceiptSuperseded": true, "inheritedApproval": false },
+  "csvRowsIncludingHeader": 7,
+  "ai": { "configured": false, "realCalls": 0, "expected": "模型尚未配置，不能生成草稿或预核对结果" }
+}

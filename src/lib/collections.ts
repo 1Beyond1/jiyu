@@ -35,6 +35,7 @@ export function submissionError(collection: Collection, files: { name: string; s
   if (files.length > collection.maxFilesPerSubmission) return `每次最多提交 ${collection.maxFilesPerSubmission} 个文件，请减少文件数量。`
   const extensions = fileExtensions(collection.formats)
   for (const file of files) {
+    if (file.size === 0) return `「${file.name}」是空文件，请重新选择`
     if (!extensions.includes(file.name.split('.').pop()?.toLowerCase() || '')) return `「${file.name}」的格式不符合要求，请选择 ${collection.formats} 文件。`
     if (file.size > effectiveFileLimit(collection) * 1024 * 1024) return `「${file.name}」超过单文件 ${effectiveFileLimit(collection)} MB 上限。`
   }

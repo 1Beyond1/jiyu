@@ -17,6 +17,7 @@ import { fileExtensions, isExpired, submissionError } from '../src/lib/collectio
 import type { Collection, CollectedFile, TagChange } from '../src/types.ts'
 import { proposalHash, registerAI } from './ai.ts'
 import type { AITransport } from './ai.ts'
+import type { AIFailureDiagnostics } from './ai-failure-diagnostics.ts'
 import { registerArchives } from './archive.ts'
 import { registerUploads } from './uploads.ts'
 import type { UploadBudget } from './uploads.ts'
@@ -31,6 +32,8 @@ import { storageSpace } from './storage-space.ts'
 import { collectionRules, registerCollectionWorkflows } from './collection-workflows.ts'
 import { diagnostics } from './diagnostics.ts'
 import { materialRuleKey, registerMaterials } from './materials.ts'
+import { confirmCollectionDraft } from './collection-draft.ts'
+import { publicSubmissionError } from './public-errors.ts'
 
 function collectionInput(value: unknown, current?: Collection): Collection {
   const body = object(value)
@@ -47,10 +50,11 @@ function collectionInput(value: unknown, current?: Collection): Collection {
   if (category !== 'design' && category !== 'document' && category !== 'photo') throw new HttpError(400, '收集类型无效')
   const result: Collection = { ...collectionRules(body, current), id: current?.id || randomUUID(), uploadToken: current?.uploadToken || token(), title: text(body.title, '收集名称', 50), description: typeof body.description === 'string' ? text(body.description, '收集说明', 150, 0) : '', category, target: integer('target', 10000), deadline, formats: formats.join(', ').toUpperCase(), maxFileSizeMB: integer('maxFileSizeMB', 1024), maxFilesPerSubmission: integer('maxFilesPerSubmission', 100), maxTotalSizeMB: integer('maxTotalSizeMB', 1048576, current?.maxTotalSizeMB || 2048), storage: 'local', received: current?.received || 0, status: current?.status || 'active' }
   if (result.materials?.length || current?.materials?.length || current?.materialRevision) result.materialRevision = current?.materialRevision && materialRuleKey(current) === materialRuleKey(result) ? current.materialRevision : randomUUID()
+  if (current?.draftOrigin) result.draftOrigin = current.draftOrigin
   return result
 }
 
-export async function createApp(config: Config, options: { serveFrontend?: boolean; aiTransport?: AITransport; contentExtractor?: ContentExtractor; storageHTTP?: RemoteHTTP } = {}) {
+export async function createApp(config: Config, options: { serveFrontend?: boolean; aiTransport?: AITransport; aiFailureDiagnostics?: AIFailureDiagnostics; contentExtractor?: ContentExtractor; storageHTTP?: RemoteHTTP; materialToolMode?: boolean } = {}) {
   const store = new Store(config.dataDir)
   const app = Fastify({ logger: false, trustProxy: config.trustProxy || false, bodyLimit: 64 * 1024, requestTimeout: 10 * 60 * 1000, connectionTimeout: 30 * 1000 })
   const budget: UploadBudget = { bytes: 0, files: 0, active: 0, collections: new Map() }
@@ -99,7 +103,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     if (/^\/api\/archives\/[^/]+\/download$/.test(_req.url.split('?')[0])) {
       const escaped = message.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!)
       reply.code(status).type('text/html; charset=utf-8').send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>集屿 · 下载提示</title><body><main><h1>这次下载未能开始</h1><p>${escaped}</p><p><a href="/#/files">回到集屿重新打包</a></p></main></body></html>`)
-    } else reply.code(status).send({ error: message })
+    } else reply.code(status).send({ error: _req.url.startsWith('/api/public/') ? publicSubmissionError(status, message) : message })
   })
   app.addHook('preHandler', (req, reply, done) => {
     if (!req.isMultipart()) { done(); return }
@@ -151,9 +155,10 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   app.get('/api/workspace', async req => { const workspace = store.workspace(config.quotaBytes, config.requestBytes); if (session(req)?.role === 'viewer') { workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c); workspace.lastRenameId = undefined }; return workspace })
   app.patch('/api/settings', async req => { store.set('displayName', text(object(req.body).displayName, '显示名称', 20)); return store.workspace(config.quotaBytes, config.requestBytes) })
   app.post('/api/settings/diagnostics', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async () => diagnostics(store, config, budget.bytes))
-  app.post('/api/collections', async req => { const c = { ...collectionInput(req.body), storage: requireStorage(store, object(req.body).storage) }; store.transaction(() => { store.saveCollection(c); store.activity(`创建了「${c.title}」`) }); return store.workspace(config.quotaBytes, config.requestBytes) })
+  app.post('/api/collections', async req => { const body = object(req.body), c = { ...collectionInput(body), storage: requireStorage(store, body.storage) }; store.transaction(() => { const origin = confirmCollectionDraft(store, body, c); if (origin) c.draftOrigin = origin; store.saveCollection(c); store.activity(`创建了「${c.title}」`) }); return store.workspace(config.quotaBytes, config.requestBytes) })
   const getCollection = (id: string) => { const c = store.collection(id); if (!c) throw new HttpError(404, '没有找到这项收集'); return c }
   app.patch('/api/collections/:id', async req => {
+    if (object(req.body).draftConfirmation !== undefined) throw new HttpError(400, 'AI 草稿仅用于新建，不覆盖已有收集')
     const current = getCollection(String(object(req.params).id))
     const c = { ...collectionInput(req.body, current), storage: requireStorage(store, object(req.body).storage ?? current.storage) }
     store.transaction(() => { store.saveCollection(c); store.activity(`修改了「${c.title}」的规则`) })
@@ -173,7 +178,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   })
   const publicCollection = (value: string) => { const c = store.byToken(value); if (!c) throw new HttpError(404, '收集链接无效或已撤销'); return c }
   app.get('/api/public/:token', async req => {
-    const { uploadToken: _secret, expectedSubmitters: _roster, ...c } = publicCollection(String(object(req.params).token))
+    const { uploadToken: _secret, expectedSubmitters: _roster, draftOrigin: _draftOrigin, ...c } = publicCollection(String(object(req.params).token))
     return { collection: { ...c, requestLimitMB: config.requestBytes / 1024 ** 2 }, ownerName: store.get('displayName') || '管理员' }
   })
   app.post('/api/public/:token/upload', { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } }, async (req, reply) => {
@@ -197,8 +202,6 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
         const entry = { file: { id: randomUUID(), name, originalName: name, size: 0, collectionId: c.id, owner, createdAt: new Date().toISOString(), storage: c.storage, ...(c.storage !== 'local' ? { remoteStatus: 'queued' } : {}), status: 'pending' } as CollectedFile, key, path: tempPath }
         staged.push(entry)
         budget.files++
-        const invalid = submissionError(c, staged.map(s => s.file))
-        if (invalid) { part.file.resume(); throw new HttpError(400, invalid) }
         await pipeline(part.file, new Transform({ transform(chunk: Buffer, _encoding, callback) {
           const collectionReserved = budget.collections.get(c.id) || 0
           if (bytes + chunk.length > config.requestBytes || store.usedBytes() + store.pendingBytes() + budget.bytes + chunk.length > config.quotaBytes || store.usedBytes(c.id) + store.pendingBytes(c.id) + collectionReserved + chunk.length > (c.maxTotalSizeMB || 2048) * 1024 ** 2) { callback(new HttpError(413, '单次提交、任务或存储总容量超过上限')); return }
@@ -207,6 +210,8 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
         } }), createWriteStream(tempPath, { flags: 'wx', mode: 0o600, flush: true }))
         if (part.file.truncated) throw new HttpError(413, '文件超过大小限制')
         entry.file.sha256 = hash.digest('hex')
+        const invalid = submissionError(c, staged.map(s => s.file))
+        if (invalid) throw new HttpError(400, invalid)
       }
       const latest = getCollection(c.id), invalid = submissionError(latest, staged.map(s => s.file))
       if (invalid) throw new HttpError(400, invalid)
@@ -294,7 +299,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     return store.workspace(config.quotaBytes, config.requestBytes)
   })
   app.get('/api/storage', async () => storageSpace(config.dataDir, store.usedBytes(), config.quotaBytes, store.pendingBytes() + budget.bytes))
-  registerAI(app, store, options.aiTransport)
+  registerAI(app, store, options.aiTransport, options.aiFailureDiagnostics, options.materialToolMode === true)
   registerArchives(app, store)
   registerCollectionWorkflows(app, store)
   registerMaterials(app, store, config, session)

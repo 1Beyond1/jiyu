@@ -11,11 +11,19 @@ import { materialStateVersion, materialReviewState } from '../src/lib/materials.
 test('材料AI预核对：授权正文、真实引用边界、覆盖、人工处置及替换失效（内部注入，非语义质量测试）', async () => {
   const root = resolve('.artifacts'); await mkdir(root, { recursive: true }); const dir = await mkdtemp(join(root, 'material-ai-test-'))
   let responseMode = 'valid', captured: AIRequest | undefined, calls = 0, delayed: (() => void) | undefined, release: (() => void) | undefined
-  const service = await createApp({ dataDir: join(dir, 'data'), origin: 'http://127.0.0.1:3000', host: '127.0.0.1', port: 0, secureCookie: false, quotaBytes: 1024 ** 2, requestBytes: 1024 ** 2 }, { serveFrontend: false, aiTransport: async request => {
+  const service = await createApp({ dataDir: join(dir, 'data'), origin: 'http://127.0.0.1:3000', host: '127.0.0.1', port: 0, secureCookie: false, quotaBytes: 1024 ** 2, requestBytes: 1024 ** 2 }, { serveFrontend: false, materialToolMode: true, aiTransport: async request => {
     calls++; captured = request
     if (responseMode === 'delayed') { delayed?.(); await new Promise<void>(r => { release = r }) }
     const messages = (request.body.input || request.body.messages) as { content: string }[]
     const context = JSON.parse(messages[1].content)
+    if(responseMode.startsWith('tools')){
+      if(responseMode==='tools-outside')return {status:'completed',usage:{input_tokens:1,output_tokens:1},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({actions:[{type:'read',ids:['unselected-file']}]})}]}]}
+      if(responseMode==='tools-skips')return {status:'completed',usage:{input_tokens:1,output_tokens:1},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({findings:context.files.map((f:{file:string})=>({file:f.file,assessment:'attention',message:'未读取',suggestion:'核对',evidence:[]}))})}]}]}
+      if(responseMode==='tools-unknown')return {status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({actions:[{type:'rules'}]})}]}]}
+      const last=JSON.parse(messages[messages.length-1].content)
+      const value=last.toolResults?{findings:context.files.map((f:{file:string;coverage:string})=>{const source=last.toolResults[0].find((s:{id:string})=>s.id===f.file);return {file:f.file,assessment:f.coverage==='unread'?'uncertain':'attention',materialId:'',message:'需人工核对',suggestion:'核对材料',evidence:f.coverage==='unread'?[]:[{file:f.file,quote:responseMode==='tools-forged'?'不存在的原文':source.text.slice(0,8),...(responseMode==='tools'?{start:0,end:8}:{})}]}})}:{actions:[{type:'read',ids:context.files.map((f:{file:string})=>f.file)}]}
+      return {status:'completed',usage:{input_tokens:1,output_tokens:1},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]}
+    }
     const findings = context.files.map((f: { file: string; excerpt: string; coverage: string; materialId: string }) => ({ file: f.file, assessment: f.coverage === 'unread' ? 'uncertain' : f.excerpt.includes('旧活动') ? 'attention' : 'no_issue_in_excerpt', materialId: f.coverage === 'unread' ? '' : 'mat_form', message: f.coverage === 'unread' ? '未读取，无法判断' : '本次要求与已读片段需人工对照', suggestion: '请核对活动名称与缺少的报名信息', evidence: f.coverage === 'unread' ? [] : [{ file: f.file, start: 0, end: Math.min(8, f.excerpt.length), quote: f.excerpt.slice(0, 8) }] }))
     if (responseMode === 'wrong-file') findings[0].evidence[0].file = 'F2'
     if (responseMode === 'forged') findings[0].evidence[0].quote = '凭空生成原文'
@@ -23,7 +31,7 @@ test('材料AI预核对：授权正文、真实引用边界、覆盖、人工处
     if (responseMode === 'out-of-range') { findings[0].evidence[0].start = 5000; findings[0].evidence[0].end = 5008 }
     if (responseMode === 'wrong-material') findings[0].materialId = 'mat_other_task'
     if (responseMode === 'missing-file') findings.pop()
-    if (responseMode === 'whitespace') { const start = context.files[0].excerpt.indexOf('\n'); findings[0].evidence = [{ file: 'F1', start, end: start + 2, quote: context.files[0].excerpt.slice(start, start + 2) }] }
+    if (responseMode === 'whitespace') { const i = context.files.findIndex((f: {excerpt:string}) => f.excerpt.includes('\n')); const f = context.files[i], start = f.excerpt.indexOf('\n'); findings[i].evidence = [{ file: f.file, start, end: start + 2, quote: f.excerpt.slice(start, start + 2) }] }
     if (context.question) return { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ reply: '共享额度协议测试', renames: [] }) }] }] }
     return { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ findings }) }] }] }
   } })
@@ -61,9 +69,18 @@ test('材料AI预核对：授权正文、真实引用边界、覆盖、人工处
     assert.equal(calls, 0)
     const valid = await call('/api/material-ai/run', runBody)
     assert.equal(valid.statusCode, 200, valid.body)
-    const plan = valid.json() as MaterialAIPlan
+    const singlePlan = valid.json() as MaterialAIPlan
+    assert.equal(singlePlan.findings.find(f => f.fileId === files[0].id)?.assessment, 'attention')
+    responseMode='tools-forged';assert.equal((await call('/api/material-ai/run',{...runBody,mode:'tools'})).statusCode,422)
+    responseMode='tools-ambiguous';assert.equal((await call('/api/material-ai/run',{...runBody,mode:'tools'})).statusCode,422)
+    responseMode='tools-skips';assert.equal((await call('/api/material-ai/run',{...runBody,mode:'tools'})).statusCode,422)
+    responseMode='tools-unknown';assert.equal((await call('/api/material-ai/run',{...runBody,mode:'tools'})).statusCode,422)
+    responseMode='tools-outside';assert.equal((await call('/api/material-ai/run',{...runBody,mode:'tools'})).statusCode,422)
+    responseMode='tools';const toolRun=await call('/api/material-ai/run',{...runBody,mode:'tools'});assert.equal(toolRun.statusCode,200,toolRun.body)
+    const plan = toolRun.json() as MaterialAIPlan
+    responseMode='valid'
     assert.equal(plan.preview.testMode, true)
-    assert.equal(plan.findings[0].assessment, 'attention', '错活动样本只验证协议与出处，非真实语义推理')
+    assert.equal(plan.findings.find(f => f.fileId === files[0].id)?.assessment, 'attention', '错活动样本只验证协议与出处，非真实语义推理')
     assert.equal(JSON.stringify(captured!.body).includes('不可外发姓名'), false)
     assert.equal(JSON.stringify(captured!.body).includes('未授权隐藏内容'), false)
     assert.equal(JSON.stringify(captured!.body).includes('尾部独有标记'), false)
@@ -94,15 +111,16 @@ test('材料AI预核对：授权正文、真实引用边界、覆盖、人工处
     const after = (await call(`/api/material-ai/plans/${plan.runId}`, undefined, 'GET')).json() as MaterialAIPlan
     assert.equal(after.stale, true); assert.equal(after.dispositions?.[file.id].decision, 'needs_changes')
     assert.equal(materialReviewState(c, store.files().find(f => f.id === file.id)!), 'needs_changes')
-    const nextPreview = await preview(), nextPlan = (await call('/api/material-ai/run', { ...runBody, previewId: nextPreview.previewId })).json() as MaterialAIPlan
+    responseMode = 'tools'
+    const nextPreview = await preview(), nextPlan = (await call('/api/material-ai/run', { ...runBody, previewId: nextPreview.previewId, mode:'tools' })).json() as MaterialAIPlan
     store.db.prepare('UPDATE documents SET updated_at=? WHERE file_id=?').run('2026-10-24T01:00:00Z', files[1].id)
     assert.equal((await call(`/api/material-ai/plans/${nextPlan.runId}`, undefined, 'GET')).json().stale, true)
     const delayedPreview = await preview(), started = new Promise<void>(r => { delayed = r }); responseMode = 'delayed'
     const pending = call('/api/material-ai/run', { ...runBody, previewId: delayedPreview.previewId }); await started
     store.saveCollection({ ...store.collection(c.id)!, materialRevision: randomUUID() })
     release!(); assert.equal((await pending).statusCode, 409, '模型晚回包拒绝旧快照')
-    responseMode = 'valid'
-    const replacementPreview = await preview(), replacementPlan = (await call('/api/material-ai/run', { ...runBody, previewId: replacementPreview.previewId })).json() as MaterialAIPlan
+    responseMode = 'tools'
+    const replacementPreview = await preview(), replacementPlan = (await call('/api/material-ai/run', { ...runBody, previewId: replacementPreview.previewId, mode:'tools' })).json() as MaterialAIPlan
     await add('随后补交.txt', '新活动补交内容', false)
     const freshFile = store.files().find(f => f.id === file.id)!
     const outdatedAdvice = { ...action, requestId: randomUUID(), rulesRevision: store.collection(c.id)!.materialRevision, files: [{ id: freshFile.id, expectedVersion: materialStateVersion(freshFile) }], aiReview: { ...action.aiReview, runId: replacementPlan.runId } }
@@ -111,6 +129,7 @@ test('材料AI预核对：授权正文、真实引用边界、覆盖、人工处
     await add('本人替换后新表.txt', '新活动报名信息，原件已替换')
     assert.equal((await call(`/api/material-ai/plans/${replacementPlan.runId}`, undefined, 'GET')).json().stale, true)
     assert.equal((await call('/api/materials/review', { ...action, requestId: randomUUID(), rulesRevision: store.collection(c.id)!.materialRevision, aiReview: { ...action.aiReview, runId: replacementPlan.runId } })).statusCode, 409)
+    responseMode = 'valid'
     assert.equal((await call('/api/ai/chat', { prompt: '检查共享额度', fileIds: [], settingsRevision: saved.json().revision, consent: true })).statusCode, 200)
     const usage = (await call('/api/ai/settings', undefined, 'GET')).json()
     assert.equal(usage.usedToday, calls, '通用助手与材料预核对共享每日额度，失败响应也计数')

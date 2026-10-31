@@ -1,7 +1,7 @@
 # 集屿开发约定
 
 - 产品：部署在个人 VPS 的文件收集与整理工作台。当前推进本地存储 MVP，真实服务代码放 `server/`。
-- 中文界面；简约高级，参考 Claude 的暖纸色、炭灰文字、陶土点缀和舒展排版。颜色、字体和间距统一由 `src/styles.css` 管理。
+- 中文界面；视觉为“暖珊瑚 · 亲和”（2026-10-25 用户选定）：暖白底、珊瑚强调、无衬线粗体标题，状态色一色一义。颜色、字体和间距统一由 `src/styles.css` 管理（文件末尾 Visual system v2 层优先）。
 - 先读 `docs/PROJECT.md` 和 `docs/ARCHITECTURE.md`，沿用既有目录。
 - 一个仓库、一个前端应用。不创建 final/v2/backup 等源码副本，不提前创建空服务或 packages。
 - 按功能拆分到 `src/features/`，通用 UI 到 `src/components/`；数据结构到 `src/types.ts`。

@@ -4,13 +4,29 @@ import { assertMaterialAdvice, recordMaterialAdvice } from './material-ai.ts'
 import type { Store } from './store.ts'
 import type { Config } from './config.ts'
 import { digest, HttpError, object, text } from './security.ts'
-import { materialStateVersion, materialFileVersion, materialReportCsv } from '../src/lib/materials.ts'
+import { materialStateVersion, materialFileVersion, materialReportCsv, materialParticipants, materialReviewState, materialStateLabels, materialSnapshotKey } from '../src/lib/materials.ts'
 
 export function materialRuleKey(c: Collection) {
   return JSON.stringify([c.title, c.description, c.formats, c.maxFileSizeMB, c.identityField || 'owner', c.fields || [], c.materials || []])
 }
 
 export function registerMaterials(app: FastifyInstance, store: Store, config: Config, who: (req: FastifyRequest) => { id: string; display_name: string; role: UserRole } | undefined) {
+  app.get('/api/collections/:id/materials', async req => {
+    const c = store.collection(String(object(req.params).id))
+    if (!c?.materials?.length) throw new HttpError(404, '此任务未配置材料清单')
+    const revision = object(req.query).revision
+    if (revision !== undefined && revision !== c.materialRevision) throw new HttpError(409, '材料规则已改变，请刷新后重新读取')
+    const active = store.files().filter(f => f.collectionId === c.id && !f.deletedAt)
+    const people = materialParticipants(c, active)
+    return {
+      collectionId: c.id, rulesRevision: c.materialRevision, generatedAt: new Date().toISOString(),
+      stateVersion: digest(materialSnapshotKey(c, active)),
+      requirements: c.materials,
+      summary: { participants: people.length, receivedComplete: people.filter(p => p.receivedComplete).length, reviewComplete: people.filter(p => p.reviewComplete).length, missing: people.filter(p => !p.receivedComplete).length, needsChanges: people.filter(p => p.status === 'needs_changes').length, unclassified: people.reduce((n, p) => n + p.unclassified.length, 0) },
+      participants: people.map(p => ({ identity: p.identity, owner: p.owner, expected: p.expected, status: p.status, receivedComplete: p.receivedComplete, reviewComplete: p.reviewComplete, duplicateCount: p.duplicateCount, unclassifiedFileIds: p.unclassified.map(f => f.id), slots: p.slots.map(s => ({ materialId: s.requirement.id, state: s.state, label: !s.files.length && !s.requirement.required ? '选填未交' : materialStateLabels[s.state], fileIds: s.files.map(f => f.id), duplicate: s.duplicate })) })),
+      files: active.map(f => ({ id: f.id, materialId: f.materialId || '', materialState: materialReviewState(c, f), materialNote: f.materialReview?.note || '', expectedVersion: materialStateVersion(f) })),
+    }
+  })
   app.get('/api/collections/:id/materials/export', async (req, reply) => {
     const c = store.collection(String(object(req.params).id))
     if (!c?.materials?.length) throw new HttpError(404, '此任务未配置材料清单')

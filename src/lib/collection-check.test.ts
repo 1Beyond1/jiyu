@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { checkCollection, filesForAction } from './collection-check.ts'
 import type { Collection, CollectedFile } from '../types.ts'
+import { materialProgress } from './materials.ts'
 
 test('任务检查按规范化标识核对名单，重复统计排除回收站与其他任务', () => {
   const c: Collection = { id: 'c', title: '作业', description: '', category: 'document', received: 5, target: 30, deadline: '2099-12-31', storage: 'local', status: 'active', formats: 'TXT', maxFileSizeMB: 1, maxFilesPerSubmission: 5, identityField: 'field_student', expectedSubmitters: ['Ａ01', 'A02'] }
@@ -23,4 +24,6 @@ test('材料任务的检查结果按必需项收齐统计，单份已整理文�
   const complete = checkCollection(c, [f, { ...f, id: 's', materialId: 'mat_statement', sha256: 'statement' }])
   assert.deepEqual(complete.materials, { received: 1, reviewed: 0, unclassified: 0 })
   assert.deepEqual(complete.missing, ['A02'])
+  const outsiders = [{ ...f, id: 'o1', participant: '外部' }, { ...f, id: 'o2', participant: '外部', materialId: 'mat_statement', sha256: 'other' }]
+  assert.deepEqual(materialProgress(c, [f, { ...f, id: 's', materialId: 'mat_statement', sha256: 'statement' }, ...outsiders]), { total: 2, received: 1, reviewed: 0 })
 })

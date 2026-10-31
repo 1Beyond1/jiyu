@@ -10,6 +10,10 @@ services:
       JIYU_REQUEST_MB: ${JIYU_REQUEST_MB:-512}
       JIYU_TRUST_PROXY: 'true'
       JIYU_BACKUP_DIR: /backups
+      JIYU_AI_BASE_URL: ${JIYU_AI_BASE_URL:-}
+      JIYU_AI_MODEL: ${JIYU_AI_MODEL:-}
+      JIYU_AI_KEY: ${JIYU_AI_KEY:-}
+      JIYU_AI_DAILY_CALLS: ${JIYU_AI_DAILY_CALLS:-50}
     volumes:
       - data:/data
       - backups:/backups

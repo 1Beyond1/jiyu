@@ -7,6 +7,10 @@ const collection: Collection = { id: 'test', title: '测试收集', description:
 const now = Date.parse('2030-01-20T12:00:00+08:00')
 const file = { name: '资料.PDF', size: 1024 }
 
+test('空文件不能提交', () => {
+  assert.equal(submissionError(collection, [{ ...file, size: 0 }], now), '「资料.PDF」是空文件，请重新选择')
+})
+
 test('格式兼容中文分隔、点前缀与大小写，并去重', () => {
   assert.deepEqual(fileExtensions('.PDF，jpg、PDF; ZIP'), ['pdf', 'jpg', 'zip'])
   assert.equal(submissionError(collection, [file], now), '')

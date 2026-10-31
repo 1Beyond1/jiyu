@@ -12,10 +12,15 @@ import { digest, HttpError, object, safeName, text } from './security.ts'
 import { collectionState, localDate } from '../src/lib/collections.ts'
 import { contentExcerpt } from './content.ts'
 import { registerMaterialAI } from './material-ai.ts'
+import { registerCollectionDraft } from './collection-draft.ts'
+import { tokenUsage } from './ai-usage.ts'
+import { publicGatewayDnsEnabled, resolvePublicGateway } from './ai-public-dns.ts'
+import { failureDiagnostics } from './ai-failure-diagnostics.ts'
+import type { AIFailureDiagnostics } from './ai-failure-diagnostics.ts'
 
-interface SavedSettings { enabled: boolean; protocol: 'responses' | 'chat'; baseUrl: string; model: string; maxDailyCalls: number; encryptedKey?: string }
-export interface AIRequest { endpoint: URL; apiKey: string; body: Record<string, unknown>; signal?: AbortSignal }
-export interface AIInvocation { runId: string; result: Record<string, unknown>; tokens: number; apiKey: string; model: string; testMode: boolean }
+interface SavedSettings { enabled: boolean; protocol: 'responses' | 'chat'; baseUrl: string; model: string; maxDailyCalls: number; encryptedKey?: string; managed?: boolean }
+export interface AIRequest { endpoint: URL; apiKey: string; body: Record<string, unknown>; signal?: AbortSignal; onResponse?: (status: number) => void }
+export interface AIInvocation { runId: string; result: Record<string, unknown>; tokens: number | null; apiKey: string; model: string; testMode: boolean }
 export type AIExecutor = <T>(messages: { role: string; content: string }[], count: number, revision: string, accept: (value: AIInvocation) => T, signal?: AbortSignal, outputLimit?: number) => Promise<T>
 export type AITransport = (request: AIRequest) => Promise<unknown>
 export const proposalHash = (changes: RenameChange[], tags?: TagChange[]) => { const names = changes.map(c => ({ id: c.id, oldName: c.oldName, name: c.name })); return digest(JSON.stringify(tags?.length ? { changes: names, tags } : names)) }
@@ -38,16 +43,17 @@ export function endpointBase(value: unknown) {
   return url.href.replace(/\/$/, '')
 }
 
-export async function modelRequest({ endpoint, apiKey, body, signal }: AIRequest): Promise<unknown> {
+export async function modelRequest({ endpoint, apiKey, body, signal, onResponse }: AIRequest): Promise<unknown> {
   const hostname = endpoint.hostname.replace(/^\[|\]$/g, '')
   let timer: ReturnType<typeof setTimeout> | undefined
-  const addresses = await Promise.race([lookup(hostname, { all: true, verbatim: true }), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('DNS timeout')), 5000) })]).catch(() => { throw new HttpError(502, '无法解析模型服务地址') }).finally(() => clearTimeout(timer))
+  const addresses = publicGatewayDnsEnabled(hostname) ? await resolvePublicGateway(hostname,isPublicAddress,signal) : await Promise.race([lookup(hostname, { all: true, verbatim: true }), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('DNS timeout')), 5000) })]).catch(() => { throw new HttpError(502, '无法解析模型服务地址') }).finally(() => clearTimeout(timer))
   if (!addresses.length || addresses.some(entry => !isPublicAddress(entry.address))) throw new HttpError(400, '模型服务解析到了本机、内网或保留地址')
   const address = addresses[0]
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body)
     const req = httpsRequest(endpoint, { method: 'POST', agent: false, family: address.family, lookup: (_name, _options, callback) => callback(null, address.address, address.family), headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'Content-Length': Buffer.byteLength(payload) }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000) }, response => {
       const status = response.statusCode || 500
+      onResponse?.(status)
       if (status < 200 || status >= 300) {
         response.destroy(); reject(new HttpError(status === 429 ? 429 : 502, status === 401 || status === 403 ? '模型服务拒绝了凭证，请检查 API Key 与模型权限' : status >= 300 && status < 400 ? '模型服务返回了重定向，请直接填写最终服务地址' : status === 429 ? '模型服务调用过于频繁或额度不足，请稍后重试' : '模型服务请求失败，请检查模型、协议和服务地址')); return
       }
@@ -64,6 +70,24 @@ export async function modelRequest({ endpoint, apiKey, body, signal }: AIRequest
 
 const defaults: SavedSettings = { enabled: false, protocol: 'responses', baseUrl: 'https://api.openai.com/v1', model: '', maxDailyCalls: 50 }
 
+// An operator can preconfigure a model through the environment, so nobody has to bring a key to try AI.
+// The key stays in the process environment: never in the database, backups or API responses.
+function managedSettings(): SavedSettings | null {
+  const { JIYU_AI_BASE_URL: baseUrl, JIYU_AI_MODEL: model, JIYU_AI_KEY: key, JIYU_AI_DAILY_CALLS: calls, JIYU_AI_PROTOCOL: protocol } = process.env
+  if (!baseUrl || !model || !key) return null
+  return { enabled: true, protocol: protocol === 'responses' ? 'responses' : 'chat', baseUrl: endpointBase(baseUrl), model, maxDailyCalls: Number(calls) || 50, managed: true }
+}
+
+// Some compatible gateways wrap otherwise valid JSON in a single Markdown fence.
+// Accept only an entire json/plain fence; never strip prose or repair JSON.
+export function parseModelObject(content: string) {
+  try { return object(JSON.parse(content)) } catch {
+    const match = content.trim().match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i)
+    if (match) { try { return object(JSON.parse(match[1])) } catch { /* reject below */ } }
+    throw new HttpError(502, '模型未按 JSON 格式回复，请使用支持 JSON 输出的模型')
+  }
+}
+
 function parseResponse(protocol: SavedSettings['protocol'], value: unknown) {
   const data = object(value)
   let content: unknown
@@ -76,19 +100,19 @@ function parseResponse(protocol: SavedSettings['protocol'], value: unknown) {
     content = choice?.message?.content
   }
   if (typeof content !== 'string' || content.length > 24000) throw new HttpError(502, '模型回复格式无效')
-  let result: Record<string, unknown>
-  try { result = object(JSON.parse(content)) } catch { throw new HttpError(502, '模型未按 JSON 格式回复，请使用支持 JSON 输出的模型') }
-  const usage = data.usage as { total_tokens?: unknown } | undefined
-  return { result, tokens: typeof usage?.total_tokens === 'number' && Number.isSafeInteger(usage.total_tokens) && usage.total_tokens >= 0 ? usage.total_tokens : 0 }
+  return parseModelObject(content)
 }
 
-export function registerAI(app: FastifyInstance, store: Store, transport: AITransport = modelRequest) {
+export function registerAI(app: FastifyInstance, store: Store, transport: AITransport = modelRequest, diagnostics?: AIFailureDiagnostics, materialToolMode = false) {
+  const captureFailure = failureDiagnostics(diagnostics,store.dataDir)
   let active = 0
-  const settings = (): SavedSettings => store.get('ai.settings') ? JSON.parse(store.get('ai.settings')!) : { ...defaults }
+  const settings = (): SavedSettings => store.get('ai.settings') ? JSON.parse(store.get('ai.settings')!) : managedSettings() ?? { ...defaults }
+  const hasCredential = (saved: SavedSettings) => saved.managed || !!saved.encryptedKey
+  const credential = (saved: SavedSettings) => saved.managed ? process.env.JIYU_AI_KEY! : decrypt(store, saved.encryptedKey!)
   const revision = () => digest(JSON.stringify(settings()))
   const status = (): AISettings => {
     const { encryptedKey, ...saved } = settings()
-    return { ...saved, testMode: transport !== modelRequest, revision: revision(), hasKey: !!encryptedKey, keyReady: !!encryptedKey && existsSync(join(store.dataDir, 'secrets.key')), usedToday: (store.db.prepare('SELECT calls FROM ai_usage WHERE day=?').get(localDate()) as { calls: number } | undefined)?.calls || 0 }
+    return { ...saved, testMode: transport !== modelRequest, materialToolMode, revision: revision(), hasKey: !!saved.managed || !!encryptedKey, keyReady: !!saved.managed || (!!encryptedKey && existsSync(join(store.dataDir, 'secrets.key'))), usedToday: (store.db.prepare('SELECT calls FROM ai_usage WHERE day=?').get(localDate()) as { calls: number } | undefined)?.calls || 0 }
   }
   app.get('/api/ai/settings', async () => status())
   app.patch('/api/ai/settings', async req => {
@@ -105,48 +129,65 @@ export function registerAI(app: FastifyInstance, store: Store, transport: AITran
     return status()
   })
   app.delete('/api/ai/settings/key', async () => {
-    const old = settings()
+    const { managed: _managed, ...old } = settings()
     store.transaction(() => { store.set('ai.settings', JSON.stringify({ ...old, enabled: false, encryptedKey: undefined })); store.activity('移除 AI 凭证并停用模型调用') })
     return status()
   })
-  app.get('/api/ai/history', async () => store.db.prepare('SELECT id,model,fileCount,status,tokens,createdAt FROM ai_runs ORDER BY rowid DESC LIMIT 20').all())
+  app.get('/api/ai/history', async () => store.db.prepare('SELECT id,model,fileCount,status,tokens,createdAt FROM ai_runs ORDER BY rowid DESC LIMIT 20').all().map(row => {
+    const saved = store.get(`ai.accounting.${row.id}`), accounting = saved ? JSON.parse(saved) : null
+    return { ...row, tokens: accounting ? accounting.tokens : Number(row.tokens) > 0 ? row.tokens : null, accounting }
+  }))
   const execute: AIExecutor = async (messages, count, settingsRevision, accept, signal, outputLimit = 2048) => {
     const saved = settings()
-    if (!saved.enabled || !saved.encryptedKey) throw new HttpError(400, 'AI 尚未启用，请先配置模型')
+    if (!saved.enabled || !hasCredential(saved)) throw new HttpError(400, 'AI 尚未启用，请先配置模型')
     if (settingsRevision !== revision()) throw new HttpError(409, '模型服务设置已改变，请重新确认发送范围')
-    const apiKey = decrypt(store, saved.encryptedKey)
+    const apiKey = credential(saved)
     if (active >= 2) throw new HttpError(429, '已有 AI 请求正在处理，请稍后重试')
     const runId = randomUUID(), day = localDate()
     store.transaction(() => {
       const calls = (store.db.prepare('SELECT calls FROM ai_usage WHERE day=?').get(day) as { calls: number } | undefined)?.calls || 0
       if (calls >= saved.maxDailyCalls) throw new HttpError(429, '已达到今日 AI 调用上限，失败尝试也计入次数')
       store.db.prepare('INSERT INTO ai_usage VALUES (?,1) ON CONFLICT(day) DO UPDATE SET calls=calls+1').run(day)
-      store.db.prepare('INSERT INTO ai_runs(id,model,fileCount,status,createdAt) VALUES (?,?,?,?,?)').run(runId, saved.model, count, 'pending', new Date().toISOString())
+      store.db.prepare('INSERT INTO ai_runs(id,model,fileCount,status,tokens,createdAt) VALUES (?,?,?,?,?,?)').run(runId, saved.model, count, 'pending', -1, new Date().toISOString())
       store.db.exec("DELETE FROM ai_runs WHERE id NOT IN (SELECT id FROM ai_runs ORDER BY rowid DESC LIMIT 1000); DELETE FROM ai_usage WHERE day < date('now','-31 days');")
       store.db.exec('DELETE FROM ai_plans WHERE run_id NOT IN (SELECT id FROM ai_runs)')
+      store.db.exec("DELETE FROM settings WHERE key LIKE 'ai.accounting.%' AND substr(key,15) NOT IN (SELECT id FROM ai_runs)")
     })
     active++
     let accepting = false
+    const started = Date.now(), inputHash = digest(JSON.stringify(messages))
+    let usage = tokenUsage(null), httpStatus: number | null = null, outcome = 'failed'
+    let providerResponse:unknown
     try {
-      const response = await transport({ endpoint: new URL(`${saved.baseUrl}/${saved.protocol === 'responses' ? 'responses' : 'chat/completions'}`), apiKey, signal, body: saved.protocol === 'responses' ? { model: saved.model, input: messages, text: { format: { type: 'json_object' } }, max_output_tokens: outputLimit, store: false } : { model: saved.model, messages, response_format: { type: 'json_object' }, max_tokens: outputLimit, stream: false, store: false } })
+      const response = await transport({ endpoint: new URL(`${saved.baseUrl}/${saved.protocol === 'responses' ? 'responses' : 'chat/completions'}`), apiKey, signal, onResponse: status => { httpStatus = status }, body: saved.protocol === 'responses' ? { model: saved.model, input: messages, text: { format: { type: 'json_object' } }, max_output_tokens: outputLimit, store: false } : { model: saved.model, messages, response_format: { type: 'json_object' }, max_tokens: outputLimit, stream: false, store: false } })
+      providerResponse=response
+      usage = tokenUsage(response && typeof response === 'object' ? (response as Record<string, unknown>).usage : null, apiKey)
       if (signal?.aborted) throw new HttpError(499, 'AI 请求已取消')
-      const { result, tokens } = parseResponse(saved.protocol, response)
+      const result = parseResponse(saved.protocol, response), tokens = usage.tokens
       accepting = true
-      return store.transaction(() => {
+      const accepted = store.transaction(() => {
         const accepted = accept({ runId, result, tokens, apiKey, model: saved.model, testMode: transport !== modelRequest })
-        store.db.prepare('UPDATE ai_runs SET status=?,tokens=? WHERE id=?').run('succeeded', tokens, runId)
+        store.db.prepare('UPDATE ai_runs SET status=?,tokens=? WHERE id=?').run('succeeded', tokens ?? -1, runId)
         return accepted
       })
+      outcome = 'succeeded'
+      return accepted
     } catch (error) {
-      store.db.prepare('UPDATE ai_runs SET status=? WHERE id=?').run(signal?.aborted ? 'cancelled' : 'failed', runId)
+      await captureFailure(inputHash,runId,providerResponse,apiKey,error)
+      outcome = signal?.aborted ? 'cancelled' : accepting ? 'rejected' : 'failed'
+      store.db.prepare('UPDATE ai_runs SET status=?,tokens=? WHERE id=?').run(signal?.aborted ? 'cancelled' : 'failed', usage.tokens ?? -1, runId)
       if (error instanceof HttpError || accepting) throw error
       throw new HttpError(502, '模型请求失败，未修改文件。请检查服务设置后重试')
-    } finally { active-- }
+    } finally {
+      active--
+      store.set(`ai.accounting.${runId}`, JSON.stringify({ ...usage, runId, model: saved.model, protocol: saved.protocol, inputHash, elapsedMs: Date.now() - started, httpStatus, outcome, testMode: transport !== modelRequest, cost: null, costStatus: 'unknown' }))
+    }
   }
-  registerMaterialAI(app, store, status, execute)
+  registerMaterialAI(app, store, status, execute, materialToolMode)
+  registerCollectionDraft(app, store, execute)
   const run = async (value: unknown, testing = false, signal?: AbortSignal): Promise<AIReply> => {
     const body = object(value), saved = settings()
-    if (!saved.enabled || !saved.encryptedKey) throw new HttpError(400, 'AI 尚未启用，请先在设置中配置模型服务')
+    if (!saved.enabled || !hasCredential(saved)) throw new HttpError(400, 'AI 尚未启用，请先在设置中配置模型服务')
     if (body.consent !== true) throw new HttpError(400, '请先确认本次发送范围')
     if (body.settingsRevision !== revision()) throw new HttpError(409, '模型设置已变更，请重新打开助手确认服务商和发送范围')
     const prompt = testing ? '请返回 JSON：{"reply":"连接成功","renames":[]}' : text(body.prompt, '本次问题', 1000)
@@ -187,7 +228,7 @@ export function registerAI(app: FastifyInstance, store: Store, transport: AITran
         return { id: file.id, name: file.name, oldTags: file.tags || [], tags: [...new Set(item.tags.map(tag => String(tag).trim()))] }
       })
       if (new Set(tags.map(c => c.id)).size !== tags.length) throw new HttpError(422, '模型重复引用分类文件')
-      store.db.prepare('UPDATE ai_runs SET status=?,tokens=?,proposalHash=? WHERE id=?').run('succeeded', tokens, changes.length || tags.length ? proposalHash(changes, tags) : null, runId)
+      store.db.prepare('UPDATE ai_runs SET status=?,tokens=?,proposalHash=? WHERE id=?').run('succeeded', tokens ?? -1, changes.length || tags.length ? proposalHash(changes, tags) : null, runId)
       if (tags.length) store.db.prepare('INSERT INTO ai_plans VALUES (?,?)').run(runId, JSON.stringify(tags))
       store.db.exec('DELETE FROM ai_plans WHERE run_id NOT IN (SELECT id FROM ai_runs)')
       store.activity(`AI 生成整理建议，涉及 ${selected.length} 个文件，等待用户决定`)

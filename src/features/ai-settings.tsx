@@ -12,7 +12,7 @@ export function AISettingsPanel() {
   }
   useEffect(() => { void load() }, [])
   function update(changes: Partial<AISettings>) { setSettings(old => old ? { ...old, ...changes } : old); setDirty(true); setNotice('') }
-  return <section className="settings-panel full ai-settings"><div className="ai-settings-heading"><span className="assistant-mark"><Sparkles size={19} /></span><div><h2>模型服务</h2><p>接入你自己的模型，辅助理解文件信息与命名。</p></div>{settings && <span className={`status ${settings.enabled ? 'active' : 'neutral'}`}><i />{settings.enabled ? '已启用' : '未启用'}</span>}</div>{!settings ? <><p>{error || '正在读取模型设置…'}</p>{error && <button className="button" onClick={() => void load()}><RefreshCw size={15} />重新读取</button>}</> : <>
+  return <section className="settings-panel full ai-settings"><div className="ai-settings-heading"><span className="assistant-mark"><Sparkles size={19} /></span><div><h2>模型服务</h2><p>{settings?.managed ? '本站已预置模型，无需配置即可使用；想换成自己的模型时，填写下方地址和 API Key 并保存。' : '接入你自己的模型，辅助理解文件信息与命名。'}</p></div>{settings && <span className={`status ${settings.enabled ? 'active' : 'neutral'}`}><i />{settings.enabled ? '已启用' : '未启用'}</span>}</div>{!settings ? <><p>{error || '正在读取模型设置…'}</p>{error && <button className="button" onClick={() => void load()}><RefreshCw size={15} />重新读取</button>}</> : <>
     <form onSubmit={async e => {
       e.preventDefault(); setBusy(true); setError(''); setNotice('')
       try { const saved = await api<AISettings>('/api/ai/settings', 'PATCH', { ...settings, apiKey }); setSettings(saved); setApiKey(''); setDirty(false); setNotice('模型设置已保存；尚未发起模型调用。') } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
@@ -30,6 +30,6 @@ export function AISettingsPanel() {
       {dirty && <p className="field-hint">请先保存修改，再测试连接。</p>}
     </fieldset></form>
     {remove && <div className="rotate-confirm"><p>移除凭证会同时停用 AI；文件与历史命名操作保留。</p><button className="button" disabled={busy} onClick={() => setRemove(false)}>取消</button><button className="button" disabled={busy} onClick={async () => { setBusy(true); try { setSettings(await api<AISettings>('/api/ai/settings/key', 'DELETE')); setRemove(false); setApiKey(''); setDirty(false); setNotice('已移除凭证并停用 AI。') } catch (e) { setError((e as Error).message) } finally { setBusy(false) } }}>确认移除凭证</button></div>}
-    {!!history.length && <details className="ai-history"><summary>最近模型调用 · 只记录状态与用量</summary>{history.map(run => <div key={run.id}><span>{run.model}<small>{formatDate(run.createdAt)} · {run.fileCount} 个文件 · {run.tokens || '—'} tokens</small></span><em>{({ pending: '处理中', succeeded: '已生成建议', applied: '已确认应用', failed: '失败', cancelled: '已取消', interrupted: '重启中断' } as Record<string, string>)[run.status] || run.status}</em></div>)}</details>}
+    {!!history.length && <details className="ai-history"><summary>最近模型调用 · 只记录状态与用量</summary>{history.map(run => <div key={run.id}><span>{run.model}<small>{formatDate(run.createdAt)} · {run.fileCount} 个文件 · {run.tokens === null ? '用量未知' : `${run.tokens} tokens`} · 费用未知</small></span><em>{({ pending: '处理中', succeeded: '已生成建议', applied: '已确认应用', failed: '失败', cancelled: '已取消', interrupted: '重启中断' } as Record<string, string>)[run.status] || run.status}</em></div>)}</details>}
   </>}</section>
 }

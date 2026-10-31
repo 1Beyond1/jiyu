@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
 import { Modal } from '../components/ui'
-import type { Collection, CollectionTemplate, StorageProfile } from '../types'
+import type { Collection, CollectionInput, DraftConfirmation, CollectionTemplate, StorageProfile } from '../types'
+import { CollectionDraftEditor } from './collection-draft'
 import { storageNames } from '../types'
 import { api } from '../lib/api'
 import { defaultCollectionLimits, fileExtensions, localDate, nextWeek } from '../lib/collections'
 import { CollectionRules } from './collection-rules'
 import { TemplatePicker } from './collection-templates'
 
-export function CollectionForm({ collection, initialStorage = 'local', onClose, onSave, busy = false, serverError, requestLimitMB }: { collection?: Collection; initialStorage?: Collection['storage']; onClose: () => void; onSave: (c: Collection) => void; busy?: boolean; serverError?: string; requestLimitMB?: number }) {
+export function CollectionForm({ collection, initialStorage = 'local', onClose, onSave, busy = false, serverError, requestLimitMB }: { collection?: Collection; initialStorage?: Collection['storage']; onClose: () => void; onSave: (c: CollectionInput) => void; busy?: boolean; serverError?: string; requestLimitMB?: number }) {
+  const [draftConfirmation, setDraftConfirmation] = useState<DraftConfirmation>()
   const [title, setTitle] = useState(collection?.title || '')
   const [description, setDescription] = useState(collection?.description || '')
   const [target, setTarget] = useState(collection?.target || 20)
@@ -28,6 +30,7 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
   useEffect(() => { void api<{ profiles: StorageProfile[] }>('/api/storage/connections').then(s => { setConnections(s.profiles.filter(p => p.enabled)); setStorageError('') }).catch(() => setStorageError('暂时无法读取云端连接，可继续选择本机，或关闭后重试。')) }, [])
   useEffect(() => { stepHeading.current?.focus(); stepHeading.current?.scrollIntoView({ block: 'nearest' }) }, [step])
   function applyTemplate(t: CollectionTemplate | null) {
+    setDraftConfirmation(undefined)
     const r = t?.rules || {}
     setTemplateId(t?.id || 'blank'); setTemplateName(t?.name || ''); setTitle(r.title || ''); setDescription(r.description || '')
     setCategory(r.category || 'document'); setTarget(r.target || 20); setFormats(r.formats || 'PDF, DOCX, XLSX, ZIP')
@@ -45,6 +48,7 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
       const materials = rules.materials || []
       if (materials.some(m => !m.name.trim()) || new Set(materials.map(m => m.name.normalize('NFKC').trim().toLowerCase())).size !== materials.length) { setError('请填写不重复的材料名称。'); return false }
       if (materials.length && !materials.some(m => m.required)) { setError('材料清单至少设置一项必需材料。'); return false }
+      if (draftConfirmation?.resolutions.some(a => !materials.some(m => m.id === a.materialId && m.description.includes(a.answer)))) { setError('请将已澄清答复保留在对应材料要求中，或取消 AI 来源后按人工设置。'); return false }
       if (fields.some(f => !f.label.trim())) { setError('请为每个提交字段填写名称。'); return false }
       if (new Set(fields.map(f => f.label.trim())).size !== fields.length) { setError('提交字段名称不能重复。'); return false }
       if (roster.length > 1000 || new Set(roster.map(v => v.normalize('NFKC').toLowerCase())).size !== roster.length) { setError('名单最多 1000 人，请移除重复标识。'); return false }
@@ -52,12 +56,14 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
     setError(''); return true
   }
   return <Modal title={collection ? '编辑收集规则' : '发起一项新收集'} subtitle={collection ? '原分享链接保持有效，已有文件会保留。' : '选好规则，再用一个链接收齐文件。'} onClose={() => { if (!busy) onClose() }}>
+    {!collection && step === 0 && <CollectionDraftEditor onApply={value => { setTitle(value.title); setDescription(value.description); setRules(old => ({ ...old, materials: value.materials })); setDraftConfirmation(value.confirmation); setTemplateId(''); setTemplateName(''); setError('') }} />}
+    {draftConfirmation && <div className="form-note">已带入人工确认的材料草稿；截止日期仍是原表单默认值，请自行设置并确认。{draftConfirmation.resolutions.map(a => <p key={a.id}>需保留的人工补充要求：{a.answer}</p>)}<button type="button" className="text-button" disabled={busy} onClick={() => setDraftConfirmation(undefined)}>取消 AI 来源，保留为人工草稿</button></div>}
     <ol className="collection-steps" aria-label="收集设置步骤">{steps.map((label, i) => <li key={label} aria-current={step === i ? 'step' : undefined}><span>{i + 1}</span>{label}</li>)}</ol>
     <h3 ref={stepHeading} className="wizard-heading" tabIndex={-1}>{steps[step]}</h3>
     <form ref={form} noValidate onSubmit={e => {
       e.preventDefault(); if (busy || !validate()) return
       if (step < 2) { setStep(step + 1); return }
-      onSave({ ...rules, expectedSubmitters: (rules.expectedSubmitters || []).map(v => v.trim()).filter(Boolean), id: collection?.id || crypto.randomUUID(), title: title.trim(), description: description.trim() || '期待每一份认真准备的文件', target, deadline, category, formats: fileExtensions(formats).join(', ').toUpperCase(), received: collection?.received || 0, storage, status: collection?.status || 'active', maxFileSizeMB, maxFilesPerSubmission, maxTotalSizeMB })
+      onSave({ ...rules, ...(draftConfirmation ? { draftConfirmation } : {}), expectedSubmitters: (rules.expectedSubmitters || []).map(v => v.trim()).filter(Boolean), id: collection?.id || crypto.randomUUID(), title: title.trim(), description: description.trim() || '期待每一份认真准备的文件', target, deadline, category, formats: fileExtensions(formats).join(', ').toUpperCase(), received: collection?.received || 0, storage, status: collection?.status || 'active', maxFileSizeMB, maxFilesPerSubmission, maxTotalSizeMB })
     }}>
       <fieldset disabled={busy}>
       {step === 0 && <>
@@ -72,7 +78,7 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
       {step === 1 && <>
         {requestLimitMB !== undefined && <p className="field-hint">服务器每次最多接收 {requestLimitMB} MB；当前单文件实际可传 {Math.min(maxFileSizeMB, requestLimitMB)} MB，多份文件合计也须在单次上限内。</p>}
         <label className="field">允许的文件格式<input required maxLength={260} value={formats} onChange={e => setFormats(e.target.value)} /><small>多个后缀用逗号分隔，例如 PDF, JPG, ZIP。</small></label>
-        <details className="collection-limits"><summary>大小与数量：每个 ≤ {maxFileSizeMB} MB，每次 ≤ {maxFilesPerSubmission} 个</summary><div className="form-row"><label className="field">单文件上限（MB）<input type="number" required min={1} max={1024} value={maxFileSizeMB} onChange={e => setMaxFileSizeMB(Number(e.target.value))} /></label><label className="field">每次最多提交（个）<input type="number" required min={1} max={100} value={maxFilesPerSubmission} onChange={e => setMaxFilesPerSubmission(Number(e.target.value))} /></label></div><label className="field">任务总容量（MB）<input type="number" required min={1} max={1048576} value={maxTotalSizeMB} onChange={e => setMaxTotalSizeMB(Number(e.target.value))} /><small>回收站文件也计入容量。</small></label></details>
+        <details className="collection-limits"><summary>大小与数量：单文件实际 ≤ {Math.min(maxFileSizeMB, requestLimitMB ?? maxFileSizeMB)} MB，每次 ≤ {maxFilesPerSubmission} 个</summary>{requestLimitMB !== undefined && <p className="field-hint">这里可设置任务规则，但不能突破服务器上限；当前单文件实际可传 {Math.min(maxFileSizeMB, requestLimitMB)} MB。</p>}<div className="form-row"><label className="field">单文件规则上限（MB）<input type="number" required min={1} max={1024} value={maxFileSizeMB} onChange={e => setMaxFileSizeMB(Number(e.target.value))} /></label><label className="field">每次最多提交（个）<input type="number" required min={1} max={100} value={maxFilesPerSubmission} onChange={e => setMaxFilesPerSubmission(Number(e.target.value))} /></label></div><label className="field">任务总容量（MB）<input type="number" required min={1} max={1048576} value={maxTotalSizeMB} onChange={e => setMaxTotalSizeMB(Number(e.target.value))} /><small>回收站文件也计入容量。</small></label></details>
         <CollectionRules section="submission" value={rules} onChange={setRules} locked={!!collection?.received} />
       </>}
       {step === 2 && <>

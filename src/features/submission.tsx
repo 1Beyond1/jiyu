@@ -32,6 +32,9 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
   const [feedback, setFeedback] = useState<UploadFeedback | null>(null)
   const [pending, setPending] = useState(() => hasPendingUpload(uploadToken))
   const picker = useRef<HTMLInputElement>(null), form = useRef<HTMLFormElement>(null), controller = useRef<AbortController | null>(null), requestId = useRef(crypto.randomUUID())
+  // Files picked from a material card are assigned to that material; the generic drop zone leaves them unclassified.
+  const pickFor = useRef('')
+  const submitButton = useRef<HTMLButtonElement>(null)
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 15000); return () => { clearInterval(timer); controller.current?.abort() } }, [])
   const ended = c.status !== 'active' || isExpired(c, now)
   function continueSubmission(detail: ReceiptDetail, replace: boolean, key: string) {
@@ -39,15 +42,18 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     setName(detail.owner); setFields(detail.fields); setReplacement(replace ? { receiptId: detail.receipt.receiptId, key } : undefined); setReceipt(null); setFeedback(null); setFiles([]); setError(''); setPending(hasPendingUpload(uploadToken)); requestId.current = crypto.randomUUID()
   }
   const receiptManager = <ReceiptManager c={c} uploadToken={uploadToken} receipt={receipt} onOpen={setReceipt} onContinue={continueSubmission} />
-  function addFiles(incoming: FileList | null) {
+  function addFiles(incoming: FileList | null, materialId = '') {
     if (!incoming || busy) return
-    const next = [...files]
-    for (const file of Array.from(incoming)) if (!next.some(f => f.name === file.name && f.size === file.size && f.lastModified === file.lastModified)) next.push(file)
+    const next = [...files], added: File[] = []
+    for (const file of Array.from(incoming)) if (!next.some(f => f.name === file.name && f.size === file.size && f.lastModified === file.lastModified)) { next.push(file); added.push(file) }
     const invalid = submissionError(c, next)
     if (invalid) { setError(invalid); return }
     if (next.reduce((sum, f) => sum + f.size, 0) > (c.requestLimitMB || 512) * 1024 ** 2) { setError(`单次提交总量不能超过 ${c.requestLimitMB || 512} MB`); return }
+    if (materialId && c.materials?.some(m => m.id === materialId)) setMaterialChoices(old => ({ ...old, ...Object.fromEntries(added.map(f => [descriptorKey(f), materialId])) }))
     setFeedback(null); setFiles(next); setError(''); requestId.current = crypto.randomUUID()
   }
+  function openPicker(materialId = '') { pickFor.current = materialId; picker.current?.click() }
+  const choiceOf = (f: File) => c.materials?.some(m => m.id === materialChoices[descriptorKey(f)]) ? materialChoices[descriptorKey(f)] : ''
   async function submit() {
     if (busy) return
     if (!form.current?.reportValidity()) return
@@ -66,11 +72,14 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     {replacement && <div className="replacement-note"><strong>正在替换原批次</strong><p>请重新选择这批完整文件。提交成功后原批次进入回收站，其他补交批次保持保留。</p><button type="button" className="text-button" onClick={() => setReplacement(undefined)}>取消替换，改为普通提交</button></div>}
     {c.maxFileSizeMB > effectiveFileLimit(c) && <p className="field-hint">当前服务器单次接收上限为 {c.requestLimitMB ?? 512} MB，单文件可上传上限已按此调整。</p>}
     {!!c.naming?.parts.length && <p className="field-hint">发起人已设置自动命名，原扩展名和原名记录会保留。</p>}
-    {!!c.materials?.length && <section className="submission-materials" aria-label="本批文件材料归属"><h3>本次要交的材料</h3><ul>{c.materials.map(m => <li key={m.id}><strong>{m.name} · {m.required ? '必需' : '选填'}</strong><p>{m.description}</p></li>)}</ul><p className="field-hint">可以分批提交。每份文件请明确选择归属；未分类文件仍会收到，但不计入必需材料收齐。人工核对通过与文件收到分别记录。</p>{files.map(f => <label className="field" key={descriptorKey(f)}>{f.name} 的材料归属<select value={c.materials!.some(m => m.id === materialChoices[descriptorKey(f)]) ? materialChoices[descriptorKey(f)] : ''} onChange={e => setMaterialChoices(old => ({ ...old, [descriptorKey(f)]: e.target.value }))}><option value="">未分类，交给发起人确认</option>{c.materials!.map(m => <option value={m.id} key={m.id}>{m.name}{m.required ? '（必需）' : '（选填）'}</option>)}</select></label>)}</section>}
-    <input ref={picker} type="file" multiple accept={fileExtensions(c.formats).map(s => `.${s}`).join(',')} className="sr-only" onChange={e => { addFiles(e.target.files); e.target.value = '' }} aria-label="选择提交文件" />
-    <button type="button" className={`drop-zone ${dragging ? 'dragging' : ''}`} onClick={() => picker.current?.click()} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files) }}><span><FileUp size={29} strokeWidth={1.5} /></span><strong>点击选择，或把文件拖到这里</strong><p>{c.formats}<br />单文件 ≤ {effectiveFileLimit(c)} MB · 每次最多 {c.maxFilesPerSubmission} 个<br />单次总量 ≤ {c.requestLimitMB || 512} MB</p></button>
+    {!!c.materials?.length && <section className="submission-materials" aria-label="本批文件材料归属"><h3>本次要交的材料</h3><p className="field-hint">点每项材料下方的按钮上传，文件会自动归到这一项；也可以分批提交。“已选择”只代表这批将要上传，收到后仍由发起人人工核对。</p>
+      <div className="material-cards">{c.materials.map(m => { const mine = files.filter(f => choiceOf(f) === m.id); return <article key={m.id} className={`material-card ${mine.length ? 'has-files' : ''}`}><header><strong>{m.name}</strong><span className={`mstate ${m.required ? 'required' : 'optional'}`}>{m.required ? '必需' : '选填'}</span></header>{m.description && <p>{m.description}</p>}{mine.length > 0 && <ul>{mine.map(f => <li key={descriptorKey(f)}>{f.name}<small>{formatSize(f.size)}</small></li>)}</ul>}<button type="button" className="button material-pick" onClick={() => openPicker(m.id)}><FileUp size={16} />{mine.length ? `再选 ${m.name}` : `上传 ${m.name}`}</button></article> })}</div>
+      {files.length > 0 && <details className="material-adjust" open={files.some(f => !choiceOf(f))}><summary>{files.filter(f => !choiceOf(f)).length ? `${files.filter(f => !choiceOf(f)).length} 份文件还没选归属` : '调整已选文件的归属'}</summary>{files.map(f => <label className="field" key={descriptorKey(f)}>{f.name} 的材料归属<select value={choiceOf(f)} onChange={e => setMaterialChoices(old => ({ ...old, [descriptorKey(f)]: e.target.value }))}><option value="">未分类，交给发起人确认</option>{c.materials!.map(m => <option value={m.id} key={m.id}>{m.name}{m.required ? '（必需）' : '（选填）'}</option>)}</select></label>)}<p className="field-hint">未分类文件仍会收到，但不计入必需材料收齐。</p></details>}</section>}
+    {!!files.length && <div className="submission-ready-link"><span>这批已选择 {files.length} 份文件</span><button type="button" className="text-button" onClick={() => { submitButton.current?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); submitButton.current?.focus({ preventScroll: true }) }}>前往提交</button></div>}
+    <input ref={picker} type="file" multiple accept={fileExtensions(c.formats).map(s => `.${s}`).join(',')} className="sr-only" onChange={e => { addFiles(e.target.files, pickFor.current); pickFor.current = ''; e.target.value = '' }} aria-label="选择提交文件" />
+    <button type="button" className={`drop-zone ${dragging ? 'dragging' : ''} ${c.materials?.length ? 'secondary' : ''}`} onClick={() => openPicker()} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files) }}><span><FileUp size={29} strokeWidth={1.5} /></span><strong>{c.materials?.length ? '其他文件：点击选择或拖到这里' : '点击选择，或把文件拖到这里'}</strong><p>{c.formats}<br />单文件 ≤ {effectiveFileLimit(c)} MB · 每次最多 {c.maxFilesPerSubmission} 个<br />单次总量 ≤ {c.requestLimitMB || 512} MB</p></button>
 
     <UploadList files={files} feedback={feedback} busy={busy} onRetry={() => void submit()} onRemove={i => { setFiles(old => old.filter((_, index) => index !== i)); setFeedback(null); setError(''); requestId.current = crypto.randomUUID() }} />
-    <div className="form-note">文件将保存到发起人的服务器，仅工作台授权成员可查看和下载。</div><button className="button primary submit-button" type="submit" disabled={!files.length}>{busy ? `上传中 ${progress}%` : feedback?.phase === 'paused' ? '继续上传' : error ? '重试并确认回执' : replacement ? `确认替换为 ${files.length} 份文件` : `提交${files.length ? ` ${files.length} 份` : ''}文件`}<ArrowRight size={16} /></button>
+    <div className="form-note">文件将保存到发起人的服务器，仅工作台授权成员可查看和下载。</div><button ref={submitButton} className="button primary submit-button" type="submit" disabled={!files.length}>{busy ? `上传中 ${progress}%` : feedback?.phase === 'paused' ? '继续上传' : error ? '重试并确认回执' : replacement ? `确认替换为 ${files.length} 份文件` : `提交${files.length ? ` ${files.length} 份` : ''}文件`}<ArrowRight size={16} /></button>
   </fieldset>{busy && <div className="upload-progress" role="status"><div className="progress"><span style={{ width: `${progress}%` }} /></div><p>{feedback?.phase === 'saving' ? '文件已传完，正在等待整批回执…' : feedback?.phase === 'preparing' ? '正在连接并读取续传记录…' : `已确认传输 ${progress}%`}<button type="button" className="text-button" onClick={() => controller.current?.abort()}>暂停上传</button></p></div>}{error && <p className="error-text" role="alert">{error}</p>}</form>}</>}</section><footer className="submission-bottom"><span><LockKeyhole size={13} />仅工作台授权成员可见</span><span>由集屿提供支持</span></footer></main>
 }

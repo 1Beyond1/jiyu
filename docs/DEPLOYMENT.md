@@ -59,6 +59,8 @@ docker compose exec app cat /data/live/setup-token
 | `JIYU_QUOTA_MB` | 10240 | 文件总配额，含回收站，不代表磁盘实际容量 |
 | `JIYU_REQUEST_MB` | 512 | 一次上传的文件正文总量上限；请求封装另有 2 MiB 硬限额 |
 | `JIYU_DATA_SUBDIR` | `live` | Compose 数据卷中的子目录，可切换到已恢复的新目录 |
+| `JIYU_AI_BASE_URL` / `JIYU_AI_MODEL` / `JIYU_AI_KEY` | 空 | 预置模型（Chat Completions 兼容接口），三项都填才生效，用户免配置即可使用 AI。发送前的确认仍保留；管理员可在设置中改用自己的模型或关闭 |
+| `JIYU_AI_DAILY_CALLS` | 50 | 预置模型的每日调用上限，失败也计数 |
 | `JIYU_DATA_DIR` | 本机 `./data` | 非 Compose 时指定持久数据目录 |
 | `JIYU_HOST` / `JIYU_PORT` | `127.0.0.1` / `3000` | 非 Compose 时的监听地址；不直接开放裸 HTTP 到公网 |
 | `JIYU_TRUST_PROXY` | `false` | 仅在应用只允许可信反向代理访问时开启；Compose 内置配置为 `true` |

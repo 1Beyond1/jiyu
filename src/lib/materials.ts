@@ -4,6 +4,8 @@ export const normalizeParticipant = (value: string) => value.normalize('NFKC').t
 export const descriptorKey = (f: { name: string; size: number; lastModified: number }) => JSON.stringify([f.name, f.size, f.lastModified])
 export const materialFileVersion = (f: CollectedFile) => JSON.stringify([f.id, f.sha256 || '', f.size, f.name, f.materialId || '', f.materialVersion || 0])
 export const materialStateVersion = (f: CollectedFile) => JSON.stringify([materialFileVersion(f), f.materialReview?.operationId || ''])
+// Same input on server and browser; the digest is an opaque equality token, never an ordered revision.
+export const materialSnapshotKey = (c: Collection, files: CollectedFile[]) => JSON.stringify([c.materialRevision, c.expectedSubmitters || [], files.filter(f => f.collectionId === c.id && !f.deletedAt).map(f => [f.id, f.participant || '', f.owner, materialStateVersion(f)]).sort((a, b) => a[0].localeCompare(b[0]))])
 export function materialReviewState(c: Collection, f: CollectedFile): MaterialReviewState {
   if (!f.materialId || !c.materials?.some(m => m.id === f.materialId)) return 'unclassified'
   if (!f.materialReview) return 'pending'
@@ -53,6 +55,16 @@ export function materialParticipants(c: Collection, files: CollectedFile[]): Mat
     const status = reviewComplete ? 'accepted' : slots.some(s => s.state === 'needs_changes') ? 'needs_changes' : !receivedComplete ? 'missing' : unclassified.length ? 'unclassified' : 'pending'
     return { ...person, slots, unclassified, receivedComplete, reviewComplete, status, duplicateCount }
   })
+}
+
+export function materialProgress(c: Collection, files: CollectedFile[]) {
+  const people = materialParticipants(c, files)
+  const included = c.expectedSubmitters?.length ? people.filter(p => p.expected) : people
+  return {
+    total: included.length,
+    received: included.filter(p => p.receivedComplete).length,
+    reviewed: included.filter(p => p.reviewComplete).length,
+  }
 }
 
 export const materialStateLabels = { missing: '缺项', duplicate: '内容重复', unclassified: '未分类', pending: '待人工核对', accepted: '核对通过', needs_changes: '需补充', stale: '旧核对已过期' }

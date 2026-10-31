@@ -17,7 +17,9 @@ test('分片续传跨重启、逐片校验、原子提交、私有凭证与配�
     const headers = { ...origin, cookie: setup.headers['set-cookie']!.toString().split(';')[0], 'x-csrf-token': setup.json().csrf }
     const task = await service.app.inject({ method: 'POST', url: '/api/collections', headers, payload: { title: '续传', category: 'document', description: '', formats: 'TXT', deadline: '2099-12-31', target: 10, maxFileSizeMB: 8, maxFilesPerSubmission: 10, maxTotalSizeMB: 8 } })
     const c = task.json().collections[0], batchId = randomUUID(), url = `/api/public/${c.uploadToken}/uploads/${batchId}`
-    const draft = { owner: '小屿', files: [{ name: '大文件.txt', size: CHUNK_BYTES + 6, lastModified: 1 }, { name: '空文件.txt', size: 0, lastModified: 1 }] }
+    const draft = { owner: '小屿', files: [{ name: '大文件.txt', size: CHUNK_BYTES + 6, lastModified: 1 }] }
+    const empty = await service.app.inject({ method: 'POST', url, headers: { ...origin, 'x-upload-key': key }, payload: { owner: '小屿', files: [{ name: '空文件.txt', size: 0, lastModified: 1 }] } })
+    assert.equal(empty.statusCode, 400)
     const resumeHeaders = { ...origin, 'x-upload-key': key }
     const start = await service.app.inject({ method: 'POST', url, headers: resumeHeaders, payload: draft })
     assert.equal(start.statusCode, 200, start.body)
@@ -40,13 +42,13 @@ test('分片续传跨重启、逐片校验、原子提交、私有凭证与配�
     assert.equal((await part(1, Buffer.from('集屿'))).statusCode, 200)
     const complete = await service.app.inject({ method: 'POST', url: `${url}/complete`, headers: resumeHeaders, payload: {} })
     assert.equal(complete.statusCode, 201, complete.body)
-    assert.equal(complete.json().filesCount, 2)
+    assert.equal(complete.json().filesCount, 1)
     assert.equal((await service.app.inject({ method: 'POST', url: `${url}/complete`, headers: resumeHeaders, payload: {} })).json().receiptId, complete.json().receiptId)
     assert.equal((await service.app.inject({ method: 'GET', url, headers: resumeHeaders })).json().receipt.receiptId, complete.json().receiptId)
     assert.equal(service.store.pendingBytes(), 0)
     assert.deepEqual(await readdir(join(config.dataDir, 'chunks')), [])
     assert.equal(service.store.files().find(f => f.size)?.sha256, createHash('sha256').update(Buffer.alloc(CHUNK_BYTES, 65)).update('集屿').digest('hex'))
-    assert.equal(service.store.collection(c.id)!.received, 2)
+    assert.equal(service.store.collection(c.id)!.received, 1)
     const original = service.store.collection(c.id)!
     for (const stopped of [{ ...original, status: 'paused' as const }, { ...original, deadline: '2020-01-01' }]) {
       service.store.saveCollection(stopped)
@@ -80,16 +82,18 @@ test('调整字段顺序不打断续传，文件和字段值变化仍拒绝，�
     assert.equal(created.statusCode, 200, created.body)
     const c = created.json().collections[0], url = `/api/public/${c.uploadToken}/uploads/${randomUUID()}`
     const uploadHeaders = { ...origin, 'x-upload-key': 'f'.repeat(64) }
-    const draft = { owner: '小屿', fields: { field_student: 'A01', field_class: '一班' }, files: [{ name: 'a.txt', size: 3, lastModified: 1 }, { name: 'b.txt', size: 0, lastModified: 2 }] }
+    const draft = { owner: '小屿', fields: { field_student: 'A01', field_class: '一班' }, files: [{ name: 'a.txt', size: 3, lastModified: 1 }, { name: 'b.txt', size: 1, lastModified: 2 }] }
     const start = (payload = draft, h = uploadHeaders) => service.app.inject({ method: 'POST', url, headers: h, payload })
     assert.equal((await start()).statusCode, 200)
     const part = await service.app.inject({ method: 'PUT', url: `${url}/0/0`, headers: { ...uploadHeaders, 'content-type': 'application/octet-stream', 'x-chunk-sha256': createHash('sha256').update('abc').digest('hex') }, payload: Buffer.from('abc') })
     assert.equal(part.statusCode, 200, part.body)
+    const secondPart = await service.app.inject({ method: 'PUT', url: `${url}/1/0`, headers: { ...uploadHeaders, 'content-type': 'application/octet-stream', 'x-chunk-sha256': createHash('sha256').update('b').digest('hex') }, payload: Buffer.from('b') })
+    assert.equal(secondPart.statusCode, 200, secondPart.body)
     const reordered = await service.app.inject({ method: 'PATCH', url: `/api/collections/${c.id}`, headers, payload: { ...rules, fields: [...fields].reverse() } })
     assert.equal(reordered.statusCode, 200, reordered.body)
     const resumed = await start()
     assert.equal(resumed.statusCode, 200, resumed.body)
-    assert.equal(resumed.json().parts.length, 1)
+    assert.equal(resumed.json().parts.length, 2)
     assert.equal((await start(draft, { ...uploadHeaders, 'x-upload-key': 'g'.repeat(64) })).statusCode, 403)
     for (const changed of [
       { ...draft, owner: '另一人' },
@@ -103,7 +107,7 @@ test('调整字段顺序不打断续传，文件和字段值变化仍拒绝，�
     assert.equal((await service.app.inject({ method: 'POST', url: `${url}/complete`, headers: uploadHeaders, payload: {} })).statusCode, 400)
     assert.equal(service.store.files().length, 0)
     assert.deepEqual(await readdir(join(config.dataDir, 'objects')), [])
-    assert.equal(service.store.pendingBytes(), 3)
+    assert.equal(service.store.pendingBytes(), 4)
     await service.app.inject({ method: 'PATCH', url: `/api/collections/${c.id}`, headers, payload: { ...rules, fields: [...fields].reverse() } })
     const completed = await service.app.inject({ method: 'POST', url: `${url}/complete`, headers: uploadHeaders, payload: {} })
     assert.equal(completed.statusCode, 201, completed.body)

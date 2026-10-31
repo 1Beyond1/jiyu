@@ -29,7 +29,13 @@ export interface Collection {
   allowReplacement?: boolean
   materials?: MaterialRequirement[]
   materialRevision?: string
+  draftOrigin?: { runId: string; testMode: boolean; confirmedAt: string; resolutions: { question: string; answer: string; materialId: string }[] }
 }
+
+export interface DraftMaterial extends Omit<MaterialRequirement, 'required'> { required: boolean | null; sourceQuote: string }
+export interface CollectionDraft { runId: string; source: string; title: string; description: string; materials: DraftMaterial[]; clarifications: { id: string; question: string; sourceQuote: string; materialId: string | null }[]; testMode: boolean }
+export interface DraftConfirmation { runId: string; confirmed: boolean; resolutions: { id: string; answer: string; materialId: string }[] }
+export type CollectionInput = Collection & { draftConfirmation?: DraftConfirmation }
 
 export interface MaterialRequirement { id: string; name: string; required: boolean; description: string }
 export type MaterialReviewState = 'unclassified' | 'pending' | 'accepted' | 'needs_changes' | 'stale'
@@ -39,9 +45,19 @@ export interface MaterialOperation { collectionId: string; rulesRevision: string
 export interface MaterialAISource { id: string; alias: string; name: string; materialId: string; expectedVersion: string; sha256: string; contentVersion: string; extractionStatus: string; kind: string; coverage: 'full' | 'partial' | 'unread'; excerpt: string; start: number; end: number; reason: string }
 export interface MaterialAIPreview { previewId: string; collectionId: string; title: string; description: string; rulesRevision: string; materials: MaterialRequirement[]; sources: MaterialAISource[]; settingsRevision: string; expiresAt: string; testMode: boolean }
 export interface MaterialAIFinding { fileId: string; assessment: 'attention' | 'uncertain' | 'no_issue_in_excerpt'; materialId: string; message: string; suggestion: string; evidence: { fileId: string; start: number; end: number; quote: string }[] }
-export interface MaterialAIPlan { runId: string; preview: MaterialAIPreview; model: string; tokens: number; createdAt: string; findings: MaterialAIFinding[]; stale: boolean; staleReason?: string; dispositions?: Record<string, { kind: string; decision?: string; materialId?: string; note: string; at: string; by: string }> }
+export interface MaterialAIPlan { runId: string; preview: MaterialAIPreview; model: string; tokens: number | null; createdAt: string; findings: MaterialAIFinding[]; stale: boolean; staleReason?: string; dispositions?: Record<string, { kind: string; decision?: string; materialId?: string; note: string; at: string; by: string }> }
 export interface MaterialSlot { requirement: MaterialRequirement; files: CollectedFile[]; state: 'missing' | 'duplicate' | MaterialReviewState; duplicate: boolean }
 export interface MaterialParticipant { identity: string; owner: string; expected: boolean; files: CollectedFile[]; slots: MaterialSlot[]; unclassified: CollectedFile[]; receivedComplete: boolean; reviewComplete: boolean; status: 'missing' | 'needs_changes' | 'unclassified' | 'pending' | 'accepted'; duplicateCount: number }
+export interface MaterialStateReport {
+  collectionId: string
+  rulesRevision: string
+  stateVersion: string
+  generatedAt: string
+  requirements: MaterialRequirement[]
+  summary: { participants: number; receivedComplete: number; reviewComplete: number; missing: number; needsChanges: number; unclassified: number }
+  participants: (Omit<MaterialParticipant, 'files' | 'slots' | 'unclassified'> & { unclassifiedFileIds: string[]; slots: { materialId: string; state: MaterialSlot['state']; label: string; fileIds: string[]; duplicate: boolean }[] })[]
+  files: { id: string; materialId: string; materialState: MaterialReviewState; materialNote: string; expectedVersion: string }[]
+}
 export interface CollectionField { id: string; label: string; required: boolean }
 export interface CollectionTemplate { id: string; name: string; rules: Partial<Collection>; archived: boolean }
 export interface SubmissionMetadata { fields?: Record<string, string>; replace?: { receiptId: string; key: string }; materialIds?: string[] }
@@ -113,7 +129,9 @@ export interface ArchiveEntry { id: string; name: string; path: string; size: nu
 export interface ArchivePlan { id: string; fileName: string; layout: ArchiveLayout; totalBytes: number; entries: ArchiveEntry[]; expiresAt: string; status: ArchiveStatus; error?: string }
 
 export interface AISettings {
+  materialToolMode?: boolean
   testMode?: boolean
+  managed?: boolean
   revision: string
   enabled: boolean
   protocol: 'responses' | 'chat'
@@ -126,8 +144,8 @@ export interface AISettings {
 }
 export interface RenameChange { id: string; oldName: string; name: string }
 export interface TagChange { id: string; name: string; oldTags: string[]; tags: string[] }
-export interface AIReply { runId: string; reply: string; changes: RenameChange[]; tags?: TagChange[]; tokens: number }
-export interface AIRun { id: string; model: string; fileCount: number; status: string; tokens: number; createdAt: string }
+export interface AIReply { runId: string; reply: string; changes: RenameChange[]; tags?: TagChange[]; tokens: number | null }
+export interface AIRun { id: string; model: string; fileCount: number; status: string; tokens: number | null; createdAt: string }
 
 export const storageNames: Record<StorageId, string> = {
   local: '本地存储', onedrive: 'OneDrive', s3: 'S3 对象存储', webdav: 'WebDAV', baidu: '百度网盘', gdrive: 'Google Drive',

@@ -1,29 +1,31 @@
 import { useState } from 'react'
 import { ArrowUpRight, CalendarDays, Link, Plus, Check, Copy, ExternalLink } from 'lucide-react'
 import { CollectionIcon, Empty, Modal } from '../components/ui'
-import type { Collection } from '../types'
+import type { Collection, CollectedFile } from '../types'
+import { materialProgress } from '../lib/materials'
 import { collectionState, collectionStateNames } from '../lib/collections'
 import { shareAddress } from '../lib/share-address'
 
-export function CollectionCard({ collection: c, onOpen, onShare }: { collection: Collection; onOpen: (id: string) => void; onShare: (c: Collection) => void }) {
-  const percent = Math.min(100, Math.round(c.received / c.target * 100))
+export function CollectionCard({ collection: c, files, onOpen, onShare }: { collection: Collection; files: CollectedFile[]; onOpen: (id: string) => void; onShare: (c: Collection) => void }) {
+  const material = c.materials?.length ? materialProgress(c, files) : null
+  const percent = material ? (material.total ? Math.round(material.received / material.total * 100) : 0) : Math.min(100, Math.round(c.received / c.target * 100))
   const state = collectionState(c)
   return <article className={`collection-card ${c.category}`}>
     <div className="card-top"><CollectionIcon category={c.category} /><span className={`status ${state}`}><i />{collectionStateNames[state]}</span></div>
     <button className="card-title" onClick={() => onOpen(c.id)}>{c.title}<ArrowUpRight size={16} /></button>
     <p className="card-description">{c.description}</p>
-    <div className="card-progress-label"><span><b>{c.received}</b><span className="muted"> / {c.target} 份</span></span><span>{percent}%</span></div>
+    <div className="card-progress-label"><span>{material ? <>必需项收齐 <b>{material.received}</b> / {material.total} 人 · 核对通过 {material.reviewed} 人</> : <><b>{c.received}</b><span className="muted"> / {c.target} 份</span></>}</span><span>{percent}%</span></div>
     <div className="progress"><span style={{ width: `${percent}%` }} /></div>
     <footer><span><CalendarDays size={13} />{c.deadline.slice(5).replace('-', '月')}日截止</span><button className="share-button" onClick={() => onShare(c)} aria-label={`分享${c.title}`}><Link size={14} /><span>分享收集</span></button></footer>
   </article>
 }
 
-export function Collections({ collections, onOpen, onShare, onCreate }: { collections: Collection[]; onOpen: (id: string) => void; onShare: (c: Collection) => void; onCreate: () => void }) {
+export function Collections({ collections, files, onOpen, onShare, onCreate }: { collections: Collection[]; files: CollectedFile[]; onOpen: (id: string) => void; onShare: (c: Collection) => void; onCreate: () => void }) {
   const [tab, setTab] = useState('all')
   const list = collections.filter(c => tab === 'all' || collectionState(c) === tab)
   return <><div className="page-title"><div><p className="eyebrow">COLLECTIONS</p><h1>让收集，有条不紊。</h1><p>一个链接收齐文件，进展尽在掌握。</p></div><button className="button primary" onClick={onCreate}><Plus size={17} />新建收集</button></div>
     <div className="tabs collection-tabs">{[['all', '全部收集'], ['active', '收集中'], ['completed', '已完成'], ['paused', '已暂停'], ['expired', '已截止']].map(([value, label]) => <button className={tab === value ? 'active' : ''} key={value} onClick={() => setTab(value)}>{label}<span>{collections.filter(c => value === 'all' || collectionState(c) === value).length}</span></button>)}</div>
-    {list.length ? <div className="collection-grid all-collections">{list.map(c => <CollectionCard key={c.id} collection={c} onOpen={onOpen} onShare={onShare} />)}<button className="create-card" onClick={onCreate}><span><Plus size={24} /></span><b>发起下一项收集</b><p>让文件自己找到归处</p></button></div> : <Empty title="暂无这类收集" text="新建一项收集，或切换其他状态查看。" />}
+    {list.length ? <div className="collection-grid all-collections">{list.map(c => <CollectionCard key={c.id} collection={c} files={files} onOpen={onOpen} onShare={onShare} />)}<button className="create-card" onClick={onCreate}><span><Plus size={24} /></span><b>发起下一项收集</b><p>让文件自己找到归处</p></button></div> : <Empty title="暂无这类收集" text="新建一项收集，或切换其他状态查看。" />}
   </>
 }
 
