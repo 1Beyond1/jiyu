@@ -41,3 +41,17 @@ export function submissionError(collection: Collection, files: { name: string; s
   }
   return ''
 }
+
+/** A date the person wrote in their own sentence: 2026-12-20, 2026年12月20日, or 12月20日 (the next such day). */
+export function deadlineFromText(text: string, today = localDate()) {
+  const full = text.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/), short = text.match(/(\d{1,2})月(\d{1,2})[日号]/)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const at = (y: number, m: number, d: number) => {
+    const date = new Date(Date.UTC(y, m - 1, d))
+    return date.getUTCMonth() === m - 1 && date.getUTCDate() === d ? `${y}-${pad(m)}-${pad(d)}` : ''
+  }
+  if (full) { const value = at(+full[1], +full[2], +full[3]); return value >= today ? value : '' }
+  if (!short) return ''
+  const year = +today.slice(0, 4), value = at(year, +short[1], +short[2])
+  return value && value < today ? at(year + 1, +short[1], +short[2]) : value
+}

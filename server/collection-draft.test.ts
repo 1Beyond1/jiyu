@@ -80,5 +80,7 @@ test('一句话草稿：只授权原话、拒绝编造配置、人工澄清后�
     const viewer = { ...origin, cookie: login.headers['set-cookie']!.toString().split(';')[0], 'x-csrf-token': login.json().csrf }
     assert.equal((await call('/api/ai/collection-draft', input, 'POST', viewer)).statusCode, 403)
     assert.equal((await call('/api/collections', final, 'POST', viewer)).statusCode, 403)
+    const skipped = await call('/api/collections', { ...final, title: '跳过澄清也能创建', draftConfirmation: { ...confirmation, resolutions: [{ id: draft.clarifications[0].id, skipped: true }] } })
+    assert.equal(skipped.statusCode < 300, true, '发起人可以明确跳过澄清')
   } finally { await app.close(); if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true }) }
 })

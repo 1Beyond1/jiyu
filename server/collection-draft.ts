@@ -42,7 +42,9 @@ export function confirmCollectionDraft(store: Store, body: Record<string, unknow
   const provided = confirmation.resolutions as unknown[]
   const resolutions = draft.clarifications.map(q => {
     const answer = provided.find(r => object(r).id === q.id)
-    const value = object(answer), materialId = text(value.materialId, '澄清材料项', 40), reply = text(value.answer, '人工补充要求', 120)
+    const value = object(answer)
+    if (value.skipped === true) return { question: q.question, skipped: true }
+    const materialId = text(value.materialId, '澄清材料项', 40), reply = text(value.answer, '人工补充要求', 120)
     if (!c.materials!.some(m => m.id === materialId && m.description.includes(reply))) throw new HttpError(400, '澄清答复须保留在对应材料要求中，请核对后重新创建')
     return { question: q.question, materialId, answer: reply }
   })

@@ -29,12 +29,12 @@ export interface Collection {
   allowReplacement?: boolean
   materials?: MaterialRequirement[]
   materialRevision?: string
-  draftOrigin?: { runId: string; testMode: boolean; confirmedAt: string; resolutions: { question: string; answer: string; materialId: string }[] }
+  draftOrigin?: { runId: string; testMode: boolean; confirmedAt: string; resolutions: { question: string; answer?: string; materialId?: string; skipped?: boolean }[] }
 }
 
 export interface DraftMaterial extends Omit<MaterialRequirement, 'required'> { required: boolean | null; sourceQuote: string }
 export interface CollectionDraft { runId: string; source: string; title: string; description: string; materials: DraftMaterial[]; clarifications: { id: string; question: string; sourceQuote: string; materialId: string | null }[]; testMode: boolean }
-export interface DraftConfirmation { runId: string; confirmed: boolean; resolutions: { id: string; answer: string; materialId: string }[] }
+export interface DraftConfirmation { runId: string; confirmed: boolean; resolutions: { id: string; answer?: string; materialId?: string; skipped?: boolean }[] }
 export type CollectionInput = Collection & { draftConfirmation?: DraftConfirmation }
 
 export interface MaterialRequirement { id: string; name: string; required: boolean; description: string }

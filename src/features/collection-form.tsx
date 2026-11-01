@@ -11,6 +11,7 @@ import { TemplatePicker } from './collection-templates'
 
 export function CollectionForm({ collection, initialStorage = 'local', onClose, onSave, busy = false, serverError, requestLimitMB }: { collection?: Collection; initialStorage?: Collection['storage']; onClose: () => void; onSave: (c: CollectionInput) => void; busy?: boolean; serverError?: string; requestLimitMB?: number }) {
   const [draftConfirmation, setDraftConfirmation] = useState<DraftConfirmation>()
+  const [draftDeadline, setDraftDeadline] = useState('')
   const [title, setTitle] = useState(collection?.title || '')
   const [description, setDescription] = useState(collection?.description || '')
   const [target, setTarget] = useState(collection?.target || 20)
@@ -48,7 +49,7 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
       const materials = rules.materials || []
       if (materials.some(m => !m.name.trim()) || new Set(materials.map(m => m.name.normalize('NFKC').trim().toLowerCase())).size !== materials.length) { setError('请填写不重复的材料名称。'); return false }
       if (materials.length && !materials.some(m => m.required)) { setError('材料清单至少设置一项必需材料。'); return false }
-      if (draftConfirmation?.resolutions.some(a => !materials.some(m => m.id === a.materialId && m.description.includes(a.answer)))) { setError('请将已澄清答复保留在对应材料要求中，或取消 AI 来源后按人工设置。'); return false }
+      if (draftConfirmation?.resolutions.some(a => !a.skipped && !materials.some(m => m.id === a.materialId && m.description.includes(a.answer ?? '')))) { setError('请将已澄清答复保留在对应材料要求中，或取消 AI 来源后按人工设置。'); return false }
       if (fields.some(f => !f.label.trim())) { setError('请为每个提交字段填写名称。'); return false }
       if (new Set(fields.map(f => f.label.trim())).size !== fields.length) { setError('提交字段名称不能重复。'); return false }
       if (roster.length > 1000 || new Set(roster.map(v => v.normalize('NFKC').toLowerCase())).size !== roster.length) { setError('名单最多 1000 人，请移除重复标识。'); return false }
@@ -56,8 +57,8 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
     setError(''); return true
   }
   return <Modal title={collection ? '编辑收集规则' : '发起一项新收集'} subtitle={collection ? '原分享链接保持有效，已有文件会保留。' : '选好规则，再用一个链接收齐文件。'} onClose={() => { if (!busy) onClose() }}>
-    {!collection && step === 0 && <CollectionDraftEditor onApply={value => { setTitle(value.title); setDescription(value.description); setRules(old => ({ ...old, materials: value.materials })); setDraftConfirmation(value.confirmation); setTemplateId(''); setTemplateName(''); setError('') }} />}
-    {draftConfirmation && <div className="form-note">已带入人工确认的材料草稿；截止日期仍是原表单默认值，请自行设置并确认。{draftConfirmation.resolutions.map(a => <p key={a.id}>需保留的人工补充要求：{a.answer}</p>)}<button type="button" className="text-button" disabled={busy} onClick={() => setDraftConfirmation(undefined)}>取消 AI 来源，保留为人工草稿</button></div>}
+    {!collection && step === 0 && <CollectionDraftEditor onApply={value => { setTitle(value.title); setDescription(value.description); setRules(old => ({ ...old, materials: value.materials })); setDraftConfirmation(value.confirmation); setDraftDeadline(value.deadline); if (value.deadline) setDeadline(value.deadline); setTemplateId(''); setTemplateName(''); setError('') }} />}
+    {draftConfirmation && <div className="form-note">已带入人工确认的材料草稿；{draftDeadline ? `截止日期按你的原话填为 ${draftDeadline}，请确认。` : '截止日期仍是原表单默认值，请自行设置并确认。'}{draftConfirmation.resolutions.filter(a => !a.skipped).map(a => <p key={a.id}>需保留的人工补充要求：{a.answer}</p>)}<button type="button" className="text-button" disabled={busy} onClick={() => setDraftConfirmation(undefined)}>取消 AI 来源，保留为人工草稿</button></div>}
     <ol className="collection-steps" aria-label="收集设置步骤">{steps.map((label, i) => <li key={label} aria-current={step === i ? 'step' : undefined}><span>{i + 1}</span>{label}</li>)}</ol>
     <h3 ref={stepHeading} className="wizard-heading" tabIndex={-1}>{steps[step]}</h3>
     <form ref={form} noValidate onSubmit={e => {

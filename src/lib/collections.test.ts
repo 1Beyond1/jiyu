@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { collectionState, defaultCollectionLimits, fileExtensions, isExpired, localDate, submissionError } from './collections.ts'
+import { collectionState, deadlineFromText, defaultCollectionLimits, fileExtensions, isExpired, localDate, submissionError } from './collections.ts'
 import type { Collection } from '../types.ts'
 
 const collection: Collection = { id: 'test', title: '测试收集', description: '', category: 'document', received: 0, target: 1, deadline: '2030-01-20', storage: 'local', status: 'active', formats: 'PDF, JPG', ...defaultCollectionLimits }
@@ -45,4 +45,13 @@ test('每次提交数量独立于进度目标，空提交不可通过', () => {
   assert.equal(submissionError(limited, [file, { ...file, name: '第二份.pdf' }], now), '')
   assert.match(submissionError(limited, [file, file, file], now), /最多提交 2 个文件/)
   assert.match(submissionError(limited, [], now), /请先选择/)
+})
+
+test('a deadline written in the sentence is read as the next such day', () => {
+  assert.equal(deadlineFromText('收作业，12月20日截止', '2026-11-01'), '2026-12-20')
+  assert.equal(deadlineFromText('3月1号前交', '2026-11-01'), '2027-03-01')
+  assert.equal(deadlineFromText('2026年12月5日截止', '2026-11-01'), '2026-12-05')
+  assert.equal(deadlineFromText('2026-10-01 截止', '2026-11-01'), '')
+  assert.equal(deadlineFromText('2月30日截止', '2026-11-01'), '')
+  assert.equal(deadlineFromText('下周五截止', '2026-11-01'), '')
 })
