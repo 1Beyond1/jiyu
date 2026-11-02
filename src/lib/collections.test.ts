@@ -54,4 +54,7 @@ test('a deadline written in the sentence is read as the next such day', () => {
   assert.equal(deadlineFromText('2026-10-01 截止', '2026-11-01'), '')
   assert.equal(deadlineFromText('2月30日截止', '2026-11-01'), '')
   assert.equal(deadlineFromText('下周五截止', '2026-11-01'), '')
+  assert.equal(deadlineFromText('2026年11月5日发布通知，2026年12月5日截止', '2026-11-01'), '2026-12-05')
+  assert.equal(deadlineFromText('截止日期：12月20日，11月10日开说明会', '2026-11-01'), '2026-12-20')
+  assert.equal(deadlineFromText('11月10日开会，12月1日放假', '2026-11-01'), '', '两个日期都没说是截止，就让人自己填')
 })

@@ -42,16 +42,20 @@ export function submissionError(collection: Collection, files: { name: string; s
   return ''
 }
 
-/** A date the person wrote in their own sentence: 2026-12-20, 2026年12月20日, or 12月20日 (the next such day). */
+/** The deadline the person wrote: 2026-12-20, 2026年12月20日, or 12月20日 (the next such day). With several dates, only one marked as the deadline counts. */
 export function deadlineFromText(text: string, today = localDate()) {
-  const full = text.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/), short = text.match(/(\d{1,2})月(\d{1,2})[日号]/)
   const pad = (n: number) => String(n).padStart(2, '0')
   const at = (y: number, m: number, d: number) => {
     const date = new Date(Date.UTC(y, m - 1, d))
     return date.getUTCMonth() === m - 1 && date.getUTCDate() === d ? `${y}-${pad(m)}-${pad(d)}` : ''
   }
-  if (full) { const value = at(+full[1], +full[2], +full[3]); return value >= today ? value : '' }
-  if (!short) return ''
-  const year = +today.slice(0, 4), value = at(year, +short[1], +short[2])
-  return value && value < today ? at(year + 1, +short[1], +short[2]) : value
+  const year = +today.slice(0, 4)
+  const dates = [...text.matchAll(/(?:(\d{4})[-/.年])?(\d{1,2})[-/.月](\d{1,2})[日号]?/g)].map(m => {
+    let value = at(m[1] ? +m[1] : year, +m[2], +m[3])
+    if (!m[1] && value && value < today) value = at(year + 1, +m[2], +m[3])
+    const before = text.slice(Math.max(0, m.index! - 6), m.index), after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 6)
+    return { value, marked: /截止|期限|deadline/i.test(before) || /^\s*(?:前|之前|以前|为止|截止|截至)/.test(after) }
+  }).filter(d => d.value && d.value >= today)
+  const chosen = dates.length === 1 ? dates : dates.filter(d => d.marked)
+  return chosen.length === 1 ? chosen[0].value : ''
 }
