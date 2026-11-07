@@ -12,7 +12,9 @@ export async function registerBackups(app: FastifyInstance, store: Store, backup
   backupRoot = resolve(backupRoot)
   const within = (parent: string, child: string) => { const p = relative(parent, child); return !p || (!p.startsWith('..') && !isAbsolute(p)) }
   if (within(resolve(store.dataDir), backupRoot) || within(backupRoot, resolve(store.dataDir))) throw new Error('备份与数据目录必须互相独立')
-  const settings = (): BackupSettings => JSON.parse(store.get('backup.settings') || '{"enabled":false,"intervalHours":24,"keep":7}')
+  // A host shared with other services can cap how many full copies an admin may keep, so backups cannot fill its disk.
+  const maxKeep = Math.min(30, Math.max(1, Number(process.env.JIYU_BACKUP_MAX_KEEP) || 30))
+  const settings = (): BackupSettings => { const s = JSON.parse(store.get('backup.settings') || '{"enabled":false,"intervalHours":24,"keep":7}'); return { ...s, keep: Math.min(s.keep, maxKeep) } }
   const last = (): BackupRun | null => JSON.parse(store.get('backup.last') || 'null')
   let running: Promise<void> | undefined, stopping = false
   if (last()?.status === 'running') store.set('backup.last', JSON.stringify({ ...last(), status: 'failed', error: '上次备份被服务重启中断，未完成的目录不视为有效备份' }))
@@ -62,6 +64,7 @@ export async function registerBackups(app: FastifyInstance, store: Store, backup
   app.patch('/api/backups/settings', async req => {
     const body = object(req.body)
     if (typeof body.enabled !== 'boolean' || ![6, 12, 24, 168].includes(Number(body.intervalHours)) || !Number.isInteger(body.keep) || Number(body.keep) < 1 || Number(body.keep) > 30) throw new HttpError(400, '备份周期或保留份数无效')
+    if (Number(body.keep) > maxKeep) throw new HttpError(400, `本站最多保留 ${maxKeep} 份完整备份`)
     store.set('backup.settings', JSON.stringify({ enabled: body.enabled, intervalHours: body.intervalHours, keep: body.keep }))
     store.activity('更新自动备份计划')
     return info()

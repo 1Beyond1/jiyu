@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Store } from './store.ts'
 import type { SessionUser, UserRole } from '../src/types.ts'
 import { hashPassword, HttpError, object, passwordInput, text } from './security.ts'
@@ -8,7 +8,7 @@ export interface UserRow { id: string; username: string; display_name: string; p
 export const publicUser = (row: UserRow): SessionUser => ({ id: row.id, username: row.username, displayName: row.display_name, role: row.role, disabled: !!row.disabled })
 function roleInput(value: unknown): UserRole { if (!['admin', 'editor', 'viewer'].includes(String(value))) throw new HttpError(400, '成员角色无效'); return value as UserRole }
 
-export function registerUsers(app: FastifyInstance, store: Store) {
+export function registerUsers(app: FastifyInstance, store: Store, actorId: (req: FastifyRequest) => string | undefined) {
   const list = () => (store.db.prepare('SELECT * FROM users ORDER BY rowid').all() as unknown as UserRow[]).map(publicUser)
   app.get('/api/users', async () => list())
   app.post('/api/users', async req => {
@@ -24,6 +24,8 @@ export function registerUsers(app: FastifyInstance, store: Store) {
     const body = object(req.body), id = text(object(req.params).id, '成员编号', 40)
     const original = store.db.prepare('SELECT * FROM users WHERE id=?').get(id) as unknown as UserRow | undefined
     if (!original) throw new HttpError(404, '成员不存在')
+    // Other admins may run the workspace, but only the owner can change, demote or disable the owner account.
+    if (id === 'primary' && actorId(req) !== 'primary') throw new HttpError(403, '只有工作台所有者可以修改所有者账号')
     const role = body.role === undefined ? original.role : roleInput(body.role), disabled = body.disabled === undefined ? original.disabled : body.disabled === true ? 1 : body.disabled === false ? 0 : -1
     if (disabled === -1) throw new HttpError(400, '账号状态无效')
     const displayName = body.displayName === undefined ? original.display_name : text(body.displayName, '成员名称', 20)

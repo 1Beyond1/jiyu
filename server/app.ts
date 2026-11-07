@@ -304,7 +304,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   registerCollectionWorkflows(app, store)
   registerMaterials(app, store, config, session)
   await registerUploads(app, store, config, budget)
-  registerUsers(app, store)
+  registerUsers(app, store, req => session(req)?.id)
   const stopBackups = await registerBackups(app, store, config.backupDir || resolve(config.dataDir, '..', 'backups'))
   const stopContent = registerContent(app, store, options.contentExtractor)
   const stopStorage = registerStorage(app, store, options.storageHTTP, config.origin)

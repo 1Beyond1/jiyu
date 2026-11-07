@@ -43,5 +43,11 @@ test('成员角色由服务端约束，撤销旧会话并保留最后一位管�
     assert.equal(change.json().user.role, 'viewer')
     assert.equal((await app.inject({ method: 'GET', url: '/api/workspace', headers: viewer })).statusCode, 401)
     assert.equal((await app.inject({ method: 'GET', url: '/api/workspace', headers: admin })).statusCode, 200)
+    // A second admin runs the workspace but cannot take the owner's account.
+    await add('guest-admin', 'admin')
+    const guest = headers(await login('guest-admin'))
+    for (const payload of [{ password: 'taken-over-password' }, { role: 'viewer' }, { disabled: true }, { displayName: '改名' }]) assert.equal((await app.inject({ method: 'PATCH', url: '/api/users/primary', headers: guest, payload })).statusCode, 403)
+    assert.equal((await app.inject({ method: 'GET', url: '/api/workspace', headers: admin })).statusCode, 200)
+    assert.equal((await app.inject({ method: 'PATCH', url: '/api/users/primary', headers: admin, payload: { displayName: '所有者' } })).statusCode, 200)
   } finally { await app.close(); if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true }) }
 })

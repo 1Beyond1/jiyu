@@ -61,6 +61,7 @@ docker compose exec app cat /data/live/setup-token
 | `JIYU_DATA_SUBDIR` | `live` | Compose 数据卷中的子目录，可切换到已恢复的新目录 |
 | `JIYU_AI_BASE_URL` / `JIYU_AI_MODEL` / `JIYU_AI_KEY` | 空 | 预置模型（Chat Completions 兼容接口），三项都填才生效，用户免配置即可使用 AI。发送前的确认仍保留；管理员可在设置中改用自己的模型或关闭 |
 | `JIYU_AI_DAILY_CALLS` | 50 | 预置模型的每日调用上限，失败也计数 |
+| `JIYU_BACKUP_MAX_KEEP` | 30 | 管理员最多可保留的完整备份份数（1–30）；与其他服务共用磁盘时调低，避免备份占满磁盘 |
 | `JIYU_DATA_DIR` | 本机 `./data` | 非 Compose 时指定持久数据目录 |
 | `JIYU_HOST` / `JIYU_PORT` | `127.0.0.1` / `3000` | 非 Compose 时的监听地址；不直接开放裸 HTTP 到公网 |
 | `JIYU_TRUST_PROXY` | `false` | 仅在应用只允许可信反向代理访问时开启；Compose 内置配置为 `true` |
