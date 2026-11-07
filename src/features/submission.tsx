@@ -5,6 +5,7 @@ import { api, uploadFiles, discardUpload, recoverUploadReceipt, hasPendingUpload
 import { fileExtensions, isExpired, submissionError, effectiveFileLimit } from '../lib/collections'
 import { formatSize } from '../lib/workspace'
 import { ReceiptManager } from './submission-receipt'
+import { SampleSubmitHint } from './sample-tour'
 import { UploadList } from './upload-list'
 import { descriptorKey } from '../lib/materials'
 import type { Collection, UploadReceipt, ReceiptDetail, SubmissionMetadata, UploadFeedback } from '../types'
@@ -41,7 +42,7 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     setMaterialChoices({})
     setName(detail.owner); setFields(detail.fields); setReplacement(replace ? { receiptId: detail.receipt.receiptId, key } : undefined); setReceipt(null); setFeedback(null); setFiles([]); setError(''); setPending(hasPendingUpload(uploadToken)); requestId.current = crypto.randomUUID()
   }
-  const receiptManager = <ReceiptManager c={c} uploadToken={uploadToken} receipt={receipt} onOpen={setReceipt} onContinue={continueSubmission} />
+  const receiptManager = <><SampleSubmitHint collectionId={c.id} done={!!receipt} /><ReceiptManager c={c} uploadToken={uploadToken} receipt={receipt} onOpen={setReceipt} onContinue={continueSubmission} /></>
   function addFiles(incoming: FileList | null, materialId = '') {
     if (!incoming || busy) return
     const next = [...files], added: File[] = []

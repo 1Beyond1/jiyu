@@ -13,6 +13,7 @@ import { Assistant } from './features/assistant'
 import { AIPlan } from './features/ai-plan'
 import { PublicSubmission } from './features/submission'
 import { StartChecklist } from './features/start-checklist'
+import { SampleTourBar, SampleTourCard, readSampleTour } from './features/sample-tour'
 import { AdminGate, useAccount } from './features/auth'
 import { formatSize, useWorkspace } from './lib/workspace'
 import { api } from './lib/api'
@@ -160,11 +161,13 @@ function WorkspaceApp() {
       <main className="main-content" id="main-content">
         <div className="workspace-refresh"><span>{updatedAt ? `更新于 ${new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })} · 每 15 秒刷新` : '尚未更新'}</span><button className="text-button" disabled={refreshing || busy} onClick={() => void refresh()}>{refreshing ? '刷新中…' : '刷新工作台'}</button></div>
         {!canEdit && <div className="action-notice">{user?.displayName} · 只读访问，可查看、预览和下载文件。</div>}
+        <SampleTourBar workspace={workspace} onOpen={openCollection} />
         {error && <div className="error-banner" role="alert">{error}<button className="text-button" onClick={() => void refresh()}>重新连接</button></div>}
         {busy && <div className="operation-progress" role="status">正在保存，请稍候…</div>}
         {workspace.lastRenameId && <div className="action-notice"><span>最近的批量整理可撤销</span><button className="text-button" onClick={async () => { if (await action(`/api/files/rename/${workspace.lastRenameId}/undo`, {})) notify('已撤销批量命名') }}>撤销上次整理</button></div>}
         {page === 'overview' && <>
           <div className="page-title home-title"><div><p className="greeting"><span className="greeting-line" />{workspace.displayName}，欢迎回到集屿</p><h1>每一份文件，都有归处<span className="title-dot">。</span></h1><p>收集、整理、妥善存放。把时间留给更重要的事。</p></div><button className="button primary" onClick={() => startCollection()}><Plus size={17} />新建收集</button></div>
+          {!workspace.collections.some(c => c.id === readSampleTour()) && <SampleTourCard canEdit={canEdit} create={body => action('/api/collections', body)} onStarted={async c => { await refresh(); openCollection(c.id) }} />}
           {isAdmin && <StartChecklist workspace={workspace} onCreate={() => startCollection()} onSettings={openSettings} onFiles={() => navigate('files')} />}
           <div className="overview-stats"><div><span><FolderClosed size={16} />进行中的收集</span><p>{active.length}<small>项</small><em><span />正在有序进行</em></p></div><div><span><ArrowDownToLine size={16} />累计收到文件</span><p>{total}<small>份</small><em className="stat-note">来自 {workspace.collections.length} 项收集</em></p></div><div><span><Clock3 size={16} />待整理文件</span><p>{pending}<small>份</small><button onClick={() => navigate('tools')}>去整理<ArrowUpRight size={13} /></button></p></div><div><span><HardDrive size={16} />已用存储空间</span><p className="real-storage-value">{formatSize(usedBytes)}<em className="stat-note">配额 {formatSize(quotaBytes)}</em></p></div></div>
           <section className="collections-section"><div className="section-heading"><h2>进行中的收集<span className="count-badge">{active.length}</span></h2><button className="text-button" onClick={() => navigate('collections')}>全部收集<ArrowRight size={15} /></button></div>{active.length ? <div className="collection-grid">{active.slice(0, 3).map(c => <CollectionCard key={c.id} collection={c} files={workspace.files} onOpen={openCollection} onShare={setShare} />)}</div> : <Empty title="从第一项收集开始" text="点击新建收集，告别零散的文件消息。" />}</section>
