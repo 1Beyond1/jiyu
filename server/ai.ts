@@ -9,7 +9,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Store } from './store.ts'
 import type { AISettings, AIReply, CollectedFile, RenameChange, TagChange } from '../src/types.ts'
 import { digest, HttpError, object, safeName, text } from './security.ts'
-import { collectionState, localDate } from '../src/lib/collections.ts'
+import { collectionState, fileExtension, localDate } from '../src/lib/collections.ts'
 import { contentExcerpt } from './content.ts'
 import { registerMaterialAI } from './material-ai.ts'
 import { registerCollectionDraft } from './collection-draft.ts'
@@ -214,12 +214,19 @@ export function registerAI(app: FastifyInstance, store: Store, transport: AITran
         let name: string
         try { name = safeName(item.name) } catch { throw new HttpError(422, '模型建议包含无效文件名，未修改文件') }
         if (name.includes(apiKey)) throw new HttpError(422, '模型建议包含凭证，已拒绝并隐藏')
-        if (name.slice(name.lastIndexOf('.')).toLowerCase() !== file.name.slice(file.name.lastIndexOf('.')).toLowerCase()) throw new HttpError(422, '模型建议更改了扩展名，未修改文件')
+        if (fileExtension(name) !== fileExtension(file.name)) throw new HttpError(422, '模型建议更改了扩展名，未修改文件')
         return { id: file.id, oldName: file.name, name }
       })
       if (new Set(changes.map(c => c.id)).size !== changes.length) throw new HttpError(422, '模型重复引用文件，未修改文件')
-      const names = allFiles.map(f => (changes.find(c => c.id === f.id)?.name || f.name).toLowerCase())
-      if (changes.some(c => names.filter(name => name === c.name.toLowerCase()).length > 1)) throw new HttpError(422, '模型命名方案产生重名，未修改文件')
+      const changeById = new Map(changes.map(c => [c.id, c.name]))
+      const byCollection = new Map<string, Map<string, number>>()
+      for (const f of allFiles) {
+        let counts = byCollection.get(f.collectionId)
+        if (!counts) { counts = new Map(); byCollection.set(f.collectionId, counts) }
+        const key = (changeById.get(f.id) || f.name).toLowerCase()
+        counts.set(key, (counts.get(key) || 0) + 1)
+      }
+      if (changes.some(c => { const file = selected.find(f => f.id === c.id)!; return (byCollection.get(file.collectionId)?.get(c.name.toLowerCase()) || 0) > 1 })) throw new HttpError(422, '模型命名方案产生重名，未修改文件')
       const tagValues = result.classifications === undefined ? [] : result.classifications
       if (!Array.isArray(tagValues) || tagValues.length > selected.length) throw new HttpError(422, '模型分类建议未通过范围校验')
       const tags: TagChange[] = tagValues.map(value => {

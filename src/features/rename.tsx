@@ -17,10 +17,17 @@ export function getRenames(files: CollectedFile[], collections: Collection[], pa
 export function RenameModal({ files, allFiles, collections, onClose, onApply, busy = false, serverError }: { files: CollectedFile[]; allFiles: CollectedFile[]; collections: Collection[]; onClose: () => void; busy?: boolean; serverError?: string; onApply: (changes: { id: string; name: string; oldName: string }[]) => void }) {
   const [pattern, setPattern] = useState('{任务}_{提交人}_{序号}')
   const changes = getRenames(files, collections, pattern)
-  const names = changes.map(c => c.name.toLowerCase())
-  const unchanged = allFiles.filter(f => !files.some(chosen => chosen.id === f.id)).map(f => f.name.toLowerCase())
+  const changeById = new Map(changes.map(c => [c.id, c.name]))
+  const selectedById = new Map(files.map(f => [f.id, f]))
+  const countsByCollection = new Map<string, Map<string, number>>()
+  for (const f of allFiles) {
+    let counts = countsByCollection.get(f.collectionId)
+    if (!counts) { counts = new Map(); countsByCollection.set(f.collectionId, counts) }
+    const key = (changeById.get(f.id) ?? f.name).toLowerCase()
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
   const invalid = !pattern.trim() || /[<>:"/\\|?*\x00-\x1f]/.test(pattern) || /[{}]/.test(pattern.replace(/\{(任务|提交人|序号|原名|日期)\}/g, '')) || changes.some(c => c.name.length > 200 || !c.name.trim() || /[<>:"/\\|?*\x00-\x1f]/.test(c.name))
-  const duplicate = new Set(names).size !== names.length || names.some(name => unchanged.includes(name))
+  const duplicate = changes.some(c => { const file = selectedById.get(c.id); return !!file && (countsByCollection.get(file.collectionId)?.get(c.name.toLowerCase()) || 0) > 1 })
   return <Modal title="给文件，一个整齐的名字" subtitle={`批量重命名 · 已选择 ${files.length} 个文件`} onClose={onClose} wide>
     <label className="field">命名规则<input autoFocus value={pattern} onChange={e => setPattern(e.target.value)} aria-label="命名规则" /></label>
     <div className="token-list">{['{任务}', '{提交人}', '{序号}', '{原名}', '{日期}'].map(token => <button key={token} onClick={() => setPattern(pattern + token)}>{token}</button>)}<span>点击插入变量 · 自动保留扩展名</span></div>

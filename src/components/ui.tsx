@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { X, FileText, Image, FileArchive, FileSpreadsheet, Shapes, FolderOpen, Inbox } from 'lucide-react'
+import { fileExtension } from '../lib/collections'
 
 export function Brand({ small = false }: { small?: boolean }) {
   return <div className={`brand ${small ? 'small' : ''}`}><img src="/favicon.svg" alt="" /><div><strong>集屿<span>jiyu</span></strong>{!small && <p>让文件，各得其所</p>}</div></div>
@@ -16,7 +17,7 @@ export function Modal({ title, subtitle, children, onClose, wide = false }: { ti
 }
 
 export function FileIcon({ name, large = false }: { name: string; large?: boolean }) {
-  const ext = name.split('.').pop()?.toLowerCase()
+  const ext = fileExtension(name)
   const kind = ext === 'pdf' ? 'pdf' : ['jpg', 'jpeg', 'png', 'heic', 'svg'].includes(ext || '') ? 'image' : ext === 'fig' ? 'fig' : ['xlsx', 'csv', 'xls'].includes(ext || '') ? 'sheet' : ['zip', 'rar', '7z'].includes(ext || '') ? 'archive' : 'doc'
   const Icon = { pdf: FileText, image: Image, fig: Shapes, sheet: FileSpreadsheet, archive: FileArchive, doc: FileText }[kind]
   return <span className={`file-icon ${kind} ${large ? 'large' : ''}`}><Icon size={large ? 30 : 19} strokeWidth={1.6} /></span>

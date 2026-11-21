@@ -18,6 +18,11 @@ export function fileExtensions(formats: string) {
   return [...new Set(formats.split(/[,，、;；\s]+/).map(s => s.replace(/^\./, '').toLowerCase()).filter(Boolean))]
 }
 
+export function fileExtension(name: string) {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 && dot < name.length - 1 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
 export function isExpired(collection: Collection, now = Date.now()) {
   return new Date(`${collection.deadline}T23:59:59.999+08:00`).getTime() < now
 }
@@ -36,7 +41,7 @@ export function submissionError(collection: Collection, files: { name: string; s
   const extensions = fileExtensions(collection.formats)
   for (const file of files) {
     if (file.size === 0) return `「${file.name}」是空文件，请重新选择`
-    if (!extensions.includes(file.name.split('.').pop()?.toLowerCase() || '')) return `「${file.name}」的格式不符合要求，请选择 ${collection.formats} 文件。`
+    if (!extensions.includes(fileExtension(file.name))) return `「${file.name}」的格式不符合要求，请选择 ${collection.formats} 文件。`
     if (file.size > effectiveFileLimit(collection) * 1024 * 1024) return `「${file.name}」超过单文件 ${effectiveFileLimit(collection)} MB 上限。`
   }
   return ''

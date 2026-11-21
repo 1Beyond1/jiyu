@@ -13,7 +13,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 import type { Config } from './config.ts'
 import { Store } from './store.ts'
 import { checkPassword, digest, equalToken, hashPassword, HttpError, object, passwordInput, safeName, text, token } from './security.ts'
-import { fileExtensions, isExpired, submissionError } from '../src/lib/collections.ts'
+import { fileExtension, fileExtensions, isExpired, submissionError } from '../src/lib/collections.ts'
 import type { Collection, CollectedFile, TagChange } from '../src/types.ts'
 import { proposalHash, registerAI } from './ai.ts'
 import type { AITransport } from './ai.ts'
@@ -293,10 +293,22 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     }
     if (selected.some(f => f.name !== plan.find(p => p.id === f.id)?.oldName)) throw new HttpError(409, '文件名已被其他操作修改，请刷新后重新预览')
     if (selected.some(f => { const tag = tagPlan.find(t => t.id === f.id); return tag && JSON.stringify(tag.oldTags) !== JSON.stringify(f.tags || []) })) throw new HttpError(409, '分类已有后续修改，请重新生成建议')
-    const names = all.map(f => (plan.find(p => p.id === f.id)?.name || f.name).toLowerCase())
-    const newNames = namesPlan.map(p => p.name.toLowerCase())
-    if (newNames.some(name => names.filter(n => n === name).length > 1)) throw new HttpError(409, '命名方案产生重名，请调整规则')
-    for (const f of selected) { const next = plan.find(p => p.id === f.id)!.name; if (next.slice(next.lastIndexOf('.')).toLowerCase() !== f.name.slice(f.name.lastIndexOf('.')).toLowerCase()) throw new HttpError(400, '批量命名需保留文件扩展名') }
+    const finalNameById = new Map(plan.map(p => [p.id, p.name]))
+    const renamedIds = new Set(namesPlan.map(p => p.id))
+    const touchedCollections = new Set(selected.filter(f => renamedIds.has(f.id)).map(f => f.collectionId))
+    for (const cid of touchedCollections) {
+      const seen = new Map<string, number>()
+      for (const f of all) {
+        if (f.collectionId !== cid) continue
+        const key = (finalNameById.get(f.id) || f.name).toLowerCase()
+        seen.set(key, (seen.get(key) || 0) + 1)
+      }
+      for (const f of selected) {
+        if (f.collectionId !== cid || !renamedIds.has(f.id)) continue
+        if ((seen.get(finalNameById.get(f.id)!.toLowerCase()) || 0) > 1) throw new HttpError(409, '命名方案产生重名，请调整规则')
+      }
+    }
+    for (const f of selected) { const next = finalNameById.get(f.id)!; if (fileExtension(next) !== fileExtension(f.name)) throw new HttpError(400, '批量命名需保留文件扩展名') }
     const operationId = randomUUID()
     store.transaction(() => { for (const f of selected) { const change = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: change.name, materialVersion: (f.materialVersion || 0) + 1, ...(change.tags ? { tags: change.tags } : {}) }) }; store.db.prepare('INSERT INTO renames(id,data) VALUES (?,?)').run(operationId, JSON.stringify(plan)); if (aiRunId) store.db.prepare('UPDATE ai_runs SET status=? WHERE id=?').run('applied', String(aiRunId)); store.activity(`${aiRunId ? '确认 AI 方案，' : ''}整理 ${selected.length} 个文件的名称${tagPlan.length ? '与分类' : ''}`) })
     return { workspace: store.workspace(config.quotaBytes, config.requestBytes), operationId }
@@ -307,8 +319,13 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     const plan = JSON.parse(row.data) as { id: string; name: string; oldName: string; tags?: string[]; oldTags?: string[] }[], files = chosenFiles(plan.map(p => p.id))
     if (files.some(f => f.name !== plan.find(p => p.id === f.id)!.name)) throw new HttpError(409, '文件名已有后续修改，不能直接撤销')
     if (files.some(f => { const p = plan.find(p => p.id === f.id)!; return p.tags && JSON.stringify(p.tags) !== JSON.stringify(f.tags || []) })) throw new HttpError(409, '分类已有后续修改，不能直接撤销')
-    const targetNames = plan.map(p => p.oldName.toLowerCase()), unchanged = store.files().filter(f => !f.deletedAt && !plan.some(p => p.id === f.id))
-    if (new Set(targetNames).size !== targetNames.length || unchanged.some(f => targetNames.includes(f.name.toLowerCase()))) throw new HttpError(409, '原文件名已被占用，无法撤销')
+    const planMap = new Map(plan.map(p => [p.id, p]))
+    const allActive = store.files().filter(f => !f.deletedAt)
+    for (const cid of new Set(files.map(f => f.collectionId))) {
+      const targets = files.filter(f => f.collectionId === cid).map(f => planMap.get(f.id)!.oldName.toLowerCase())
+      const unchangedNames = new Set(allActive.filter(f => f.collectionId === cid && !planMap.has(f.id)).map(f => f.name.toLowerCase()))
+      if (new Set(targets).size !== targets.length || targets.some(name => unchangedNames.has(name))) throw new HttpError(409, '原文件名已被占用，无法撤销')
+    }
     store.transaction(() => { for (const f of files) { const p = plan.find(p => p.id === f.id)!; store.saveFile({ ...f, name: p.oldName, materialVersion: (f.materialVersion || 0) + 1, ...(p.oldTags ? { tags: p.oldTags } : {}) }) }; store.db.prepare('UPDATE renames SET undone=1 WHERE id=?').run(id); store.activity(`撤销了 ${files.length} 个文件的整理操作`) })
     return store.workspace(config.quotaBytes, config.requestBytes)
   })

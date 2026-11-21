@@ -4,6 +4,7 @@ import { Empty, FileIcon, Modal } from '../components/ui'
 import type { CollectedFile, Collection } from '../types'
 import { storageNames } from '../types'
 import { csvCell, downloadText, formatDate, formatSize } from '../lib/workspace'
+import { fileExtension } from '../lib/collections'
 import { ArchiveModal } from './archive'
 import { useAccount } from './auth'
 import { FilePreview } from './content'
@@ -37,7 +38,7 @@ export function FileTable({ files, collections, compact = false, search = '', co
     const timer = setTimeout(() => { void api<{ matches: { id: string; excerpt: string }[] }>(`/api/content/search?q=${encodeURIComponent(term)}`, 'GET', undefined, controller.signal).then(data => { setMatches(data.matches); setSearching(false) }).catch(e => { if (!controller.signal.aborted) { setSearchError((e as Error).message); setSearching(false) } }) }, 250)
     return () => { clearTimeout(timer); controller.abort() }
   }, [term, compact])
-  const visible = files.filter(f => (!collectionId || f.collectionId === collectionId) && (`${f.name} ${f.owner} ${(f.tags || []).join(' ')}`.toLowerCase().includes(term.toLowerCase()) || matches.some(m => m.id === f.id)) && (filter === 'all' || (filter === 'pending' ? f.status === 'pending' : ['jpg', 'jpeg', 'png', 'heic', 'svg'].includes(f.name.split('.').pop()?.toLowerCase() || '')))).sort((a, b) => (sortAsc ? 1 : -1) * (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()))
+  const visible = files.filter(f => (!collectionId || f.collectionId === collectionId) && (`${f.name} ${f.owner} ${(f.tags || []).join(' ')}`.toLowerCase().includes(term.toLowerCase()) || matches.some(m => m.id === f.id)) && (filter === 'all' || (filter === 'pending' ? f.status === 'pending' : ['jpg', 'jpeg', 'png', 'heic', 'svg'].includes(fileExtension(f.name))))).sort((a, b) => (sortAsc ? 1 : -1) * (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()))
   const list = compact ? visible.slice(0, 5) : visible
   const chosen = files.filter(f => selected.includes(f.id))
   const allChecked = list.length > 0 && list.every(f => selected.includes(f.id))

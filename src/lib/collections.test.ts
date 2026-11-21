@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { collectionState, deadlineFromText, defaultCollectionLimits, fileExtensions, isExpired, localDate, submissionError } from './collections.ts'
+import { collectionState, deadlineFromText, defaultCollectionLimits, fileExtension, fileExtensions, isExpired, localDate, submissionError } from './collections.ts'
 import type { Collection } from '../types.ts'
 
 const collection: Collection = { id: 'test', title: '测试收集', description: '', category: 'document', received: 0, target: 1, deadline: '2030-01-20', storage: 'local', status: 'active', formats: 'PDF, JPG', ...defaultCollectionLimits }
@@ -57,4 +57,17 @@ test('a deadline written in the sentence is read as the next such day', () => {
   assert.equal(deadlineFromText('2026年11月5日发布通知，2026年12月5日截止', '2026-11-01'), '2026-12-05')
   assert.equal(deadlineFromText('截止日期：12月20日，11月10日开说明会', '2026-11-01'), '2026-12-20')
   assert.equal(deadlineFromText('11月10日开会，12月1日放假', '2026-11-01'), '', '两个日期都没说是截止，就让人自己填')
+})
+
+test('无点号或仅首尾点号的文件名无扩展名，不能绕过格式白名单', () => {
+  assert.equal(fileExtension('report.PDF'), 'pdf')
+  assert.equal(fileExtension('.hidden.jpg'), 'jpg')
+  assert.equal(fileExtension('pdf'), '')
+  assert.equal(fileExtension('zip'), '')
+  assert.equal(fileExtension('.pdf'), '')
+  assert.equal(fileExtension('report.'), '')
+  for (const bad of ['pdf', 'PDF', 'jpg', '.pdf', 'file.']) {
+    assert.match(submissionError(collection, [{ name: bad, size: 10 }], now), /格式不符合/, `${bad} 必须被拒绝`)
+  }
+  assert.equal(submissionError(collection, [{ name: '.hidden.pdf', size: 10 }], now), '')
 })
