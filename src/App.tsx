@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { Component, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { ArrowDownToLine, ArrowRight, ArrowUpRight, Bell, Check, ChevronDown, ChevronRight, CircleHelp, Clock3, Files, FolderClosed, HardDrive, LayoutDashboard, Link, Menu, Plus, Search, Settings, ShieldCheck, Sparkles, Trash2, WandSparkles, X } from 'lucide-react'
 import { Brand, Empty, Modal } from './components/ui'
 import { CollectionCard, Collections, CollectionForm, ShareCollection } from './features/collections'
@@ -33,10 +34,19 @@ function readPage(): Page {
   return candidate in pageNames ? candidate as Page : 'overview'
 }
 
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  render() {
+    if (!this.state.error) return this.props.children
+    return <main className="auth-page"><Brand /><section className="auth-card" role="alert"><h1>页面遇到意外错误</h1><p>当前界面未能正常渲染，已保存的服务器数据不会受影响。</p><p className="error-text">{this.state.error.message || '未知界面异常'}</p><div className="button-row"><button type="button" className="button primary" onClick={() => location.reload()}>刷新页面</button><button type="button" className="button" onClick={() => this.setState({ error: null })}>尝试恢复</button></div></section></main>
+  }
+}
+
 export default function App() {
   const [hash, setHash] = useState(location.hash)
   useEffect(() => { const sync = () => setHash(location.hash); window.addEventListener('hashchange', sync); return () => window.removeEventListener('hashchange', sync) }, [])
-  return hash.startsWith('#/submit/') ? <PublicSubmission key={hash} uploadToken={hash.slice('#/submit/'.length)} /> : <AdminGate><WorkspaceApp /></AdminGate>
+  return <ErrorBoundary>{hash.startsWith('#/submit/') ? <PublicSubmission key={hash} uploadToken={hash.slice('#/submit/'.length)} /> : <AdminGate><WorkspaceApp /></AdminGate>}</ErrorBoundary>
 }
 
 function WorkspaceApp() {

@@ -1,3 +1,5 @@
+import { sha256Hex } from './browser-crypto.ts'
+
 export interface AtomicMaterialFile { id:string; name:string; sha256:string; text:string; version:string }
 export type AtomicAction = {type:'rules'} | {type:'read';ids:string[]} | {type:'locate';id:string;quote:string} | {type:'parse';id:string} | {type:'calc';operation:'add'|'subtract'|'multiply'|'divide';left:number;right:number} | {type:'version'} | {type:'clarify';questionId:string}
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0
@@ -6,7 +8,7 @@ export function canonicalMaterialSources<T extends {id:string;name:string;sha256
  return [...files].sort((a,b)=>cmp(a.name.normalize('NFC'),b.name.normalize('NFC'))||cmp(a.sha256||'',b.sha256||'')||cmp(a.id,b.id))
 }
 export async function verifyAtomicMaterialFiles(files:AtomicMaterialFile[]){
- for(const f of files){const bytes=new TextEncoder().encode(f.text),digest=await crypto.subtle.digest('SHA-256',bytes),actual=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');if(actual!==f.sha256)throw Error('原文hash不一致')}
+ for(const f of files){const actual=await sha256Hex(f.text);if(actual!==f.sha256)throw Error('原文hash不一致')}
  return canonicalMaterialSources(files)
 }
 export class MaterialAtomicSession {

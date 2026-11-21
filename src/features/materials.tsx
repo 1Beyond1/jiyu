@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Collection, CollectedFile, MaterialOperation } from '../types'
 import { materialStateLabels, materialStateVersion } from '../lib/materials'
+import { safeRandomUUID } from '../lib/browser-crypto'
 import { downloadText, formatSize } from '../lib/workspace'
 import { useAccount } from './auth'
 import { MaterialAIPanel } from './material-ai'
@@ -57,7 +58,7 @@ export function MaterialWorkbench({ collection: c, files, refreshKey, onDetail, 
     if (kind === 'review' && !draft.decision) { setError('请先选择人工核对结论。'); return }
     if (kind === 'review' && draft.decision === 'needs_changes' && !draft.note.trim()) { setError('请说明需要补充或纠正什么。'); return }
     const signature = JSON.stringify([personId, kind, selection, draft, aiReview])
-    if (pending.current?.signature !== signature) pending.current = { signature, kind, body: { collectionId: c.id, ...(aiReview ? { aiReview } : {}), rulesRevision: selection.rulesRevision, requestId: crypto.randomUUID(), files: selection.files.map(s => ({ ...s, ...(kind === 'classify' ? { materialId: draft.materialId } : {}) })), ...(kind === 'review' ? { decision: draft.decision as 'accepted' | 'needs_changes', note: draft.note.trim() } : {}) } }
+    if (pending.current?.signature !== signature) pending.current = { signature, kind, body: { collectionId: c.id, ...(aiReview ? { aiReview } : {}), rulesRevision: selection.rulesRevision, requestId: safeRandomUUID(), files: selection.files.map(s => ({ ...s, ...(kind === 'classify' ? { materialId: draft.materialId } : {}) })), ...(kind === 'review' ? { decision: draft.decision as 'accepted' | 'needs_changes', note: draft.note.trim() } : {}) } }
     setBusy(true); setError(''); setNotice('')
     try { await onAction(pending.current.kind, pending.current.body); selectFiles([]); if (kind === 'review') setDrafts(old => ({ ...old, [personId]: { materialId: '', decision: '', note: '' } })); state.retry(); setNotice(kind === 'classify' ? '材料归属已保存；变化的文件需重新核对。' : '人工核对结果已保存。') }
     catch (e) { setError((e as Error).message) } finally { setBusy(false) }

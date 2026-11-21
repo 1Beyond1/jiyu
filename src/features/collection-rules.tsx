@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { submissionFileName } from '../lib/submission-naming'
+import { safeRandomUUID } from '../lib/browser-crypto'
 import type { Collection } from '../types'
 import { MaterialRulesEditor } from './material-rules'
 
@@ -10,7 +11,7 @@ export function CollectionRules({ value, onChange, locked, section = 'all', titl
   return <div className="collection-rules-editor">
     {section !== 'naming' && <><div className="rule-heading"><h3>提交信息</h3><small>姓名始终必填 · 最多 8 个自定义字段</small></div>
     {fields.map((f, i) => <div className="custom-field-row" key={f.id}><label className="field">字段 {i + 1}<input aria-label={`字段 ${i + 1} 名称`} value={f.label} maxLength={20} required onChange={e => update({ fields: fields.map(v => v.id === f.id ? { ...v, label: e.target.value } : v) })} placeholder="例如：班级、学号" /></label><label className="check-field"><input type="checkbox" checked={f.required} disabled={value.identityField === f.id} onChange={e => update({ fields: fields.map(v => v.id === f.id ? { ...v, required: e.target.checked } : v) })} />必填</label><button className="text-button" type="button" disabled={locked && value.identityField === f.id} onClick={() => update({ fields: fields.filter(v => v.id !== f.id), identityField: value.identityField === f.id ? 'owner' : value.identityField, naming: { ...naming, parts: naming.parts.filter(p => p !== f.id) } })}>移除</button></div>)}
-    <button className="button" type="button" disabled={fields.length >= 8} onClick={() => update({ fields: [...fields, { id: `field_${crypto.randomUUID().slice(0, 8)}`, label: '', required: true }] })}>添加提交字段</button>
+    <button className="button" type="button" disabled={fields.length >= 8} onClick={() => update({ fields: [...fields, { id: `field_${safeRandomUUID().slice(0, 8)}`, label: '', required: true }] })}>添加提交字段</button>
     <div className="form-row"><label className="field">按什么识别提交人<select disabled={locked} value={value.identityField || 'owner'} onChange={e => update({ identityField: e.target.value })}><option value="owner">姓名</option>{fields.filter(f => f.required).map(f => <option key={f.id} value={f.id}>{f.label || '未命名字段'}</option>)}</select><small>{locked ? '已有提交，标识字段已锁定。' : '同名较多时，建议选择学号或项目编号。'}</small></label><label className="field">同一标识重复提交<select value={value.submissionMode || 'append'} onChange={e => update({ submissionMode: e.target.value as Collection['submissionMode'] })}><option value="append">允许补交，合并统计</option><option value="single">仅一次，后续凭回执替换</option></select></label></div>
     <label className="check-field"><input type="checkbox" checked={value.allowReplacement !== false} onChange={e => update({ allowReplacement: e.target.checked })} />允许提交者凭本人回执替换文件</label>
     <label className="field">应交名单（选填）<textarea rows={3} value={(value.expectedSubmitters || []).join('\n')} onChange={e => update({ expectedSubmitters: e.target.value.split('\n') })} placeholder="每行一个姓名或所选标识，例如学号" /><small>仅工作台成员可见；按上面选择的标识对照。最多 1000 人，不限制名单外的人提交。</small></label>

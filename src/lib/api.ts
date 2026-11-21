@@ -1,4 +1,5 @@
-import type { UploadReceipt, SubmissionMetadata, UploadFeedback, UploadFileProgress } from '../types'
+import type { UploadReceipt, SubmissionMetadata, UploadFeedback, UploadFileProgress } from '../types.ts'
+import { safeRandomHex, safeRandomUUID, sha256Hex } from './browser-crypto.ts'
 
 let csrf = ''
 export function setCsrf(value: string) { csrf = value }
@@ -84,7 +85,7 @@ export async function uploadFiles(uploadToken: string, files: File[], owner: str
   let matches = false
   try { matches = !!record && comparableSignature(record.signature) === comparableSignature(signature) } catch { /* A malformed local draft can be discarded. */ }
   if (record && !matches) { try { await discardUpload(uploadToken); record = null } catch (e) { phase = 'failed'; emit(); throw e } }
-  if (!record || record.savedAt < Date.now() - 24 * 60 * 60 * 1000) record = { id: crypto.randomUUID(), key: Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join(''), signature, savedAt: Date.now() }
+  if (!record || record.savedAt < Date.now() - 24 * 60 * 60 * 1000) record = { id: safeRandomUUID(), key: safeRandomHex(32), signature, savedAt: Date.now() }
   try { localStorage.setItem(resumeStorage(uploadToken), JSON.stringify(record)) } catch { /* Current page still retains its continuation credential. */ }
   const base = `/api/public/${encodeURIComponent(uploadToken)}/uploads/${record.id}`
   const request = async <T>(url: string, method: string, body?: string | Blob, headers?: Record<string, string>): Promise<T> => {
@@ -123,7 +124,7 @@ export async function uploadFiles(uploadToken: string, files: File[], owner: str
       for (let part = 0; part < Math.ceil(file.size / state.chunkBytes); part++) {
         signal.throwIfAborted()
         const bytes = file.slice(part * state.chunkBytes, (part + 1) * state.chunkBytes)
-        const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await bytes.arrayBuffer())), b => b.toString(16).padStart(2, '0')).join('')
+        const hash = await sha256Hex(await bytes.arrayBuffer())
         const previous = state.parts.find(p => p.file_index === index && p.part_index === part)
         if (previous && previous.sha256 !== hash) throw new Error('所选文件内容与已上传的分片不同，请使用原文件，或点击“重新开始”')
         update(index, previous ? 'checking' : 'uploading')

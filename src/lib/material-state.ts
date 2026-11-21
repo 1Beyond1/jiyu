@@ -1,5 +1,6 @@
 import type { Collection, CollectedFile, MaterialParticipant, MaterialStateReport } from '../types.ts'
 import { materialSnapshotKey, materialStateVersion } from './materials.ts'
+import { sha256Hex } from './browser-crypto.ts'
 
 export class MaterialSnapshotChanged extends Error {
   constructor() { super('文件、名单或规则刚有变化，请同步最新记录后继续。') }
@@ -11,8 +12,7 @@ export async function readMaterialRows(report: MaterialStateReport, collection: 
   if (report.collectionId !== collection.id || typeof report.rulesRevision !== 'string' || report.rulesRevision !== collection.materialRevision || typeof report.stateVersion !== 'string' || !/^[a-f0-9]{64}$/.test(report.stateVersion) || JSON.stringify(report.requirements) !== JSON.stringify(collection.materials) || !Array.isArray(report.files) || report.files.length !== active.length || !Array.isArray(report.participants)) throw new MaterialSnapshotChanged()
   const byId = new Map(active.map(f => [f.id, f]))
   if (new Set(report.files.map(f => f.id)).size !== active.length || report.files.some(f => !byId.has(f.id) || f.expectedVersion !== materialStateVersion(byId.get(f.id)!))) throw new MaterialSnapshotChanged()
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(materialSnapshotKey(collection, active)))
-  const expected = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')
+  const expected = await sha256Hex(materialSnapshotKey(collection, active))
   if (report.stateVersion !== expected) throw new MaterialSnapshotChanged()
   const file = (id: string) => { const value = byId.get(id); if (!value) throw new MaterialSnapshotChanged(); return value }
   return report.participants.map(p => {

@@ -4,6 +4,7 @@ import { ArrowRight, ArrowUp, CornerDownLeft, Settings2, Sparkles, WandSparkles,
 import type { AIReply, AISettings, CollectedFile, Workspace } from '../types'
 import { collectionState } from '../lib/collections'
 import { api } from '../lib/api'
+import { safeRandomUUID } from '../lib/browser-crypto'
 import { checkCollection, filesForAction } from '../lib/collection-check'
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string; actionIds?: string[]; proposal?: AIReply; model?: string; error?: boolean }
@@ -31,15 +32,15 @@ export function Assistant({ workspace, initialFileIds, initialCollectionId = '',
   function changeScope(value: string) { setScopeFilter(value); setSelected(workspace.files.filter(f => f.collectionId === value).slice(0, 30).map(f => f.id)); setConsent(false); setInput('') }
   async function send(text: string) {
     if (!text.trim() || busy || (mode === 'model' && !consent)) return
-    setMessages(old => [...old, { id: crypto.randomUUID(), role: 'user', text: text.trim() }]); setInput('')
+    setMessages(old => [...old, { id: safeRandomUUID(), role: 'user', text: text.trim() }]); setInput('')
     if (mode === 'model') {
       setBusy(true); controller.current = new AbortController()
       try {
         const reply = await api<AIReply>('/api/ai/chat', 'POST', { prompt: text.trim(), fileIds: selected, includeOwners, includeContent, contentConsent: includeContent, consent: true, settingsRevision: settings?.revision }, controller.current.signal)
-        setMessages(old => [...old, { id: crypto.randomUUID(), role: 'assistant', text: reply.reply, proposal: reply.changes.length || reply.tags?.length ? reply : undefined, model: settings?.model }])
+        setMessages(old => [...old, { id: safeRandomUUID(), role: 'assistant', text: reply.reply, proposal: reply.changes.length || reply.tags?.length ? reply : undefined, model: settings?.model }])
       } catch (e) {
         const error = e as Error
-        setMessages(old => [...old, { id: crypto.randomUUID(), role: 'assistant', text: error.name === 'AbortError' ? '请求已取消，文件没有修改。已经发送的请求仍可能由服务商计费。' : error.message, error: true }])
+        setMessages(old => [...old, { id: safeRandomUUID(), role: 'assistant', text: error.name === 'AbortError' ? '请求已取消，文件没有修改。已经发送的请求仍可能由服务商计费。' : error.message, error: true }])
       } finally { setBusy(false); setConsent(false); void api<AISettings>('/api/ai/settings').then(setSettings).catch(() => {}) }
     } else {
       let response = '', action = false
@@ -52,7 +53,7 @@ export function Assistant({ workspace, initialFileIds, initialCollectionId = '',
       else response = '当前使用内置规则。可以查看收集进度或预览统一命名；配置模型后，可对选定文件提出更具体的整理建议。'
       const pendingFiles = workspace.files.filter(f => f.status === 'pending')
       const candidates = chosen.length ? chosen : task ? [] : (pendingFiles.length ? pendingFiles : workspace.files).slice(0, 500)
-      setMessages(old => [...old, { id: crypto.randomUUID(), role: 'assistant', text: response, actionIds: action && candidates.length ? candidates.map(f => f.id) : undefined, model: '内置规则' }])
+      setMessages(old => [...old, { id: safeRandomUUID(), role: 'assistant', text: response, actionIds: action && candidates.length ? candidates.map(f => f.id) : undefined, model: '内置规则' }])
     }
     inputRef.current?.focus()
   }

@@ -5,6 +5,7 @@ import type { Collection, CollectionInput, DraftConfirmation, CollectionTemplate
 import { CollectionDraftEditor } from './collection-draft'
 import { storageNames } from '../types'
 import { api } from '../lib/api'
+import { safeRandomUUID } from '../lib/browser-crypto'
 import { defaultCollectionLimits, fileExtensions, localDate, nextWeek } from '../lib/collections'
 import { CollectionRules } from './collection-rules'
 import { TemplatePicker } from './collection-templates'
@@ -64,7 +65,7 @@ export function CollectionForm({ collection, initialStorage = 'local', onClose, 
     <form ref={form} noValidate onSubmit={e => {
       e.preventDefault(); if (busy || !validate()) return
       if (step < 2) { setStep(step + 1); return }
-      onSave({ ...rules, ...(draftConfirmation ? { draftConfirmation } : {}), expectedSubmitters: (rules.expectedSubmitters || []).map(v => v.trim()).filter(Boolean), id: collection?.id || crypto.randomUUID(), title: title.trim(), description: description.trim() || '期待每一份认真准备的文件', target, deadline, category, formats: fileExtensions(formats).join(', ').toUpperCase(), received: collection?.received || 0, storage, status: collection?.status || 'active', maxFileSizeMB, maxFilesPerSubmission, maxTotalSizeMB })
+      onSave({ ...rules, ...(draftConfirmation ? { draftConfirmation } : {}), expectedSubmitters: (rules.expectedSubmitters || []).map(v => v.trim()).filter(Boolean), id: collection?.id || safeRandomUUID(), title: title.trim(), description: description.trim() || '期待每一份认真准备的文件', target, deadline, category, formats: fileExtensions(formats).join(', ').toUpperCase(), received: collection?.received || 0, storage, status: collection?.status || 'active', maxFileSizeMB, maxFilesPerSubmission, maxTotalSizeMB })
     }}>
       <fieldset disabled={busy}>
       {step === 0 && <>

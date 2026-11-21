@@ -8,6 +8,7 @@ import { ReceiptManager } from './submission-receipt'
 import { SampleSubmitHint } from './sample-tour'
 import { UploadList } from './upload-list'
 import { descriptorKey } from '../lib/materials'
+import { safeRandomUUID } from '../lib/browser-crypto'
 import type { Collection, UploadReceipt, ReceiptDetail, SubmissionMetadata, UploadFeedback } from '../types'
 
 export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
@@ -32,7 +33,7 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
   const [confirming, setConfirming] = useState(false)
   const [feedback, setFeedback] = useState<UploadFeedback | null>(null)
   const [pending, setPending] = useState(() => hasPendingUpload(uploadToken))
-  const picker = useRef<HTMLInputElement>(null), form = useRef<HTMLFormElement>(null), controller = useRef<AbortController | null>(null), requestId = useRef(crypto.randomUUID())
+  const picker = useRef<HTMLInputElement>(null), form = useRef<HTMLFormElement>(null), controller = useRef<AbortController | null>(null), requestId = useRef(safeRandomUUID())
   // Files picked from a material card are assigned to that material; the generic drop zone leaves them unclassified.
   const pickFor = useRef('')
   const submitButton = useRef<HTMLButtonElement>(null)
@@ -40,7 +41,7 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
   const ended = c.status !== 'active' || isExpired(c, now)
   function continueSubmission(detail: ReceiptDetail, replace: boolean, key: string) {
     setMaterialChoices({})
-    setName(detail.owner); setFields(detail.fields); setReplacement(replace ? { receiptId: detail.receipt.receiptId, key } : undefined); setReceipt(null); setFeedback(null); setFiles([]); setError(''); setPending(hasPendingUpload(uploadToken)); requestId.current = crypto.randomUUID()
+    setName(detail.owner); setFields(detail.fields); setReplacement(replace ? { receiptId: detail.receipt.receiptId, key } : undefined); setReceipt(null); setFeedback(null); setFiles([]); setError(''); setPending(hasPendingUpload(uploadToken)); requestId.current = safeRandomUUID()
   }
   const receiptManager = <><SampleSubmitHint collectionId={c.id} done={!!receipt} /><ReceiptManager c={c} uploadToken={uploadToken} receipt={receipt} onOpen={setReceipt} onContinue={continueSubmission} /></>
   function addFiles(incoming: FileList | null, materialId = '') {
@@ -51,7 +52,7 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     if (invalid) { setError(invalid); return }
     if (next.reduce((sum, f) => sum + f.size, 0) > (c.requestLimitMB || 512) * 1024 ** 2) { setError(`单次提交总量不能超过 ${c.requestLimitMB || 512} MB`); return }
     if (materialId && c.materials?.some(m => m.id === materialId)) setMaterialChoices(old => ({ ...old, ...Object.fromEntries(added.map(f => [descriptorKey(f), materialId])) }))
-    setFeedback(null); setFiles(next); setError(''); requestId.current = crypto.randomUUID()
+    setFeedback(null); setFiles(next); setError(''); requestId.current = safeRandomUUID()
   }
   function openPicker(materialId = '') { pickFor.current = materialId; picker.current?.click() }
   const choiceOf = (f: File) => c.materials?.some(m => m.id === materialChoices[descriptorKey(f)]) ? materialChoices[descriptorKey(f)] : ''
@@ -67,8 +68,8 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
   return <main className="submission-page"><div className="submission-top"><Brand /><span className="preview-badge">文件提交</span></div><section className="submission-card">{receipt ? <div className="submission-success"><CheckCircle2 size={52} strokeWidth={1.4} /><p className="eyebrow">ALL SET</p><h1>每一份认真，都已收到。</h1><p>{receipt.filesCount} 份文件已保存到发起人的服务器。</p><div className="receipt-box"><span>提交回执</span><code>{receipt.receiptId}</code><small>共 {formatSize(receipt.bytes)} · 请保留回执，方便联系发起人。</small></div>{receiptManager}</div> : <><span className="submission-kicker">{ownerName} 邀请你提交文件</span><h1>{c.title}</h1><p className="submission-description">{c.description}</p><div className="submission-meta"><span>截止 {c.deadline}</span><span>已收到 {c.received} 份</span></div>{!busy && receiptManager}{pending && !busy && <div className="form-note">上次提交未取得回执，可直接确认结果，无需重新选择文件。<button className="button" disabled={confirming} onClick={async () => { setConfirming(true); setError(''); try { const saved = await recoverUploadReceipt(uploadToken); if (saved) { setReceipt(saved); setPending(false) } else setError('这批文件尚未保存，请选择原文件继续上传。') } catch (e) { setError((e as Error).message) } finally { setConfirming(false) } }}>确认上次提交结果</button></div>}{ended && !busy ? <div className="empty"><LockKeyhole size={30} /><h3>{c.status === 'active' ? '这项收集已截止' : c.status === 'paused' ? '这项收集已暂停' : '这项收集已结束'}</h3><p>请联系发起人了解下一步安排。</p>{error && <p className="error-text" role="alert">{error}</p>}</div> : <form ref={form} onSubmit={e => { e.preventDefault(); void submit() }}><fieldset disabled={busy || confirming}>
-    {pending && <div className="form-note">已启用断点续传。刷新后重新填写原姓名和提交信息、选择原文件即可继续，分片保留 24 小时。<button type="button" className="text-button" onClick={async () => { setBusy(true); try { await discardUpload(uploadToken); setPending(false); setFeedback(null); setError(''); requestId.current = crypto.randomUUID() } catch (e) { setError((e as Error).message) } finally { setBusy(false) } }}>重新开始</button></div>}
-    <label className="field">你的姓名<input value={name} onChange={e => { setName(e.target.value); requestId.current = crypto.randomUUID() }} required maxLength={30} placeholder="方便发起人知道文件来自你" autoComplete="name" /></label>
+    {pending && <div className="form-note">已启用断点续传。刷新后重新填写原姓名和提交信息、选择原文件即可继续，分片保留 24 小时。<button type="button" className="text-button" onClick={async () => { setBusy(true); try { await discardUpload(uploadToken); setPending(false); setFeedback(null); setError(''); requestId.current = safeRandomUUID() } catch (e) { setError((e as Error).message) } finally { setBusy(false) } }}>重新开始</button></div>}
+    <label className="field">你的姓名<input value={name} onChange={e => { setName(e.target.value); requestId.current = safeRandomUUID() }} required maxLength={30} placeholder="方便发起人知道文件来自你" autoComplete="name" /></label>
     {(c.fields || []).map(f => <label className="field" key={f.id}>{f.label}{!f.required && '（选填）'}<input value={fields[f.id] || ''} required={f.required} maxLength={80} onChange={e => setFields(old => ({ ...old, [f.id]: e.target.value }))} /></label>)}
     {replacement && <div className="replacement-note"><strong>正在替换原批次</strong><p>请重新选择这批完整文件。提交成功后原批次进入回收站，其他补交批次保持保留。</p><button type="button" className="text-button" onClick={() => setReplacement(undefined)}>取消替换，改为普通提交</button></div>}
     {c.maxFileSizeMB > effectiveFileLimit(c) && <p className="field-hint">当前服务器单次接收上限为 {c.requestLimitMB ?? 512} MB，单文件可上传上限已按此调整。</p>}
@@ -80,7 +81,7 @@ function Submission({ collection: c, ownerName, uploadToken }: { collection: Col
     <input ref={picker} type="file" multiple accept={fileExtensions(c.formats).map(s => `.${s}`).join(',')} className="sr-only" onChange={e => { addFiles(e.target.files, pickFor.current); pickFor.current = ''; e.target.value = '' }} aria-label="选择提交文件" />
     <button type="button" className={`drop-zone ${dragging ? 'dragging' : ''} ${c.materials?.length ? 'secondary' : ''}`} onClick={() => openPicker()} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files) }}><span><FileUp size={29} strokeWidth={1.5} /></span><strong>{c.materials?.length ? '其他文件：点击选择或拖到这里' : '点击选择，或把文件拖到这里'}</strong><p>{c.formats}<br />单文件 ≤ {effectiveFileLimit(c)} MB · 每次最多 {c.maxFilesPerSubmission} 个<br />单次总量 ≤ {c.requestLimitMB || 512} MB</p></button>
 
-    <UploadList files={files} feedback={feedback} busy={busy} onRetry={() => void submit()} onRemove={i => { setFiles(old => old.filter((_, index) => index !== i)); setFeedback(null); setError(''); requestId.current = crypto.randomUUID() }} />
+    <UploadList files={files} feedback={feedback} busy={busy} onRetry={() => void submit()} onRemove={i => { setFiles(old => old.filter((_, index) => index !== i)); setFeedback(null); setError(''); requestId.current = safeRandomUUID() }} />
     <div className="form-note">文件将保存到发起人的服务器，仅工作台授权成员可查看和下载。</div><button ref={submitButton} className="button primary submit-button" type="submit" disabled={!files.length}>{busy ? `上传中 ${progress}%` : feedback?.phase === 'paused' ? '继续上传' : error ? '重试并确认回执' : replacement ? `确认替换为 ${files.length} 份文件` : `提交${files.length ? ` ${files.length} 份` : ''}文件`}<ArrowRight size={16} /></button>
   </fieldset>{busy && <div className="upload-progress" role="status"><div className="progress"><span style={{ width: `${progress}%` }} /></div><p>{feedback?.phase === 'saving' ? '文件已传完，正在等待整批回执…' : feedback?.phase === 'preparing' ? '正在连接并读取续传记录…' : `已确认传输 ${progress}%`}<button type="button" className="text-button" onClick={() => controller.current?.abort()}>暂停上传</button></p></div>}{error && <p className="error-text" role="alert">{error}</p>}</form>}</>}</section><footer className="submission-bottom"><span><LockKeyhole size={13} />仅工作台授权成员可见</span><span>由集屿提供支持</span></footer></main>
 }

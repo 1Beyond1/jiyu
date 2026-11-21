@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ArrowRight, Download, Sparkles } from 'lucide-react'
 import type { Collection, Workspace } from '../types'
 import { uploadFiles } from '../lib/api'
+import { safeRandomUUID } from '../lib/browser-crypto'
 import { collectionPresets } from '../lib/collection-presets'
 import { nextWeek } from '../lib/collections'
 import { materialParticipants } from '../lib/materials'
@@ -28,7 +29,7 @@ async function createSample(create: (body: unknown) => Promise<Workspace | undef
   // The server assigns the ID; collections come newest first.
   const c = workspace?.collections.find(x => x.title === title)
   if (!c?.uploadToken) throw new Error('示例任务没有创建成功，请重试')
-  const send = (owner: string, files: File[], materialIds: string[]) => uploadFiles(c.uploadToken!, files, owner, crypto.randomUUID(), () => {}, new AbortController().signal, { fields: { field_registration: owner }, materialIds })
+  const send = (owner: string, files: File[], materialIds: string[]) => uploadFiles(c.uploadToken!, files, owner, safeRandomUUID(), () => {}, new AbortController().signal, { fields: { field_registration: owner }, materialIds })
   // DEMO-01 goes last: the browser keeps one receipt per link, and step 2 replaces DEMO-01's batch with it.
   await send('DEMO-02', [textFile('报名表.txt', sample.form.replace('{id}', 'DEMO-02'))], ['mat_form'])
   await send('DEMO-01', [textFile('报名表.txt', sample.form.replace('{id}', 'DEMO-01')), textFile('作品说明.txt', sample.statement)], ['mat_form', 'mat_statement'])
