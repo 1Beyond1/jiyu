@@ -10,6 +10,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { FastifyRequest, FastifyReply } from 'fastify'
+import { resolveRateLimits } from './config.ts'
 import type { Config } from './config.ts'
 import { Store } from './store.ts'
 import { checkPassword, digest, equalToken, hashPassword, HttpError, object, passwordInput, safeName, text, token } from './security.ts'
@@ -58,8 +59,9 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   const store = new Store(config.dataDir)
   const app = Fastify({ logger: false, trustProxy: config.trustProxy || false, bodyLimit: 64 * 1024, requestTimeout: 10 * 60 * 1000, connectionTimeout: 30 * 1000 })
   const budget: UploadBudget = { bytes: 0, files: 0, active: 0, collections: new Map(), committedBytes: 0, committedCollections: new Map() }
+  const rateLimits = resolveRateLimits(config.rateLimits)
   await app.register(cookie)
-  await app.register(rateLimit, { global: true, max: 180, timeWindow: '1 minute', errorResponseBuilder: () => ({ error: '操作过于频繁，请稍后重试' }) })
+  await app.register(rateLimit, { global: true, max: rateLimits.globalPerMinute, timeWindow: '1 minute', errorResponseBuilder: () => new HttpError(429, '操作过于频繁，请稍后重试') })
   await app.register(multipart, { preservePath: true, limits: { fileSize: Math.min(config.requestBytes, 1024 ** 3), files: 100, fields: 1, fieldSize: 120, fieldNameSize: 30, parts: 101, headerPairs: 100 } })
   const session = (req: FastifyRequest) => {
     const value = req.cookies.jiyu_session
@@ -153,7 +155,14 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     return setSession(reply, auth.id)
   })
   app.get('/api/workspace', async req => { const workspace = store.workspace(config.quotaBytes, config.requestBytes); if (session(req)?.role === 'viewer') { workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c); workspace.lastRenameId = undefined }; return workspace })
-  app.patch('/api/settings', async req => { store.set('displayName', text(object(req.body).displayName, '显示名称', 20)); return store.workspace(config.quotaBytes, config.requestBytes) })
+  app.patch('/api/settings', async req => {
+    const displayName = text(object(req.body).displayName, '显示名称', 20)
+    store.transaction(() => {
+      store.set('displayName', displayName)
+      store.db.prepare("UPDATE users SET display_name=? WHERE id='primary'").run(displayName)
+    })
+    return store.workspace(config.quotaBytes, config.requestBytes)
+  })
   app.post('/api/settings/diagnostics', { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } }, async () => diagnostics(store, config, budget.bytes))
   app.post('/api/collections', async req => { const body = object(req.body), c = { ...collectionInput(body), storage: requireStorage(store, body.storage) }; store.transaction(() => { const origin = confirmCollectionDraft(store, body, c); if (origin) c.draftOrigin = origin; store.saveCollection(c); store.activity(`创建了「${c.title}」`) }); return store.workspace(config.quotaBytes, config.requestBytes) })
   const getCollection = (id: string) => { const c = store.collection(id); if (!c) throw new HttpError(404, '没有找到这项收集'); return c }
@@ -181,7 +190,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     const { uploadToken: _secret, expectedSubmitters: _roster, draftOrigin: _draftOrigin, ...c } = publicCollection(String(object(req.params).token))
     return { collection: { ...c, requestLimitMB: config.requestBytes / 1024 ** 2 }, ownerName: store.get('displayName') || '管理员' }
   })
-  app.post('/api/public/:token/upload', { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } }, async (req, reply) => {
+  app.post('/api/public/:token/upload', { config: { rateLimit: { max: rateLimits.multipartPerHour, timeWindow: '1 hour' } } }, async (req, reply) => {
     const c = publicCollection(String(object(req.params).token))
     if (c.status !== 'active' || isExpired(c)) throw new HttpError(410, '这项收集已暂停、结束或超过截止时间')
     if (c.fields?.length || c.materials?.length || c.naming?.parts.length || c.submissionMode === 'single') throw new HttpError(400, '此任务有新提交规则，请使用新版提交页')
@@ -338,7 +347,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
   registerUsers(app, store, req => session(req)?.id)
   const stopBackups = await registerBackups(app, store, config.backupDir || resolve(config.dataDir, '..', 'backups'))
   const stopContent = registerContent(app, store, options.contentExtractor)
-  const stopStorage = registerStorage(app, store, options.storageHTTP, config.origin)
+  const stopStorage = registerStorage(app, store, options.storageHTTP, config.origin, req => session(req)?.role)
   app.addHook('onClose', async () => { await stopStorage(); await stopContent(); await stopBackups(); store.close() })
   if (options.serveFrontend !== false && existsSync(resolve('dist/index.html'))) {
     await app.register(staticFiles, { root: resolve('dist'), index: ['index.html'], cacheControl: false })

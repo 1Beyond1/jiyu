@@ -1,10 +1,10 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { join } from 'node:path'
 import { encrypt, decrypt } from './secrets.ts'
 import type { Store } from './store.ts'
-import type { StorageProfile, StorageId, TransferInfo } from '../src/types.ts'
+import type { StorageProfile, StorageId, TransferInfo, UserRole } from '../src/types.ts'
 import { cloudStorageIds } from '../src/types.ts'
 import { HttpError, object, text } from './security.ts'
 import { endpointBase } from './ai.ts'
@@ -32,7 +32,7 @@ function rootInput(value: unknown) {
   return '/' + root.split('/').filter(Boolean).join('/')
 }
 
-export function registerStorage(app: FastifyInstance, store: Store, http: RemoteHTTP = remoteHTTP, origin = 'http://127.0.0.1:3000') {
+export function registerStorage(app: FastifyInstance, store: Store, http: RemoteHTTP = remoteHTTP, origin = 'http://127.0.0.1:3000', actorRole?: (req: FastifyRequest) => UserRole | undefined) {
   let running: Promise<void> | undefined, stopping = false, testing = false
   const controller = new AbortController()
   const credentials = (p: SavedProfile) => p.encryptedCredentials ? JSON.parse(decrypt(store, p.encryptedCredentials)) as StorageCredentials : {}
@@ -66,7 +66,35 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
   }
   const adapter = (p: SavedProfile, c: StorageCredentials) => p.id === 'baidu' ? new BaiduStorage(safe(p), c, http, controller.signal) : (p.id === 'onedrive' || p.id === 'gdrive') && !p.via ? new DriveStorage(safe(p), c, http, controller.signal) : new StandardStorage(safe(p), c, http, controller.signal)
   registerDriveOAuth(app, store, { origin, http, signal: controller.signal, get, credentials, save: saveCredentials })
-  app.get('/api/storage/connections', async () => ({ profiles: profiles(), supported: [...implemented], callbackUrls: { onedrive: `${origin}/api/storage/oauth/onedrive/callback`, gdrive: `${origin}/api/storage/oauth/gdrive/callback` }, transfers: store.db.prepare('SELECT * FROM remote_transfers ORDER BY updated_at DESC LIMIT 100').all() }))
+  const summaryProfile = (p: StorageProfile): StorageProfile => ({
+    id: p.id,
+    endpoint: '',
+    root: '',
+    hasCredentials: p.hasCredentials,
+    ...(p.authorized !== undefined ? { authorized: p.authorized } : {}),
+    enabled: p.enabled,
+    ...(p.verifiedAt ? { verifiedAt: p.verifiedAt } : {}),
+    revision: '',
+  })
+  app.get('/api/storage/connections', async req => {
+    const isAdmin = !actorRole || actorRole(req) === 'admin'
+    const allProfiles = profiles()
+    const transfers = store.db.prepare('SELECT * FROM remote_transfers ORDER BY updated_at DESC LIMIT 100').all() as unknown as TransferInfo[]
+    if (isAdmin) {
+      return {
+        profiles: allProfiles,
+        supported: [...implemented],
+        callbackUrls: { onedrive: `${origin}/api/storage/oauth/onedrive/callback`, gdrive: `${origin}/api/storage/oauth/gdrive/callback` },
+        transfers,
+      }
+    }
+    return {
+      profiles: allProfiles.map(summaryProfile),
+      supported: [...implemented],
+      callbackUrls: {},
+      transfers: transfers.map(({ file_id, provider, state, attempts, updated_at }) => ({ file_id, provider, state, attempts, updated_at })),
+    }
+  })
   app.put('/api/storage/connections/:id', async req => {
     const id = String(object(req.params).id) as Provider, body = object(req.body)
     if (!implemented.has(id)) throw new HttpError(400, '此平台的独立应用授权适配尚未完成，暂不能配置为收集目标')

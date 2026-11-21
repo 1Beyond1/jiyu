@@ -22,7 +22,7 @@ export async function diagnostics(store: Store, config: Config, uploadingBytes =
   try { await access(backupDir, constants.W_OK); backupWritable = true } catch { /* The first backup may create the destination. */ }
   const settings = JSON.parse(store.get('backup.settings') || '{"enabled":false}') as { enabled?: boolean }
   items.push({ id: 'backup', label: '自动备份', state: backupWritable && !!settings.enabled ? 'ok' : 'attention', detail: !backupWritable ? '备份目录尚未创建或不可写；未配置路径时使用数据目录旁的 backups。' : settings.enabled ? '备份目录可写，计划已开启；仍请定期验证恢复。' : '目录可写，自动备份尚未开启。', action: '在备份设置中开启计划并完成一次备份；副本建议再保存到另一台设备。' })
-  const [pdf, ocr] = await Promise.all([tool('pdftotext', ['-v']), tool('tesseract', ['--version'])])
+  const [pdf, ocr] = await Promise.all([tool(process.env.JIYU_PDFTOTEXT || 'pdftotext', ['-v']), tool(process.env.JIYU_TESSERACT || 'tesseract', ['--version'])])
   items.push({ id: 'pdf', label: 'PDF 文字提取', state: pdf ? 'ok' : 'attention', detail: pdf ? 'Poppler 命令可运行。' : '没有可运行的 pdftotext。', action: pdf ? undefined : '使用官方 Docker 镜像，或安装 Poppler；不影响普通文件收集。' })
   items.push({ id: 'ocr', label: '图片 OCR', state: ocr ? 'ok' : 'attention', detail: ocr ? 'Tesseract 命令可运行；识别语言仍取决于已安装语言包。' : '没有可运行的 Tesseract。', action: ocr ? undefined : '使用官方 Docker 镜像，或安装 Tesseract 与中文语言包。' })
   return { checkedAt: new Date().toISOString(), items }

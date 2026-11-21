@@ -153,3 +153,53 @@ test('容量区分工作台配额、上传预留和数据磁盘；读取失败�
   assert.equal(unavailable.receiveRemainingBytes, null)
   assert.ok(unavailable.diskError)
 })
+
+test('GET /api/storage/connections 对非管理员角色脱敏敏感配置、回调地址和传输错误路径', async () => {
+  const root = resolve('.artifacts'); await mkdir(root, { recursive: true })
+  const dir = await mkdtemp(join(root, 'storage-redact-test-'))
+  const config: Config = { dataDir: join(dir, 'data'), origin: 'http://127.0.0.1:3000', host: '127.0.0.1', port: 3000, secureCookie: false, quotaBytes: 1024 ** 2, requestBytes: 1024 ** 2 }
+  const http: RemoteHTTP = async () => ({ status: 200, headers: {}, body: Readable.from([Buffer.alloc(0)]) })
+  const { app, store } = await createApp(config, { serveFrontend: false, storageHTTP: http })
+  try {
+    const origin = { origin: config.origin }
+    const setup = await app.inject({ method: 'POST', url: '/api/auth/setup', headers: origin, payload: { setupToken: store.setupToken(), displayName: '管理员', password: 'admin-storage-password' } })
+    const toHeaders = (r: typeof setup) => ({ ...origin, cookie: r.headers['set-cookie']!.toString().split(';')[0], 'x-csrf-token': r.json().csrf })
+    const admin = toHeaders(setup)
+    await app.inject({ method: 'POST', url: '/api/users', headers: admin, payload: { username: 'editor1', role: 'editor', displayName: '编辑者', password: 'editor-storage-password' } })
+    await app.inject({ method: 'POST', url: '/api/users', headers: admin, payload: { username: 'viewer1', role: 'viewer', displayName: '只读', password: 'viewer-storage-password' } })
+    const editor = toHeaders(await app.inject({ method: 'POST', url: '/api/auth/login', headers: origin, payload: { username: 'editor1', password: 'editor-storage-password' } }))
+    const viewer = toHeaders(await app.inject({ method: 'POST', url: '/api/auth/login', headers: origin, payload: { username: 'viewer1', password: 'viewer-storage-password' } }))
+
+    assert.equal((await app.inject({ method: 'PUT', url: '/api/storage/connections/webdav', headers: admin, payload: { endpoint: 'https://dav.secret.example/dav', username: 'secret-dav-user', root: '/private-root', credentials: { password: 'secret-password' } } })).statusCode, 200)
+    assert.equal((await app.inject({ method: 'PUT', url: '/api/storage/connections/s3', headers: admin, payload: { endpoint: 'https://s3.secret.example', bucket: 'secret-bucket-name', region: 'ap-east-1', root: '/s3-secret', credentials: { accessKeyId: 'ak-id', secretAccessKey: 'sk-val' } } })).statusCode, 200)
+    assert.equal((await app.inject({ method: 'PUT', url: '/api/storage/connections/onedrive', headers: admin, payload: { root: '/od-secret', clientId: 'secret-oauth-client-id', credentials: { clientSecret: 'secret-client-secret' } } })).statusCode, 200)
+
+    const task = await app.inject({ method: 'POST', url: '/api/collections', headers: admin, payload: { title: '任务', category: 'document', description: '', formats: 'TXT', deadline: '2099-12-31', target: 5, maxFileSizeMB: 1, maxFilesPerSubmission: 2 } })
+    const fid = randomUUID()
+    store.addFile({ id: fid, collectionId: task.json().collections[0].id, name: 'a.txt', owner: '甲', size: 3, createdAt: new Date().toISOString(), storage: 'local', status: 'pending' }, randomUUID())
+    store.db.prepare("INSERT INTO remote_transfers(file_id,provider,state,revision,attempts,error,updated_at,remote_path) VALUES (?,'webdav','failed','rev',1,'连接 https://dav.secret.example/internal 失败',?,'/private-root/a.txt')").run(fid, new Date().toISOString())
+
+    const adminRes = await app.inject({ method: 'GET', url: '/api/storage/connections', headers: admin })
+    assert.equal(adminRes.statusCode, 200)
+    assert.ok(adminRes.body.includes('secret-dav-user'))
+    assert.ok(adminRes.body.includes('secret-bucket-name'))
+    assert.ok(adminRes.body.includes('secret-oauth-client-id'))
+    assert.ok(adminRes.body.includes('/api/storage/oauth/onedrive/callback'))
+    assert.ok(adminRes.body.includes('/private-root/a.txt'))
+
+    for (const nonAdmin of [editor, viewer]) {
+      const res = await app.inject({ method: 'GET', url: '/api/storage/connections', headers: nonAdmin })
+      assert.equal(res.statusCode, 200)
+      for (const secret of ['secret-dav-user', 'dav.secret.example', 'secret-bucket-name', 's3.secret.example', 'secret-oauth-client-id', '/oauth/onedrive/callback', '/private-root', 'ap-east-1']) {
+        assert.equal(res.body.includes(secret), false, `非管理员响应不应包含 ${secret}`)
+      }
+      const data = res.json()
+      assert.deepEqual(data.callbackUrls, {})
+      assert.equal(data.profiles.find((p: { id: string }) => p.id === 'webdav').hasCredentials, true)
+      assert.equal(data.transfers.length, 1)
+      assert.equal(data.transfers[0].state, 'failed')
+      assert.equal(data.transfers[0].error, undefined)
+      assert.equal(data.transfers[0].remote_path, undefined)
+    }
+  } finally { await app.close(); if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true }) }
+})

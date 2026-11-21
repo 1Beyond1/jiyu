@@ -7,6 +7,7 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { isDeepStrictEqual } from 'node:util'
 import type { Store } from './store.ts'
+import { resolveRateLimits } from './config.ts'
 import type { Config } from './config.ts'
 import type { Collection, CollectedFile, UploadReceipt } from '../src/types.ts'
 import { digest, equalToken, HttpError, object, safeName, text } from './security.ts'
@@ -25,6 +26,7 @@ interface Part { file_index: number; part_index: number; sha256: string; size: n
 export interface UploadBudget { bytes: number; files: number; active: number; collections: Map<string, number>; committedBytes: number; committedCollections: Map<string, number> }
 
 export async function registerUploads(app: FastifyInstance, store: Store, config: Config, budget: UploadBudget) {
+  const rateLimits = resolveRateLimits(config.rateLimits)
   const active = new Set<string>()
   const path = (id: string, file: number, part: number) => join(config.dataDir, 'chunks', `${id}.${file}.${part}`)
   async function clearParts(id: string) {
@@ -65,7 +67,7 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
     if (store.usedBytes() + store.pendingBytes() + budget.bytes + bytes > config.quotaBytes || store.usedBytes(c.id) + store.pendingBytes(c.id) + (budget.collections.get(c.id) || 0) + bytes > (c.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务或存储总容量超过上限')
     if (store.fileCount() + store.pendingFiles() + budget.files + count > 10000) throw new HttpError(413, '已达到 10000 个文件的上限')
   }
-  app.post('/api/public/:token/uploads/:id', { config: { rateLimit: { max: 60, timeWindow: '1 hour' } } }, async req => {
+  app.post('/api/public/:token/uploads/:id', { config: { rateLimit: { max: rateLimits.uploadCreatePerHour, timeWindow: '1 hour' } } }, async req => {
     const c = collection(req, true), saved = receipt(req, c)
     if (saved) return { receipt: saved }
     collection(req)
@@ -98,7 +100,7 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
     store.db.prepare('DELETE FROM uploads WHERE id=?').run(row.id); await clearParts(row.id)
     return { ok: true }
   })
-  app.put('/api/public/:token/uploads/:id/:file/:part', { bodyLimit: CHUNK_BYTES, config: { rateLimit: { max: 180, timeWindow: '1 minute' } } }, async req => {
+  app.put('/api/public/:token/uploads/:id/:file/:part', { bodyLimit: CHUNK_BYTES, config: { rateLimit: { max: rateLimits.uploadChunkPerMinute, timeWindow: '1 minute' } } }, async req => {
     const { row, batch, c } = authorize(req), params = object(req.params)
     const index = Number(params.file), part = Number(params.part), file = batch.files[index]
     if (!/^\d{1,3}$/.test(String(params.file)) || !/^\d{1,3}$/.test(String(params.part)) || !file || part >= Math.ceil(file.size / CHUNK_BYTES)) throw new HttpError(400, '分片序号无效')

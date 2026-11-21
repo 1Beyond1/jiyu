@@ -36,7 +36,7 @@ export function registerUsers(app: FastifyInstance, store: Store, actorId: (req:
       if (current.role === 'admin' && !current.disabled && (role !== 'admin' || disabled) && admins <= 1) throw new HttpError(409, '需要保留至少一位可登录的管理员')
       store.db.prepare('UPDATE users SET display_name=?,password=?,role=?,disabled=? WHERE id=?').run(displayName, hash, role, disabled, id)
       store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(id)
-      if (id === 'primary') store.set('password', hash)
+      if (id === 'primary') { store.set('password', hash); store.set('displayName', displayName) }
       store.activity(`更新成员「${displayName}」的账号，撤销其旧会话`)
     })
     return list()

@@ -49,5 +49,13 @@ test('成员角色由服务端约束，撤销旧会话并保留最后一位管�
     for (const payload of [{ password: 'taken-over-password' }, { role: 'viewer' }, { disabled: true }, { displayName: '改名' }]) assert.equal((await app.inject({ method: 'PATCH', url: '/api/users/primary', headers: guest, payload })).statusCode, 403)
     assert.equal((await app.inject({ method: 'GET', url: '/api/workspace', headers: admin })).statusCode, 200)
     assert.equal((await app.inject({ method: 'PATCH', url: '/api/users/primary', headers: admin, payload: { displayName: '所有者' } })).statusCode, 200)
+    // Primary user display_name and settings.displayName stay bidirectionally synced.
+    const adminAgain = headers(await app.inject({ method: 'POST', url: '/api/auth/login', headers: origin, payload: { username: 'admin', password: 'test-admin-password' } }))
+    assert.equal((await app.inject({ method: 'GET', url: '/api/workspace', headers: adminAgain })).json().displayName, '所有者')
+    const patchedSettings = await app.inject({ method: 'PATCH', url: '/api/settings', headers: adminAgain, payload: { displayName: '集屿主人' } })
+    assert.equal(patchedSettings.statusCode, 200)
+    assert.equal(patchedSettings.json().displayName, '集屿主人')
+    const usersAfter = (await app.inject({ method: 'GET', url: '/api/users', headers: adminAgain })).json() as { id: string; displayName: string }[]
+    assert.equal(usersAfter.find(u => u.id === 'primary')?.displayName, '集屿主人')
   } finally { await app.close(); if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true }) }
 })

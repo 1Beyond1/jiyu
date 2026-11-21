@@ -6,7 +6,7 @@ COPY tsconfig.json vite.config.ts index.html ./
 COPY src ./src
 COPY public ./public
 COPY server ./server
-RUN npm run build && npm test && npm prune --omit=dev
+RUN npm run build && npm test && rm -f server/*.test.ts && npm prune --omit=dev
 
 FROM node:24-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng && rm -rf /var/lib/apt/lists/*
@@ -16,6 +16,7 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/server ./server
 COPY --from=build --chown=node:node /app/src/types.ts ./src/types.ts
+COPY --from=build --chown=node:node /app/src/lib/browser-crypto.ts ./src/lib/browser-crypto.ts
 COPY --from=build --chown=node:node /app/src/lib/collections.ts ./src/lib/collections.ts
 COPY --from=build --chown=node:node /app/src/lib/submission-naming.ts ./src/lib/submission-naming.ts
 COPY --from=build --chown=node:node /app/src/lib/participants.ts ./src/lib/participants.ts
@@ -29,4 +30,4 @@ USER node
 VOLUME ["/data", "/backups"]
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["npm", "start"]
+CMD ["node", "--experimental-strip-types", "server/index.ts"]
