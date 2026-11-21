@@ -107,12 +107,17 @@ export function contentExcerpt(store: Store, fileId: string, limit: number) { co
 export function registerContent(app: FastifyInstance, store: Store, extractor: ContentExtractor = extractContent) {
   let running: Promise<void> | undefined, stopping = false
   const controller = new AbortController()
-  const selected = (ids: unknown) => { if (!Array.isArray(ids) || !ids.length || ids.length > 50 || new Set(ids).size !== ids.length) throw new HttpError(400, '请选择 1–50 个文件'); const files = store.files().filter(f => ids.includes(f.id) && !f.deletedAt); if (files.length !== ids.length) throw new HttpError(404, '部分文件已不存在'); return files }
+  const selected = (ids: unknown) => {
+    if (!Array.isArray(ids) || !ids.length || ids.length > 50 || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) throw new HttpError(400, '请选择 1–50 个文件')
+    const files: CollectedFile[] = []
+    for (const id of ids) { const f = store.file(id); if (!f || f.deletedAt) throw new HttpError(404, '部分文件已不存在'); files.push(f) }
+    return files
+  }
   const work = async () => {
     while (!stopping) {
       const next = store.db.prepare("SELECT file_id FROM documents WHERE status='queued' ORDER BY rowid LIMIT 1").get() as { file_id: string } | undefined
       if (!next) return
-      const f = store.files().find(f => f.id === next.file_id && !f.deletedAt), key = store.fileKey(next.file_id)
+      const raw = store.file(next.file_id), f = raw && !raw.deletedAt ? raw : undefined, key = store.fileKey(next.file_id)
       if (!f || !key) { store.db.prepare("UPDATE documents SET status='failed',error='文件已移除' WHERE file_id=?").run(next.file_id); continue }
       store.db.prepare("UPDATE documents SET status='processing',error=NULL WHERE file_id=?").run(f.id)
       try {
@@ -142,8 +147,8 @@ export function registerContent(app: FastifyInstance, store: Store, extractor: C
     return { matches: (rows as { file_id: string; body: string }[]).filter(r => active.has(r.file_id)).map(r => { const i = r.body.toLowerCase().indexOf(q.toLowerCase()); return { id: r.file_id, excerpt: r.body.slice(Math.max(0, i - 35), Math.max(0, i - 35) + 180) } }) }
   })
   const getFile = async (id: string) => {
-    const file = store.files().find(f => f.id === id && !f.deletedAt), key = store.fileKey(id)
-    if (!file || !key) throw new HttpError(404, '文件不存在或已在回收站')
+    const file = store.file(id), key = store.fileKey(id)
+    if (!file || file.deletedAt || !key) throw new HttpError(404, '文件不存在或已在回收站')
     const path = join(store.dataDir, 'objects', key), kind = detectPreview(await header(path))
     return { file, path, kind }
   }

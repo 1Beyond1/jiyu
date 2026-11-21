@@ -57,7 +57,7 @@ function collectionInput(value: unknown, current?: Collection): Collection {
 export async function createApp(config: Config, options: { serveFrontend?: boolean; aiTransport?: AITransport; aiFailureDiagnostics?: AIFailureDiagnostics; contentExtractor?: ContentExtractor; storageHTTP?: RemoteHTTP; materialToolMode?: boolean } = {}) {
   const store = new Store(config.dataDir)
   const app = Fastify({ logger: false, trustProxy: config.trustProxy || false, bodyLimit: 64 * 1024, requestTimeout: 10 * 60 * 1000, connectionTimeout: 30 * 1000 })
-  const budget: UploadBudget = { bytes: 0, files: 0, active: 0, collections: new Map() }
+  const budget: UploadBudget = { bytes: 0, files: 0, active: 0, collections: new Map(), committedBytes: 0, committedCollections: new Map() }
   await app.register(cookie)
   await app.register(rateLimit, { global: true, max: 180, timeWindow: '1 minute', errorResponseBuilder: () => ({ error: '操作过于频繁，请稍后重试' }) })
   await app.register(multipart, { preservePath: true, limits: { fileSize: Math.min(config.requestBytes, 1024 ** 3), files: 100, fields: 1, fieldSize: 120, fieldNameSize: 30, parts: 101, headerPairs: 100 } })
@@ -193,18 +193,26 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     budget.active++
     let owner = '', bytes = 0, committed = false
     const staged: { file: CollectedFile; key: string; path: string }[] = []
+    // Capture baseline storage usage once before streaming; chunk callbacks stay purely in-memory.
+    const startCommitted = budget.committedBytes
+    const startCollectionCommitted = budget.committedCollections.get(c.id) || 0
+    const baseUsed = store.usedBytes() + store.pendingBytes()
+    const baseCollectionUsed = store.usedBytes(c.id) + store.pendingBytes(c.id)
+    const maxCollectionBytes = (c.maxTotalSizeMB || 2048) * 1024 ** 2
     try {
       for await (const part of req.parts({ limits: { files: c.maxFilesPerSubmission, fields: 1, parts: c.maxFilesPerSubmission + 1, fileSize: Math.min(c.maxFileSizeMB * 1024 ** 2, config.requestBytes) } })) {
         if (part.type === 'field') { if (part.fieldname !== 'owner' || owner) throw new HttpError(400, '提交者字段无效'); owner = text(part.value, '你的姓名', 30); continue }
         if (!owner || part.fieldname !== 'files') { part.file.resume(); throw new HttpError(400, '请先填写提交者姓名，再选择文件') }
-        if (store.files().length + budget.files + store.pendingFiles() >= 10000) { part.file.resume(); throw new HttpError(413, '已达到第一版 10000 个文件的上限，请备份后整理数据') }
+        if (store.fileCount() + budget.files + store.pendingFiles() >= 10000) { part.file.resume(); throw new HttpError(413, '已达到第一版 10000 个文件的上限，请备份后整理数据') }
         const name = safeName(part.filename), key = randomUUID(), tempPath = join(config.dataDir, 'tmp', key), hash = createHash('sha256')
         const entry = { file: { id: randomUUID(), name, originalName: name, size: 0, collectionId: c.id, owner, createdAt: new Date().toISOString(), storage: c.storage, ...(c.storage !== 'local' ? { remoteStatus: 'queued' } : {}), status: 'pending' } as CollectedFile, key, path: tempPath }
         staged.push(entry)
         budget.files++
         await pipeline(part.file, new Transform({ transform(chunk: Buffer, _encoding, callback) {
           const collectionReserved = budget.collections.get(c.id) || 0
-          if (bytes + chunk.length > config.requestBytes || store.usedBytes() + store.pendingBytes() + budget.bytes + chunk.length > config.quotaBytes || store.usedBytes(c.id) + store.pendingBytes(c.id) + collectionReserved + chunk.length > (c.maxTotalSizeMB || 2048) * 1024 ** 2) { callback(new HttpError(413, '单次提交、任务或存储总容量超过上限')); return }
+          const globalCommittedDelta = budget.committedBytes - startCommitted
+          const collectionCommittedDelta = (budget.committedCollections.get(c.id) || 0) - startCollectionCommitted
+          if (bytes + chunk.length > config.requestBytes || baseUsed + globalCommittedDelta + budget.bytes + chunk.length > config.quotaBytes || baseCollectionUsed + collectionCommittedDelta + collectionReserved + chunk.length > maxCollectionBytes) { callback(new HttpError(413, '单次提交、任务或存储总容量超过上限')); return }
           bytes += chunk.length; budget.bytes += chunk.length; budget.collections.set(c.id, collectionReserved + chunk.length)
           entry.file.size += chunk.length; hash.update(chunk); callback(null, chunk)
         } }), createWriteStream(tempPath, { flags: 'wx', mode: 0o600, flush: true }))
@@ -215,7 +223,7 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
       }
       const latest = getCollection(c.id), invalid = submissionError(latest, staged.map(s => s.file))
       if (invalid) throw new HttpError(400, invalid)
-      if (store.usedBytes(c.id) + store.pendingBytes(c.id) + (budget.collections.get(c.id) || 0) > (latest.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务容量超过上限')
+      if (store.usedBytes() + store.pendingBytes() + budget.bytes > config.quotaBytes || store.usedBytes(c.id) + store.pendingBytes(c.id) + (budget.collections.get(c.id) || 0) > (latest.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务容量超过上限')
       for (const entry of staged) { const destination = join(config.dataDir, 'objects', entry.key); await rename(entry.path, destination); entry.path = destination }
       const receipt = { receiptId: randomUUID(), filesCount: staged.length, bytes, createdAt: new Date().toISOString() }
       store.transaction(() => {
@@ -224,12 +232,14 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
         if (finalCollection.fields?.length || finalCollection.materials?.length || finalCollection.naming?.parts.length || finalCollection.submissionMode === 'single') throw new HttpError(409, '提交规则已更新，请使用新版提交页')
         const finalError = submissionError(finalCollection, staged.map(s => s.file))
         if (finalError || finalCollection.uploadToken !== c.uploadToken) throw new HttpError(410, finalError || '收集链接已更换，请使用新链接')
-        if (store.usedBytes(c.id) + bytes > (finalCollection.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务容量超过上限')
+        if (store.usedBytes() + bytes > config.quotaBytes || store.usedBytes(c.id) + bytes > (finalCollection.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务容量超过上限')
         for (const entry of staged) store.addFile({ ...entry.file, storage: finalCollection.storage, remoteStatus: finalCollection.storage === 'local' ? undefined : 'queued' }, entry.key)
         store.saveCollection({ ...finalCollection, received: finalCollection.received + staged.length })
         store.db.prepare('INSERT INTO submissions VALUES (?,?,?,?)').run(requestId, c.id, '', JSON.stringify(receipt))
         store.activity(`${owner}向「${finalCollection.title}」提交了 ${staged.length} 份文件`)
       })
+      budget.committedBytes += bytes
+      budget.committedCollections.set(c.id, (budget.committedCollections.get(c.id) || 0) + bytes)
       committed = true
       reply.code(201)
       return receipt
@@ -239,16 +249,20 @@ export async function createApp(config: Config, options: { serveFrontend?: boole
     }
   })
   app.get('/api/files/:id/download', async (req, reply) => {
-    const id = String(object(req.params).id), file = store.files().find(f => f.id === id && !f.deletedAt), key = store.fileKey(id)
-    if (!file || !key) throw new HttpError(404, '文件不存在或已在回收站')
+    const id = String(object(req.params).id), file = store.file(id), key = store.fileKey(id)
+    if (!file || file.deletedAt || !key) throw new HttpError(404, '文件不存在或已在回收站')
     reply.header('Content-Type', 'application/octet-stream').header('Content-Disposition', `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(file.name).replace(/[!'()*]/g, ch => `%${ch.charCodeAt(0).toString(16)}`)}`)
     reply.header('Content-Length', file.size)
     return reply.send(createReadStream(join(config.dataDir, 'objects', key)))
   })
   const chosenFiles = (ids: unknown, includeDeleted = false) => {
     if (!Array.isArray(ids) || !ids.length || ids.length > 500 || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) throw new HttpError(400, '请选择 1–500 个文件')
-    const list = store.files().filter(f => ids.includes(f.id) && (includeDeleted || !f.deletedAt))
-    if (list.length !== ids.length) throw new HttpError(404, '部分文件不存在，请刷新重试')
+    const list: CollectedFile[] = []
+    for (const id of ids) {
+      const f = store.file(id)
+      if (!f || (!includeDeleted && f.deletedAt)) throw new HttpError(404, '部分文件不存在，请刷新重试')
+      list.push(f)
+    }
     return list
   }
   app.post('/api/files/review', async req => { const list = chosenFiles(object(req.body).ids); store.transaction(() => { for (const f of list) store.saveFile({ ...f, status: 'ready' }); store.activity(`将 ${list.length} 个文件标记为已整理`) }); return store.workspace(config.quotaBytes, config.requestBytes) })

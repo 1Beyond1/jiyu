@@ -43,6 +43,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS collection_templates (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS submission_records (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL REFERENCES collections(id), key_hash TEXT NOT NULL, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS submission_collection ON submission_records(collection_id);
+      CREATE INDEX IF NOT EXISTS files_collection ON files(collection_id);
       PRAGMA user_version=5;`)
     const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]
     if (!sessionColumns.some(c => c.name === 'user_id')) this.db.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'primary'")
@@ -72,7 +73,13 @@ export class Store {
     this.db.prepare('INSERT INTO activities(text,time) VALUES (?,?)').run(text, new Date().toISOString())
     this.db.exec('DELETE FROM activities WHERE id NOT IN (SELECT id FROM activities ORDER BY id DESC LIMIT 1000)')
   }
-  collection(id: string) { return this.collections().find(c => c.id === id) }
+  private hydrateFile(r: { data: string; state: string | null; remote_path: string | null }): CollectedFile {
+    return normalizeStorage({ ...JSON.parse(r.data), ...(r.state ? { remoteStatus: r.state, ...(r.remote_path ? { remotePath: r.remote_path } : {}) } : {}) })
+  }
+  collection(id: string): Collection | undefined {
+    const row = this.db.prepare('SELECT data,token FROM collections WHERE id=?').get(id) as { data: string; token: string } | undefined
+    return row ? normalizeStorage({ ...JSON.parse(row.data), uploadToken: row.token }) as Collection : undefined
+  }
   byToken(value: string) {
     const row = this.db.prepare('SELECT data,token FROM collections WHERE token=?').get(value) as { data: string; token: string } | undefined
     return row ? normalizeStorage({ ...JSON.parse(row.data), uploadToken: row.token }) as Collection : undefined
@@ -82,7 +89,15 @@ export class Store {
     const { uploadToken, ...data } = collection
     this.db.prepare('INSERT INTO collections VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,data=excluded.data').run(collection.id, uploadToken || token(), JSON.stringify(data))
   }
-  files(): CollectedFile[] { return (this.db.prepare('SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id ORDER BY f.rowid DESC').all() as { data: string; state: string | null; remote_path: string | null }[]).map(r => normalizeStorage({ ...JSON.parse(r.data), ...(r.state ? { remoteStatus: r.state, ...(r.remote_path ? { remotePath: r.remote_path } : {}) } : {}) })) }
+  file(id: string): CollectedFile | undefined {
+    const row = this.db.prepare('SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id WHERE f.id=?').get(id) as { data: string; state: string | null; remote_path: string | null } | undefined
+    return row ? this.hydrateFile(row) : undefined
+  }
+  files(): CollectedFile[] { return (this.db.prepare('SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id ORDER BY f.rowid DESC').all() as { data: string; state: string | null; remote_path: string | null }[]).map(r => this.hydrateFile(r)) }
+  collectionFiles(collectionId: string): CollectedFile[] {
+    return (this.db.prepare('SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id WHERE f.collection_id=? ORDER BY f.rowid DESC').all(collectionId) as { data: string; state: string | null; remote_path: string | null }[]).map(r => this.hydrateFile(r))
+  }
+  fileCount() { return Number((this.db.prepare('SELECT COUNT(*) AS total FROM files').get() as { total: number }).total) }
   saveFile(file: CollectedFile) { this.db.prepare('UPDATE files SET data=? WHERE id=?').run(JSON.stringify(file), file.id) }
   addFile(file: CollectedFile, key: string) {
     this.db.prepare('INSERT INTO files VALUES (?,?,?,?)').run(file.id, file.collectionId, key, JSON.stringify(file))
@@ -93,12 +108,18 @@ export class Store {
     }
   }
   fileKey(id: string) { return (this.db.prepare('SELECT storage_key FROM files WHERE id=?').get(id) as { storage_key: string } | undefined)?.storage_key }
-  usedBytes(collectionId?: string) { return this.files().filter(f => !collectionId || f.collectionId === collectionId).reduce((sum, f) => sum + f.size, 0) }
+  usedBytes(collectionId?: string) {
+    const row = (collectionId
+      ? this.db.prepare("SELECT COALESCE(SUM(CAST(json_extract(data, '$.size') AS INTEGER)), 0) AS total FROM files WHERE collection_id=?").get(collectionId)
+      : this.db.prepare("SELECT COALESCE(SUM(CAST(json_extract(data, '$.size') AS INTEGER)), 0) AS total FROM files").get()) as { total: number }
+    return Number(row.total)
+  }
   pendingBytes(collectionId?: string) { return Number((this.db.prepare(`SELECT COALESCE(SUM(bytes),0) AS total FROM uploads WHERE expires>?${collectionId ? ' AND collection_id=?' : ''}`).get(Date.now(), ...(collectionId ? [collectionId] : [])) as { total: number }).total) }
   pendingFiles() { return Number((this.db.prepare('SELECT COALESCE(SUM(file_count),0) AS total FROM uploads WHERE expires>?').get(Date.now()) as { total: number }).total) }
   workspace(quotaBytes: number, requestBytes?: number): Workspace {
     const files = this.files()
-    return { version: 1, displayName: this.get('displayName') || '管理员', ...(requestBytes !== undefined ? { requestLimitMB: requestBytes / 1024 ** 2 } : {}), collections: this.collections().map(c => requestBytes !== undefined ? { ...c, requestLimitMB: requestBytes / 1024 ** 2 } : c), files: files.filter(f => !f.deletedAt), trash: files.filter(f => f.deletedAt), storage: { usedBytes: this.usedBytes(), quotaBytes }, lastRenameId: (this.db.prepare('SELECT id FROM renames WHERE undone=0 ORDER BY rowid DESC LIMIT 1').get() as { id: string } | undefined)?.id, activities: (this.db.prepare('SELECT id,text,time FROM activities ORDER BY id DESC LIMIT 30').all() as { id: number; text: string; time: string }[]).map(a => ({ ...a, id: String(a.id), time: new Date(a.time).toLocaleString('zh-CN', { timeZone: 'Asia/Taipei', hour12: false }) })) }
+    const usedBytes = files.reduce((sum, f) => sum + f.size, 0)
+    return { version: 1, displayName: this.get('displayName') || '管理员', ...(requestBytes !== undefined ? { requestLimitMB: requestBytes / 1024 ** 2 } : {}), collections: this.collections().map(c => requestBytes !== undefined ? { ...c, requestLimitMB: requestBytes / 1024 ** 2 } : c), files: files.filter(f => !f.deletedAt), trash: files.filter(f => f.deletedAt), storage: { usedBytes, quotaBytes }, lastRenameId: (this.db.prepare('SELECT id FROM renames WHERE undone=0 ORDER BY rowid DESC LIMIT 1').get() as { id: string } | undefined)?.id, activities: (this.db.prepare('SELECT id,text,time FROM activities ORDER BY id DESC LIMIT 30').all() as { id: number; text: string; time: string }[]).map(a => ({ ...a, id: String(a.id), time: new Date(a.time).toLocaleString('zh-CN', { timeZone: 'Asia/Taipei', hour12: false }) })) }
   }
   setupToken() { return readFileSync(join(this.dataDir, 'setup-token'), 'utf8').trim() }
   close() { this.db.close(); this.lock.exec('ROLLBACK'); this.lock.close() }

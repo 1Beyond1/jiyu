@@ -22,7 +22,7 @@ interface Row { id: string; collection_id: string; token_hash: string; key_hash:
 interface Part { file_index: number; part_index: number; sha256: string; size: number }
 
 // Legacy multipart and persistent uploads share the same reservations.
-export interface UploadBudget { bytes: number; files: number; active: number; collections: Map<string, number> }
+export interface UploadBudget { bytes: number; files: number; active: number; collections: Map<string, number>; committedBytes: number; committedCollections: Map<string, number> }
 
 export async function registerUploads(app: FastifyInstance, store: Store, config: Config, budget: UploadBudget) {
   const active = new Set<string>()
@@ -63,7 +63,7 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
   const status = (row: Row) => ({ id: row.id, chunkBytes: CHUNK_BYTES, expiresAt: new Date(row.expires).toISOString(), parts: store.db.prepare('SELECT file_index,part_index,sha256,size FROM upload_parts WHERE batch_id=? ORDER BY file_index,part_index').all(row.id) })
   const limits = (c: Collection, bytes: number, count: number) => {
     if (store.usedBytes() + store.pendingBytes() + budget.bytes + bytes > config.quotaBytes || store.usedBytes(c.id) + store.pendingBytes(c.id) + (budget.collections.get(c.id) || 0) + bytes > (c.maxTotalSizeMB || 2048) * 1024 ** 2) throw new HttpError(413, '任务或存储总容量超过上限')
-    if (store.files().length + store.pendingFiles() + budget.files + count > 10000) throw new HttpError(413, '已达到 10000 个文件的上限')
+    if (store.fileCount() + store.pendingFiles() + budget.files + count > 10000) throw new HttpError(413, '已达到 10000 个文件的上限')
   }
   app.post('/api/public/:token/uploads/:id', { config: { rateLimit: { max: 60, timeWindow: '1 hour' } } }, async req => {
     const c = collection(req, true), saved = receipt(req, c)
@@ -87,6 +87,8 @@ export async function registerUploads(app: FastifyInstance, store: Store, config
     if (count >= 20) throw new HttpError(429, '待续传批次较多，请完成已有提交或稍后重试')
     limits(c, bytes, files.length)
     store.db.prepare('INSERT INTO uploads VALUES (?,?,?,?,?,?,?,?)').run(id(req), c.id, digest(c.uploadToken!), key(req), data, bytes, files.length, Date.now() + 24 * 60 * 60 * 1000)
+    budget.committedBytes += bytes
+    budget.committedCollections.set(c.id, (budget.committedCollections.get(c.id) || 0) + bytes)
     return status(store.db.prepare('SELECT * FROM uploads WHERE id=?').get(id(req)) as unknown as Row)
   })
   app.get('/api/public/:token/uploads/:id', async req => { const c = collection(req, true), saved = receipt(req, c); return saved ? { receipt: saved } : status(authorize(req).row) })

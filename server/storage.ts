@@ -137,10 +137,10 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
   app.post('/api/storage/transfers/retry', async req => {
     const ids = object(req.body).ids
     if (!Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some(id => typeof id !== 'string')) throw new HttpError(400, '请选择 1–100 项传输')
-    const active = new Set(store.files().filter(f => !f.deletedAt).map(f => f.id))
     const entries = [...new Set(ids)].map(id => {
+      const file = store.file(id)
       const row = store.db.prepare('SELECT provider,state FROM remote_transfers WHERE file_id=?').get(String(id)) as { provider: Provider; state: string } | undefined
-      if (!active.has(id) || !row || row.state !== 'failed') return undefined
+      if (!file || file.deletedAt || !row || row.state !== 'failed') return undefined
       const p = get(row.provider); if (!p.enabled) throw new HttpError(400, '请先验证并启用所有选中文件的连接')
       return { id, revision: p.revision }
     }).filter(e => e !== undefined)
@@ -151,7 +151,7 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
     while (!stopping) {
       const row = store.db.prepare("SELECT * FROM remote_transfers WHERE state='queued' ORDER BY updated_at LIMIT 1").get() as unknown as (TransferInfo & { revision: string }) | undefined
       if (!row) return
-      const file = store.files().find(f => f.id === row.file_id && !f.deletedAt), p = storageProfile(store, row.provider as Provider)
+      const rawFile = store.file(row.file_id), file = rawFile && !rawFile.deletedAt ? rawFile : undefined, p = storageProfile(store, row.provider as Provider)
       if (!implemented.has(row.provider as Provider) || !file || !p?.enabled || !p.verifiedAt || row.revision !== p.revision) { store.db.prepare("UPDATE remote_transfers SET state='failed',error='文件已移除，或连接已停用 / 变更；本机原件保留',updated_at=? WHERE file_id=?").run(new Date().toISOString(), row.file_id); continue }
       store.db.prepare("UPDATE remote_transfers SET state='transferring',attempts=attempts+1,updated_at=? WHERE file_id=?").run(new Date().toISOString(), row.file_id)
       try {
@@ -164,7 +164,7 @@ export function registerStorage(app: FastifyInstance, store: Store, http: Remote
         if (current.revision !== row.revision) throw new HttpError(409, '传输期间连接配置已变更，请核对云端结果后重试')
         store.transaction(() => {
           store.db.prepare("UPDATE remote_transfers SET state='ready',remote_path=?,updated_at=?,error=NULL WHERE file_id=?").run(result.path, new Date().toISOString(), file.id)
-          const latest = store.files().find(f => f.id === file.id)!
+          const latest = store.file(file.id)!
           store.saveFile({ ...latest, remotePath: result.path, remoteStatus: 'ready' }); store.activity('一份收集文件已完成云端同步，本机副本保留')
         })
       } catch (error) { store.db.prepare('UPDATE remote_transfers SET state=?,error=?,updated_at=? WHERE file_id=?').run(stopping ? 'queued' : 'failed', error instanceof HttpError ? error.message : '云端传输未完成，本机原件已保留，请检查网络或授权后重试', new Date().toISOString(), row.file_id) }
