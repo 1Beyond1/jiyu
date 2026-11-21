@@ -132,6 +132,9 @@ export interface AISettings {
   materialToolMode?: boolean
   testMode?: boolean
   managed?: boolean
+  managedAvailable?: boolean
+  managedOverridden?: boolean
+  managedWarning?: string
   revision: string
   enabled: boolean
   protocol: 'responses' | 'chat'

@@ -20,7 +20,7 @@ async function setup(transport: AITransport) {
   return { service, headers, dir, dataDir, close: async () => { await service.app.close(); await rm(dir, { recursive: true, force: true }) } }
 }
 
-const ENV = ['JIYU_AI_BASE_URL', 'JIYU_AI_MODEL', 'JIYU_AI_KEY', 'JIYU_AI_DAILY_CALLS'] as const
+const ENV = ['JIYU_AI_BASE_URL', 'JIYU_AI_MODEL', 'JIYU_AI_KEY', 'JIYU_AI_DAILY_CALLS', 'JIYU_AI_PROTOCOL'] as const
 function withEnv(values: Partial<Record<(typeof ENV)[number], string>>) {
   const old = ENV.map(k => [k, process.env[k]] as const)
   for (const k of ENV) delete process.env[k]
@@ -72,4 +72,80 @@ test('管理员可以关掉预置模型；缺配置时仍默认关闭', async ()
     assert.equal(s.enabled, false)
     assert.equal(s.hasKey, false)
   } finally { await second.close(); none() }
+})
+
+test('非法预置地址优雅降级不报 400，超界调用次数收敛并给出提示', async () => {
+  const restoreBadUrl = withEnv({ JIYU_AI_BASE_URL: 'http://127.0.0.1:8080/v1', JIYU_AI_MODEL: 'm', JIYU_AI_KEY: 'k' })
+  const first = await setup(async () => { throw new Error('should not call') })
+  try {
+    const res = await first.service.app.inject({ method: 'GET', url: '/api/ai/settings', headers: first.headers })
+    assert.equal(res.statusCode, 200, res.body)
+    assert.equal(res.json().enabled, false)
+    assert.equal(res.json().managedAvailable, false)
+    assert.match(res.json().managedWarning, /JIYU_AI_BASE_URL/)
+  } finally { await first.close(); restoreBadUrl() }
+
+  const restoreBadCalls = withEnv({ JIYU_AI_BASE_URL: 'https://provider.example/v1', JIYU_AI_MODEL: 'm', JIYU_AI_KEY: 'k', JIYU_AI_DAILY_CALLS: '99999' })
+  const second = await setup(async () => { throw new Error('should not call') })
+  try {
+    const res = await second.service.app.inject({ method: 'GET', url: '/api/ai/settings', headers: second.headers })
+    assert.equal(res.statusCode, 200)
+    assert.equal(res.json().enabled, true)
+    assert.equal(res.json().managed, true)
+    assert.equal(res.json().maxDailyCalls, 1000)
+    assert.match(res.json().managedWarning, /JIYU_AI_DAILY_CALLS/)
+  } finally { await second.close(); restoreBadCalls() }
+})
+
+test('预置模式允许修改非 Key 参数、阻止换源窃取 Key，并支持一键恢复站点预置配置', async () => {
+  const envKey = 'managed-env-secret-key'
+  const restore = withEnv({ JIYU_AI_BASE_URL: 'https://provider.example/v1', JIYU_AI_MODEL: 'preset-model', JIYU_AI_KEY: envKey, JIYU_AI_DAILY_CALLS: '20' })
+  let capturedKey = ''
+  const { service, headers, dataDir, close } = await setup(async req => {
+    capturedKey = req.apiKey
+    return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ reply: 'ok', renames: [] }) } }], usage: { total_tokens: 3 } }
+  })
+  try {
+    // 1. Update model & maxDailyCalls without supplying apiKey in managed mode.
+    const tuned = await service.app.inject({ method: 'PATCH', url: '/api/ai/settings', headers, payload: { enabled: true, protocol: 'chat', baseUrl: 'https://provider.example/v1', model: 'tuned-model', maxDailyCalls: 80, apiKey: '' } })
+    assert.equal(tuned.statusCode, 200, tuned.body)
+    assert.equal(tuned.json().managed, true)
+    assert.equal(tuned.json().managedOverridden, true)
+    assert.equal(tuned.json().model, 'tuned-model')
+    assert.equal(tuned.json().maxDailyCalls, 80)
+
+    // 2. Calling AI still uses env key, and env key is never stored in SQLite.
+    const chat = await service.app.inject({ method: 'POST', url: '/api/ai/chat', headers, payload: { prompt: '测试', fileIds: [], consent: true, settingsRevision: tuned.json().revision } })
+    assert.equal(chat.statusCode, 200, chat.body)
+    assert.equal(capturedKey, envKey)
+
+    // 3. Changing origin without new apiKey must still be rejected.
+    const changeOrigin = await service.app.inject({ method: 'PATCH', url: '/api/ai/settings', headers, payload: { enabled: true, protocol: 'chat', baseUrl: 'https://other.example/v1', model: 'tuned-model', maxDailyCalls: 80, apiKey: '' } })
+    assert.equal(changeOrigin.statusCode, 400)
+
+    // 4. Overriding with a custom key switches out of managed mode; reset-managed restores preset.
+    const custom = await service.app.inject({ method: 'PATCH', url: '/api/ai/settings', headers, payload: { enabled: true, protocol: 'chat', baseUrl: 'https://other.example/v1', model: 'custom-model', maxDailyCalls: 15, apiKey: 'custom-admin-key' } })
+    assert.equal(custom.statusCode, 200, custom.body)
+    assert.equal(custom.json().managed, undefined)
+    assert.equal(custom.json().managedAvailable, true)
+    assert.equal(custom.json().managedOverridden, true)
+
+    // 5. Deleting custom key disables AI; reset-managed restores site preset in one click.
+    const removed = await service.app.inject({ method: 'DELETE', url: '/api/ai/settings/key', headers })
+    assert.equal(removed.statusCode, 200)
+    assert.equal(removed.json().enabled, false)
+    assert.equal(removed.json().managedAvailable, true)
+
+    const reset = await service.app.inject({ method: 'POST', url: '/api/ai/settings/reset-managed', headers, payload: {} })
+    assert.equal(reset.statusCode, 200, reset.body)
+    assert.equal(reset.json().enabled, true)
+    assert.equal(reset.json().managed, true)
+    assert.equal(reset.json().managedOverridden, false)
+    assert.equal(reset.json().model, 'preset-model')
+    assert.equal(reset.json().baseUrl, 'https://provider.example/v1')
+    assert.equal(reset.json().maxDailyCalls, 20)
+
+    await service.app.close()
+    assert.ok(!(await readFile(join(dataDir, 'jiyu.sqlite'))).includes(envKey))
+  } finally { await close().catch(() => {}); restore() }
 })

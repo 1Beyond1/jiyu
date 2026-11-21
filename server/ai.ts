@@ -72,10 +72,26 @@ const defaults: SavedSettings = { enabled: false, protocol: 'responses', baseUrl
 
 // An operator can preconfigure a model through the environment, so nobody has to bring a key to try AI.
 // The key stays in the process environment: never in the database, backups or API responses.
-function managedSettings(): SavedSettings | null {
-  const { JIYU_AI_BASE_URL: baseUrl, JIYU_AI_MODEL: model, JIYU_AI_KEY: key, JIYU_AI_DAILY_CALLS: calls, JIYU_AI_PROTOCOL: protocol } = process.env
-  if (!baseUrl || !model || !key) return null
-  return { enabled: true, protocol: protocol === 'responses' ? 'responses' : 'chat', baseUrl: endpointBase(baseUrl), model, maxDailyCalls: Number(calls) || 50, managed: true }
+function managedState(): { settings: SavedSettings | null; warning?: string } {
+  const { JIYU_AI_BASE_URL: rawBaseUrl, JIYU_AI_MODEL: rawModel, JIYU_AI_KEY: rawKey, JIYU_AI_DAILY_CALLS: rawCalls, JIYU_AI_PROTOCOL: protocol } = process.env
+  if (!rawBaseUrl || !rawModel || !rawKey) return { settings: null }
+  let baseUrl: string
+  try { baseUrl = endpointBase(rawBaseUrl) } catch { return { settings: null, warning: '环境变量 JIYU_AI_BASE_URL 配置无效（需为公网 HTTPS 地址），已降级为未启用；请检查部署配置或手动填写模型设置。' } }
+  let model: string
+  try { model = text(rawModel, '模型 ID', 120) } catch { return { settings: null, warning: '环境变量 JIYU_AI_MODEL 配置无效，已降级为未启用；请检查部署配置或手动填写模型设置。' } }
+  const key = rawKey.trim()
+  if (!key || key.length > 4096 || /[\x00-\x20\x7f]/.test(key)) return { settings: null, warning: '环境变量 JIYU_AI_KEY 格式无效，已降级为未启用；请检查部署配置或手动填写模型设置。' }
+  let maxDailyCalls = 50
+  let warning: string | undefined
+  if (rawCalls !== undefined && rawCalls.trim() !== '') {
+    const parsed = Number(rawCalls)
+    if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 1000) maxDailyCalls = parsed
+    else {
+      maxDailyCalls = Number.isFinite(parsed) ? Math.min(1000, Math.max(1, Math.trunc(parsed))) : 50
+      warning = `环境变量 JIYU_AI_DAILY_CALLS 配置超出 1–1000 整数范围，已调整为 ${maxDailyCalls}。`
+    }
+  }
+  return { settings: { enabled: true, protocol: protocol === 'responses' ? 'responses' : 'chat', baseUrl, model, maxDailyCalls, managed: true }, warning }
 }
 
 // Some compatible gateways wrap otherwise valid JSON in a single Markdown fence.
@@ -106,13 +122,29 @@ function parseResponse(protocol: SavedSettings['protocol'], value: unknown) {
 export function registerAI(app: FastifyInstance, store: Store, transport: AITransport = modelRequest, diagnostics?: AIFailureDiagnostics, materialToolMode = false) {
   const captureFailure = failureDiagnostics(diagnostics,store.dataDir)
   let active = 0
-  const settings = (): SavedSettings => store.get('ai.settings') ? JSON.parse(store.get('ai.settings')!) : managedSettings() ?? { ...defaults }
-  const hasCredential = (saved: SavedSettings) => saved.managed || !!saved.encryptedKey
-  const credential = (saved: SavedSettings) => saved.managed ? process.env.JIYU_AI_KEY! : decrypt(store, saved.encryptedKey!)
+  const settings = (): SavedSettings => store.get('ai.settings') ? JSON.parse(store.get('ai.settings')!) : managedState().settings ?? { ...defaults }
+  const hasCredential = (saved: SavedSettings) => (!!saved.managed && !!managedState().settings) || !!saved.encryptedKey
+  const credential = (saved: SavedSettings) => saved.managed ? process.env.JIYU_AI_KEY!.trim() : decrypt(store, saved.encryptedKey!)
   const revision = () => digest(JSON.stringify(settings()))
   const status = (): AISettings => {
-    const { encryptedKey, ...saved } = settings()
-    return { ...saved, testMode: transport !== modelRequest, materialToolMode, revision: revision(), hasKey: !!saved.managed || !!encryptedKey, keyReady: !!saved.managed || (!!encryptedKey && existsSync(join(store.dataDir, 'secrets.key'))), usedToday: (store.db.prepare('SELECT calls FROM ai_usage WHERE day=?').get(localDate()) as { calls: number } | undefined)?.calls || 0 }
+    const { encryptedKey, managed, ...saved } = settings()
+    const managedInfo = managedState()
+    const managedAvailable = !!managedInfo.settings
+    const usingManaged = !!managed && managedAvailable
+    const managedOverridden = managedAvailable && !!store.get('ai.settings')
+    return {
+      ...saved,
+      ...(usingManaged ? { managed: true } : {}),
+      managedAvailable,
+      managedOverridden,
+      ...(managedInfo.warning ? { managedWarning: managedInfo.warning } : {}),
+      testMode: transport !== modelRequest,
+      materialToolMode,
+      revision: revision(),
+      hasKey: usingManaged || !!encryptedKey,
+      keyReady: usingManaged || (!!encryptedKey && existsSync(join(store.dataDir, 'secrets.key'))),
+      usedToday: (store.db.prepare('SELECT calls FROM ai_usage WHERE day=?').get(localDate()) as { calls: number } | undefined)?.calls || 0,
+    }
   }
   app.get('/api/ai/settings', async () => status())
   app.patch('/api/ai/settings', async req => {
@@ -122,10 +154,24 @@ export function registerAI(app: FastifyInstance, store: Store, transport: AITran
     const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
     if (new URL(baseUrl).origin !== new URL(old.baseUrl).origin && !apiKey) throw new HttpError(400, '更换服务商后请重新填写 API Key，不会把旧凭证发送给新地址')
     if (apiKey && (apiKey.length > 4096 || /[\x00-\x20\x7f]/.test(apiKey))) throw new HttpError(400, 'API Key 格式无效')
-    const encryptedKey = apiKey ? encrypt(store, apiKey) : old.encryptedKey
-    if (body.enabled && !encryptedKey) throw new HttpError(400, '请先填写 API Key')
+    const managed = managedState().settings
+    const useManaged = !apiKey && !!old.managed && !!managed && new URL(baseUrl).origin === new URL(managed.baseUrl).origin
+    const encryptedKey = apiKey ? encrypt(store, apiKey) : useManaged ? undefined : old.encryptedKey
+    if (body.enabled && !encryptedKey && !useManaged) throw new HttpError(400, '请先填写 API Key')
     if (body.enabled && !apiKey && encryptedKey) decrypt(store, encryptedKey)
-    store.transaction(() => { store.set('ai.settings', JSON.stringify({ enabled: body.enabled, protocol, baseUrl, model, maxDailyCalls: body.maxDailyCalls, encryptedKey })); store.activity(body.enabled ? '更新并启用 AI 服务设置' : '更新 AI 服务设置，保持停用') })
+    store.transaction(() => {
+      store.set('ai.settings', JSON.stringify({ enabled: body.enabled, protocol, baseUrl, model, maxDailyCalls: body.maxDailyCalls, ...(encryptedKey ? { encryptedKey } : {}), ...(useManaged ? { managed: true } : {}) }))
+      store.activity(body.enabled ? '更新并启用 AI 服务设置' : '更新 AI 服务设置，保持停用')
+    })
+    return status()
+  })
+  app.post('/api/ai/settings/reset-managed', async () => {
+    const managed = managedState()
+    if (!managed.settings) throw new HttpError(400, managed.warning || '当前站点未配置可用的预置模型')
+    store.transaction(() => {
+      store.db.prepare("DELETE FROM settings WHERE key='ai.settings'").run()
+      store.activity('恢复使用站点预置 AI 模型配置')
+    })
     return status()
   })
   app.delete('/api/ai/settings/key', async () => {
