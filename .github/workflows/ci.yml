@@ -60,7 +60,9 @@ jobs:
           docker compose config --quiet
           docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -e JIYU_DOMAIN=files.example.com caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Verify native PDF and OCR in runtime image
-        run: docker exec -e JIYU_REQUIRE_NATIVE_TESTS=1 jiyu-test node --experimental-strip-types --test --test-timeout=30000 server/content-native.test.ts
+        run: |
+          docker cp server/content-native.test.ts jiyu-test:/app/server/content-native.test.ts
+          docker exec -e JIYU_REQUIRE_NATIVE_TESTS=1 jiyu-test node --experimental-strip-types --test --test-timeout=30000 server/content-native.test.ts
       - name: Verify v0.3 upgrade and rollback in runtime image
         run: |
           git fetch --no-tags origin tag v0.3.0
@@ -69,6 +71,7 @@ jobs:
           docker exec --user root jiyu-test mkdir -p /app/.artifacts
           docker exec --user root jiyu-test chown node:node /app/.artifacts
           docker cp .artifacts/legacy-v0.3 jiyu-test:/app/.artifacts/legacy-v0.3
+          docker cp server/upgrade.test.ts jiyu-test:/app/server/upgrade.test.ts
           docker exec -e JIYU_LEGACY_ROOT=/app/.artifacts/legacy-v0.3 jiyu-test node --experimental-strip-types --test --test-timeout=30000 server/upgrade.test.ts
       - name: Clean up
         if: always()
