@@ -116,7 +116,7 @@ export interface UploadFeedback { phase: 'preparing' | 'uploading' | 'saving' | 
 export interface BackupSettings { enabled: boolean; intervalHours: number; keep: number }
 export interface BackupInfo { id: string; createdAt: string; files: number; bytes: number }
 export interface BackupRun { id: string; status: 'running' | 'succeeded' | 'failed'; startedAt: string; finishedAt?: string; error?: string }
-export interface BackupStatus { settings: BackupSettings; lastRun: BackupRun | null; backups: BackupInfo[]; directory: string }
+export interface BackupStatus { settings: BackupSettings; lastRun: BackupRun | null; backups: BackupInfo[]; directory: string; maxKeep?: number }
 export interface DocumentInfo { file_id: string; status: 'queued' | 'processing' | 'ready' | 'failed' | 'unsupported'; kind?: string; chars: number; truncated: number; updated_at?: string; error?: string }
 export interface FileContent { preview: 'image' | 'pdf' | 'text' | 'none'; mime?: string; text?: string; document?: DocumentInfo }
 export interface StorageProfile { id: Exclude<StorageId, 'local'>; endpoint: string; root: string; region?: string; bucket?: string; username?: string; clientId?: string; via?: 'webdav'; hasCredentials: boolean; authorized?: boolean; enabled: boolean; verifiedAt?: string; revision: string }

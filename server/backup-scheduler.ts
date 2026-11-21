@@ -13,7 +13,8 @@ export async function registerBackups(app: FastifyInstance, store: Store, backup
   const within = (parent: string, child: string) => { const p = relative(parent, child); return !p || (!p.startsWith('..') && !isAbsolute(p)) }
   if (within(resolve(store.dataDir), backupRoot) || within(backupRoot, resolve(store.dataDir))) throw new Error('备份与数据目录必须互相独立')
   // A host shared with other services can cap how many full copies an admin may keep, so backups cannot fill its disk.
-  const maxKeep = Math.min(30, Math.max(1, Number(process.env.JIYU_BACKUP_MAX_KEEP) || 30))
+  const rawMaxKeep = Number(process.env.JIYU_BACKUP_MAX_KEEP)
+  const maxKeep = Number.isFinite(rawMaxKeep) && rawMaxKeep >= 1 ? Math.min(30, Math.trunc(rawMaxKeep)) : 30
   const settings = (): BackupSettings => { const s = JSON.parse(store.get('backup.settings') || '{"enabled":false,"intervalHours":24,"keep":7}'); return { ...s, keep: Math.min(s.keep, maxKeep) } }
   const last = (): BackupRun | null => JSON.parse(store.get('backup.last') || 'null')
   let running: Promise<void> | undefined, stopping = false
@@ -39,12 +40,16 @@ export async function registerBackups(app: FastifyInstance, store: Store, backup
     const record: BackupRun = { id, status: 'running', startedAt: new Date().toISOString() }
     store.set('backup.last', JSON.stringify(record))
     running = (async () => {
+      let canonicalRoot = '', targetDir = '', created = false
       try {
         await mkdir(backupRoot, { recursive: true, mode: 0o700 })
         // Canonical containment guards scheduled deletion against symlinked roots.
         const root = await realpath(backupRoot), data = await realpath(store.dataDir)
         if (within(root, data) || within(data, root)) throw new Error('备份与数据目录必须互相独立')
-        await createOnlineBackup(store, join(root, id))
+        canonicalRoot = root
+        targetDir = join(root, id)
+        await createOnlineBackup(store, targetDir)
+        created = true
         const backups = await directories()
         for (const old of backups.slice(settings().keep)) {
           const target = join(root, old.id), info = await lstat(target)
@@ -54,12 +59,21 @@ export async function registerBackups(app: FastifyInstance, store: Store, backup
         store.set('backup.last', JSON.stringify({ ...record, status: 'succeeded', finishedAt: new Date().toISOString() }))
         store.activity('完成在线完整备份与保留策略检查')
       } catch {
+        if (!created && canonicalRoot && targetDir && ID.test(id)) {
+          try {
+            const info = await lstat(targetDir)
+            const realTarget = await realpath(targetDir)
+            if (info.isDirectory() && !info.isSymbolicLink() && within(canonicalRoot, realTarget) && realTarget !== canonicalRoot) {
+              await rm(targetDir, { recursive: true, force: true })
+            }
+          } catch { /* Partial directory may not exist yet or was already cleaned up. */ }
+        }
         store.set('backup.last', JSON.stringify({ ...record, status: 'failed', finishedAt: new Date().toISOString(), error: '备份未完成，请检查备份磁盘空间、数据完整性和目录权限。未清理现有备份。' }))
       } finally { running = undefined }
     })()
     return record
   }
-  const info = async () => ({ settings: settings(), lastRun: last(), backups: await directories(), directory: backupRoot })
+  const info = async () => ({ settings: settings(), lastRun: last(), backups: await directories(), directory: backupRoot, maxKeep })
   app.get('/api/backups', async () => info())
   app.patch('/api/backups/settings', async req => {
     const body = object(req.body)
