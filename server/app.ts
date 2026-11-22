@@ -197,6 +197,7 @@ export async function createApp(
     storageRetry?: StorageRetryPolicy
     materialToolMode?: boolean
     unlinkObject?: (path: string) => Promise<void>
+    unlockPolicy?: { globalMaxFailures?: number; backoffBaseMs?: number }
   } = {},
 ) {
   const store = new Store(config.dataDir)
@@ -585,6 +586,8 @@ export async function createApp(
   const UNLOCK_WINDOW_MS = 15 * 60 * 1000
   const UNLOCK_BACKOFF_MAX_MS = 300 * 1000
   const UNLOCK_TRACK_MAX_ENTRIES = 2000
+  const unlockGlobalMaxFailures = Math.max(1, options.unlockPolicy?.globalMaxFailures ?? 30)
+  const unlockBackoffBaseMs = Math.max(1, options.unlockPolicy?.backoffBaseMs ?? 2000)
   const unlockIpFailures = new Map<
     string,
     { failures: number; lockedUntil: number; lastSeen: number }
@@ -686,10 +689,7 @@ export async function createApp(
           ipRecord && now - ipRecord.lastSeen <= UNLOCK_WINDOW_MS ? ipRecord.failures + 1 : 1
         const backoffMs =
           nextIpFailures >= 3
-            ? Math.min(
-                UNLOCK_BACKOFF_MAX_MS,
-                rateLimits.unlockBackoffBaseMs * 2 ** (nextIpFailures - 3),
-              )
+            ? Math.min(UNLOCK_BACKOFF_MAX_MS, unlockBackoffBaseMs * 2 ** (nextIpFailures - 3))
             : 0
         unlockIpFailures.set(ipKey, {
           failures: nextIpFailures,
@@ -701,7 +701,7 @@ export async function createApp(
             ? colRecord
             : { failures: 0, windowStart: now, lockedUntil: 0 }
         activeCol.failures += 1
-        if (activeCol.failures >= rateLimits.unlockGlobalMaxFailures) {
+        if (activeCol.failures >= unlockGlobalMaxFailures) {
           activeCol.lockedUntil = activeCol.windowStart + UNLOCK_WINDOW_MS
         }
         unlockCollectionFailures.set(collectionKey, activeCol)

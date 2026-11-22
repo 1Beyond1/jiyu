@@ -11,7 +11,7 @@ const sha256 = (value: Buffer | string) => createHash('sha256').update(value).di
 
 async function bootApp(
   unlockPerMinute = 5,
-  extraRateLimits?: Partial<NonNullable<Config['rateLimits']>>,
+  unlockPolicy?: { globalMaxFailures?: number; backoffBaseMs?: number },
 ) {
   const dir = await mkdtemp(join(tmpdir(), 'jiyu-access-'))
   const config: Config = {
@@ -25,10 +25,9 @@ async function bootApp(
     rateLimits: {
       globalPerMinute: 1000,
       unlockPerMinute,
-      ...extraRateLimits,
     },
   }
-  const { app, store } = await createApp(config, { serveFrontend: false })
+  const { app, store } = await createApp(config, { serveFrontend: false, unlockPolicy })
   const origin = { origin: config.origin }
   const setup = await app.inject({
     method: 'POST',
@@ -231,8 +230,8 @@ test('访问提取码：不升 schema 6、解锁前零泄露、防爆破限流�
 
 test('访问提取码防爆破加固：单 IP 指数退避 + 单任务跨 IP 全局失败上限与换码解封', async () => {
   const { dir, app, origin, adminHeaders } = await bootApp(100, {
-    unlockGlobalMaxFailures: 5,
-    unlockBackoffBaseMs: 80,
+    globalMaxFailures: 5,
+    backoffBaseMs: 80,
   })
   try {
     const created = await app.inject({
