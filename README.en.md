@@ -11,6 +11,26 @@ Author & Maintainer: [1Beyond1](https://github.com/1Beyond1) · [Repository](htt
 
 **Current Version: v0.4.0** (SQLite schema 5) — Collect files from anyone through a single random link with no submitter login required, and organize everything in one workbench with checklist verification, paginated search, batch renaming, streaming ZIP archives, online backups, and optional cloud sync. Back up your full data directory before upgrading from `v0.3.x` (schema 5 databases cannot be opened directly by v0.3).
 
+## Interface Preview
+
+### Collections Overview
+
+Manage active, completed, and closed file collection tasks in one workspace with live required-item progress, review counts, deadlines, and local storage quota visibility.
+
+![Collections Overview](docs/screenshots/collections.png)
+
+### Per-Participant Material Review Matrix
+
+Track required and optional materials across every participant, distinguish received items from manual approvals, filter missing or follow-up entries, and export CSV ledgers.
+
+![Per-Participant Material Review Matrix](docs/screenshots/materials-matrix.png)
+
+### No-Login Public Submission Page
+
+Submitters open a random share link to fill custom fields and upload files directly into dedicated required/optional material slots—no account required, with automatic naming and extension preservation.
+
+![No-Login Public Submission Page](docs/screenshots/public-submit.png)
+
 ## Key Features
 
 ### 1. Structured Collection & Material Review Workbench
