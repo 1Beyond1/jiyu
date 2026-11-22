@@ -45,6 +45,7 @@ import { registerBackups } from './backup-scheduler.ts'
 import { registerContent } from './content.ts'
 import type { ContentExtractor } from './content.ts'
 import { registerStorage, requireStorage } from './storage.ts'
+import type { StorageRetryPolicy } from './storage.ts'
 import type { RemoteHTTP } from './remote-http.ts'
 import { storageSpace } from './storage-space.ts'
 import { collectionRules, registerCollectionWorkflows } from './collection-workflows.ts'
@@ -177,6 +178,7 @@ export async function createApp(
     aiFailureDiagnostics?: AIFailureDiagnostics
     contentExtractor?: ContentExtractor
     storageHTTP?: RemoteHTTP
+    storageRetry?: StorageRetryPolicy
     materialToolMode?: boolean
   } = {},
 ) {
@@ -1039,6 +1041,7 @@ export async function createApp(
     options.storageHTTP,
     config.origin,
     (req) => session(req)?.role,
+    options.storageRetry,
   )
   app.addHook('onClose', async () => {
     await stopStorage()

@@ -47,7 +47,13 @@ export const remoteHTTP: RemoteHTTP = async ({ url, method, headers, body, signa
       (response) =>
         resolve({ status: response.statusCode || 500, headers: response.headers, body: response }),
     )
-    req.on('error', () => reject(new HttpError(502, '远端连接中断或超时，请检查服务地址与网络')))
+    req.on('error', () =>
+      reject(
+        Object.assign(new HttpError(502, '远端连接中断或超时，请检查服务地址与网络'), {
+          retryable: true,
+        }),
+      ),
+    )
     req.setTimeout(45000, () => req.destroy(new Error('idle timeout')))
     if (body && !Buffer.isBuffer(body))
       void pipeline(body, req).catch(() => req.destroy(new Error('upload interrupted')))
@@ -84,6 +90,10 @@ export function remoteOK(response: RemoteResponse, allowed: number[] = []) {
               : response.status >= 300 && response.status < 400
                 ? '远端返回重定向，请填写最终服务地址'
                 : `远端请求失败（HTTP ${response.status}），请检查连接信息及目录权限`
-    throw new HttpError(response.status === 429 ? 429 : 502, message)
+    const retryable = response.status === 429 || response.status >= 500
+    throw Object.assign(new HttpError(response.status === 429 ? 429 : 502, message), {
+      retryable,
+      upstreamStatus: response.status,
+    })
   }
 }

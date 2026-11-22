@@ -44,13 +44,70 @@ function rootInput(value: unknown) {
   return '/' + root.split('/').filter(Boolean).join('/')
 }
 
+export interface StorageRetryPolicy {
+  maxRetries?: number
+  baseDelayMs?: number
+  maxDelayMs?: number
+  pollIntervalMs?: number
+}
+
+interface TransferRetryState {
+  retryCount: number
+  nextRetryAt?: string
+}
+
+export function isRetryableTransferError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const tagged = error as { retryable?: unknown; name?: unknown }
+  if (tagged.retryable === true) return true
+  if (tagged.retryable === false) return false
+  if (error instanceof HttpError) {
+    return (
+      error.statusCode === 429 ||
+      error.statusCode === 500 ||
+      error.statusCode === 503 ||
+      error.statusCode === 504
+    )
+  }
+  if (error instanceof Error && error.name === 'AbortError') return false
+  return error instanceof Error
+}
+
 export function registerStorage(
   app: FastifyInstance,
   store: Store,
   http: RemoteHTTP = remoteHTTP,
   origin = 'http://127.0.0.1:3000',
   actorRole?: (req: FastifyRequest) => UserRole | undefined,
+  retryPolicy: StorageRetryPolicy = {},
 ) {
+  const maxRetries = Math.max(0, Math.min(10, Math.floor(retryPolicy.maxRetries ?? 3)))
+  const baseDelayMs = Math.max(10, Math.floor(retryPolicy.baseDelayMs ?? 5000))
+  const maxDelayMs = Math.max(baseDelayMs, Math.floor(retryPolicy.maxDelayMs ?? 60000))
+  const pollIntervalMs = Math.max(10, Math.floor(retryPolicy.pollIntervalMs ?? 1000))
+  const retryKey = (fileId: string) => `storage.retry.${fileId}`
+  const readRetryState = (fileId: string): TransferRetryState | undefined => {
+    const raw = store.get(retryKey(fileId))
+    if (!raw) return undefined
+    try {
+      const parsed = JSON.parse(raw) as Partial<TransferRetryState>
+      if (typeof parsed.retryCount === 'number' && Number.isFinite(parsed.retryCount)) {
+        return {
+          retryCount: parsed.retryCount,
+          ...(typeof parsed.nextRetryAt === 'string' ? { nextRetryAt: parsed.nextRetryAt } : {}),
+        }
+      }
+    } catch {
+      /* Ignore corrupted retry metadata. */
+    }
+    return undefined
+  }
+  const writeRetryState = (fileId: string, state: TransferRetryState) => {
+    store.set(retryKey(fileId), JSON.stringify(state))
+  }
+  const clearRetryState = (fileId: string) => {
+    store.db.prepare('DELETE FROM settings WHERE key=?').run(retryKey(fileId))
+  }
   let running: Promise<void> | undefined,
     stopping = false,
     testing = false
@@ -176,9 +233,18 @@ export function registerStorage(
   app.get('/api/storage/connections', async (req) => {
     const isAdmin = !actorRole || actorRole(req) === 'admin'
     const allProfiles = profiles()
-    const transfers = store.db
-      .prepare('SELECT * FROM remote_transfers ORDER BY updated_at DESC LIMIT 100')
-      .all() as unknown as TransferInfo[]
+    const transfers = (
+      store.db
+        .prepare('SELECT * FROM remote_transfers ORDER BY updated_at DESC LIMIT 100')
+        .all() as unknown as TransferInfo[]
+    ).map((t) => {
+      const retry = readRetryState(t.file_id)
+      return {
+        ...t,
+        retryCount: retry?.retryCount ?? 0,
+        ...(retry?.nextRetryAt ? { nextRetryAt: retry.nextRetryAt } : {}),
+      }
+    })
     if (isAdmin) {
       return {
         profiles: allProfiles,
@@ -194,13 +260,17 @@ export function registerStorage(
       profiles: allProfiles.map(summaryProfile),
       supported: [...implemented],
       callbackUrls: {},
-      transfers: transfers.map(({ file_id, provider, state, attempts, updated_at }) => ({
-        file_id,
-        provider,
-        state,
-        attempts,
-        updated_at,
-      })),
+      transfers: transfers.map(
+        ({ file_id, provider, state, attempts, retryCount, nextRetryAt, updated_at }) => ({
+          file_id,
+          provider,
+          state,
+          attempts,
+          retryCount,
+          ...(nextRetryAt ? { nextRetryAt } : {}),
+          updated_at,
+        }),
+      ),
     }
   })
   app.put('/api/storage/connections/:id', async (req) => {
@@ -448,20 +518,29 @@ export function registerStorage(
       })
       .filter((e) => e !== undefined)
     store.transaction(() => {
-      for (const e of entries)
+      for (const e of entries) {
         store.db
           .prepare(
             "UPDATE remote_transfers SET state='queued',revision=?,attempts=0,error=NULL,updated_at=? WHERE file_id=?",
           )
           .run(e.revision, new Date().toISOString(), e.id)
+        clearRetryState(e.id)
+      }
     })
     return { ok: true, retried: entries.length }
   })
   const work = async () => {
     while (!stopping) {
-      const row = store.db
-        .prepare("SELECT * FROM remote_transfers WHERE state='queued' ORDER BY updated_at LIMIT 1")
-        .get() as unknown as (TransferInfo & { revision: string }) | undefined
+      const queuedRows = store.db
+        .prepare("SELECT * FROM remote_transfers WHERE state='queued' ORDER BY updated_at")
+        .all() as unknown as (TransferInfo & { revision: string })[]
+      const nowMs = Date.now()
+      const row = queuedRows.find((candidate) => {
+        const retry = readRetryState(candidate.file_id)
+        if (!retry?.nextRetryAt) return true
+        const due = Date.parse(retry.nextRetryAt)
+        return !Number.isFinite(due) || due <= nowMs
+      })
       if (!row) return
       const rawFile = store.file(row.file_id),
         file = rawFile && !rawFile.deletedAt ? rawFile : undefined,
@@ -473,6 +552,7 @@ export function registerStorage(
         !p.verifiedAt ||
         row.revision !== p.revision
       ) {
+        clearRetryState(row.file_id)
         store.db
           .prepare(
             "UPDATE remote_transfers SET state='failed',error='文件已移除，或连接已停用 / 变更；本机原件保留',updated_at=? WHERE file_id=?",
@@ -511,21 +591,44 @@ export function registerStorage(
               "UPDATE remote_transfers SET state='ready',remote_path=?,updated_at=?,error=NULL WHERE file_id=?",
             )
             .run(result.path, new Date().toISOString(), file.id)
+          clearRetryState(file.id)
           const latest = store.file(file.id)!
           store.saveFile({ ...latest, remotePath: result.path, remoteStatus: 'ready' })
           store.activity('一份收集文件已完成云端同步，本机副本保留')
         })
       } catch (error) {
-        store.db
-          .prepare('UPDATE remote_transfers SET state=?,error=?,updated_at=? WHERE file_id=?')
-          .run(
-            stopping ? 'queued' : 'failed',
-            error instanceof HttpError
-              ? error.message
-              : '云端传输未完成，本机原件已保留，请检查网络或授权后重试',
-            new Date().toISOString(),
-            row.file_id,
-          )
+        const message =
+          error instanceof HttpError
+            ? error.message
+            : '云端传输未完成，本机原件已保留，请检查网络或授权后重试'
+        if (stopping) {
+          store.db
+            .prepare(
+              "UPDATE remote_transfers SET state='queued',error=?,updated_at=? WHERE file_id=?",
+            )
+            .run(message, new Date().toISOString(), row.file_id)
+          return
+        }
+        const prevRetry = readRetryState(row.file_id)?.retryCount ?? 0
+        if (isRetryableTransferError(error) && prevRetry < maxRetries) {
+          const retryCount = prevRetry + 1
+          const delay = Math.min(maxDelayMs, baseDelayMs * 2 ** (retryCount - 1))
+          const nextRetryAt = new Date(Date.now() + delay).toISOString()
+          writeRetryState(row.file_id, { retryCount, nextRetryAt })
+          store.db
+            .prepare(
+              "UPDATE remote_transfers SET state='queued',error=?,updated_at=? WHERE file_id=?",
+            )
+            .run(message, new Date().toISOString(), row.file_id)
+        } else {
+          if (prevRetry > 0) writeRetryState(row.file_id, { retryCount: prevRetry })
+          else clearRetryState(row.file_id)
+          store.db
+            .prepare(
+              "UPDATE remote_transfers SET state='failed',error=?,updated_at=? WHERE file_id=?",
+            )
+            .run(message, new Date().toISOString(), row.file_id)
+        }
       }
     }
   }
@@ -534,7 +637,7 @@ export function registerStorage(
       running = work().finally(() => {
         running = undefined
       })
-  }, 1000)
+  }, pollIntervalMs)
   timer.unref()
   return async () => {
     stopping = true

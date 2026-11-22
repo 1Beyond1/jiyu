@@ -405,6 +405,8 @@ export interface TransferInfo {
   provider: string
   state: string
   attempts: number
+  retryCount?: number
+  nextRetryAt?: string
   error?: string
   updated_at: string
   remote_path?: string

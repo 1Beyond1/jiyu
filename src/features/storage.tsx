@@ -308,7 +308,11 @@ export function StoragePage({
                   </strong>
                   <small>
                     {storageNames[t.provider as StorageProfile['id']] || '已停用的旧连接'} ·{' '}
-                    {transferLabels[t.state] || t.state} · {formatDate(t.updated_at)}
+                    {t.state === 'queued' && t.nextRetryAt
+                      ? `等待第 ${t.retryCount || 1} 次自动重试（${formatDate(t.nextRetryAt)}）`
+                      : transferLabels[t.state] || t.state}
+                    {t.state === 'failed' && t.retryCount ? ` · 已自动重试 ${t.retryCount} 次` : ''}{' '}
+                    · {formatDate(t.updated_at)}
                   </small>
                   {t.error && <p className="error-text">{t.error}</p>}
                 </div>
