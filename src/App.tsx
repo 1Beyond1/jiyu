@@ -958,6 +958,16 @@ function WorkspaceApp() {
               onLogout={async () => {
                 try {
                   await api('/api/auth/logout', 'POST', {})
+                  try {
+                    const keys: string[] = []
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                      const k = sessionStorage.key(i)
+                      if (k?.startsWith('jiyu:passcode:')) keys.push(k)
+                    }
+                    for (const k of keys) sessionStorage.removeItem(k)
+                  } catch {
+                    /* ignore storage access errors */
+                  }
                   window.dispatchEvent(new Event('jiyu:session-expired'))
                 } catch (e) {
                   notify((e as Error).message)

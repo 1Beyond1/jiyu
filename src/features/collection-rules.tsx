@@ -193,7 +193,7 @@ export function CollectionRules({
                 value={value.accessCode || ''}
                 disabled={Boolean(value.clearAccessCode)}
                 maxLength={8}
-                placeholder="例如：2026 或 AB12cd（4–8 位非空白字符）"
+                placeholder="例如：Jiyu8294 或 Xk7mP9（建议 6–8 位字母与数字组合）"
                 onChange={(e) => update({ accessCode: e.target.value })}
               />
               <small>

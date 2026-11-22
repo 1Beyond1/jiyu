@@ -204,10 +204,20 @@ export function ShareCollection({
   const url = `${location.origin}/#/submit/${collection.uploadToken}`
   const address = shareAddress(location.origin)
   const [rotate, setRotate] = useState(false)
-  const qrDataUrl = useMemo(
-    () => qrSvgDataUrl(url, { size: 200, margin: 3, title: `${collection.title} 二维码` }),
-    [url, collection.title],
-  )
+  const qrState = useMemo<{ dataUrl: string; error: string }>(() => {
+    try {
+      return {
+        dataUrl: qrSvgDataUrl(url, { size: 200, margin: 4, title: `${collection.title} 二维码` }),
+        error: '',
+      }
+    } catch (err) {
+      return {
+        dataUrl: '',
+        error:
+          (err as Error).message || '当前链接过长，超出二维码容量上限，请直接复制下方链接分享。',
+      }
+    }
+  }, [url, collection.title])
   const announcement = useMemo(
     () => buildShareAnnouncement({ collection, url, passcode }),
     [collection, url, passcode],
@@ -225,19 +235,30 @@ export function ShareCollection({
   }
 
   async function downloadShareCard() {
+    if (!qrState.dataUrl) {
+      setCopyError(qrState.error || '当前链接暂无法生成分享二维码卡片，请直接复制链接或群通知。')
+      return
+    }
     setDownloadingCard(true)
     setCopyError('')
     const safeTitle = collection.title.replace(/[<>:"/\\|?*]/g, '_').slice(0, 40) || '收集'
-    const svg = renderShareCardSvg({
-      title: collection.title,
-      description: collection.description,
-      url,
-      deadline: collection.deadline,
-      formats: collection.formats,
-      passcode: passcode.trim() || undefined,
-      hasAccessCode: collection.hasAccessCode,
-      materials: collection.materials?.map((m) => `${m.name}${m.required ? '' : '（选填）'}`),
-    })
+    let svg: string
+    try {
+      svg = renderShareCardSvg({
+        title: collection.title,
+        description: collection.description,
+        url,
+        deadline: collection.deadline,
+        formats: collection.formats,
+        passcode: passcode.trim() || undefined,
+        hasAccessCode: collection.hasAccessCode,
+        materials: collection.materials?.map((m) => `${m.name}${m.required ? '' : '（选填）'}`),
+      })
+    } catch (err) {
+      setCopyError((err as Error).message || '链接过长，暂无法生成分享卡片，请复制链接或群通知。')
+      setDownloadingCard(false)
+      return
+    }
     const svgDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
     try {
       const img = new Image()
@@ -271,13 +292,22 @@ export function ShareCollection({
     <Modal title="好文件，一个链接就能收齐" subtitle={collection.title} onClose={onClose} wide>
       <div className="share-qr-panel">
         <div className="share-qr-box">
-          <img
-            src={qrDataUrl}
-            alt={`${collection.title} 收集链接二维码`}
-            width={176}
-            height={176}
-          />
-          <small>纯本地生成 SVG 二维码 · 扫码免登录提交</small>
+          {qrState.dataUrl ? (
+            <>
+              <img
+                src={qrState.dataUrl}
+                alt={`${collection.title} 收集链接二维码`}
+                width={176}
+                height={176}
+              />
+              <small>纯本地生成 SVG 二维码 · 扫码免登录提交</small>
+            </>
+          ) : (
+            <div className="share-qr-fallback" role="status">
+              <strong>暂无法生成二维码</strong>
+              <small>{qrState.error}</small>
+            </div>
+          )}
         </div>
         <div className="share-qr-side">
           <div className="share-badges">
@@ -305,7 +335,7 @@ export function ShareCollection({
             <button
               type="button"
               className="button"
-              disabled={downloadingCard}
+              disabled={downloadingCard || !qrState.dataUrl}
               onClick={() => void downloadShareCard()}
             >
               <Download size={15} />

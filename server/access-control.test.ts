@@ -9,7 +9,10 @@ import type { Config } from './config.ts'
 
 const sha256 = (value: Buffer | string) => createHash('sha256').update(value).digest('hex')
 
-async function bootApp(unlockPerMinute = 5) {
+async function bootApp(
+  unlockPerMinute = 5,
+  extraRateLimits?: Partial<NonNullable<Config['rateLimits']>>,
+) {
   const dir = await mkdtemp(join(tmpdir(), 'jiyu-access-'))
   const config: Config = {
     dataDir: join(dir, 'data'),
@@ -22,6 +25,7 @@ async function bootApp(unlockPerMinute = 5) {
     rateLimits: {
       globalPerMinute: 1000,
       unlockPerMinute,
+      ...extraRateLimits,
     },
   }
   const { app, store } = await createApp(config, { serveFrontend: false })
@@ -150,10 +154,17 @@ test('访问提取码：不升 schema 6、解锁前零泄露、防爆破限流�
     assert.equal(unlocked.statusCode, 200, unlocked.body)
     const unlockBody = unlocked.json()
     assert.equal(unlockBody.unlocked, true)
+    assert.equal(unlockBody.accessToken, undefined, '响应体不得返回冗余明文 accessToken')
     assert.equal(unlockBody.collection.title, '机密材料收集')
     assert.equal(unlockBody.collection.materials.length, 1)
     assert.equal(unlockBody.collection.accessCodeHash, undefined)
-    const unlockCookie = unlocked.headers['set-cookie']!.toString().split(';')[0]
+    const rawSetCookie = unlocked.headers['set-cookie']!.toString()
+    assert.ok(rawSetCookie.includes('HttpOnly'), '解锁 Cookie 必须携带 HttpOnly')
+    assert.ok(
+      rawSetCookie.includes(`Path=/api/public/${encodeURIComponent(c.uploadToken)}`),
+      `Cookie Path 应严格收紧至当前任务路径，实际：${rawSetCookie}`,
+    )
+    const unlockCookie = rawSetCookie.split(';')[0]
 
     // 携带解锁 Cookie 访问公开详情可正常读取
     const opened = await app.inject({
@@ -164,7 +175,7 @@ test('访问提取码：不升 schema 6、解锁前零泄露、防爆破限流�
     assert.equal(opened.statusCode, 200)
     assert.equal(opened.json().collection.title, '机密材料收集')
 
-    // 管理员更换提取码后，旧 Cookie 与旧 accessToken 立即失效
+    // 管理员更换提取码后，旧 Cookie 立即失效
     const rotated = await app.inject({
       method: 'PATCH',
       url: `/api/collections/${c.id}`,
@@ -186,7 +197,7 @@ test('访问提取码：不升 schema 6、解锁前零泄露、防爆破限流�
     const staleCheck = await app.inject({
       method: 'GET',
       url: `/api/public/${c.uploadToken}`,
-      headers: { cookie: unlockCookie, 'x-access-token': unlockBody.accessToken },
+      headers: { cookie: unlockCookie },
     })
     assert.deepEqual(staleCheck.json(), { locked: true })
 
@@ -212,6 +223,124 @@ test('访问提取码：不升 schema 6、解锁前零泄露、防爆破限流�
     assert.equal(cleared.json().collections[0].hasAccessCode, false)
     const openAgain = await app.inject({ method: 'GET', url: `/api/public/${c.uploadToken}` })
     assert.equal(openAgain.json().collection.title, '机密材料收集')
+  } finally {
+    await app.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('访问提取码防爆破加固：单 IP 指数退避 + 单任务跨 IP 全局失败上限与换码解封', async () => {
+  const { dir, app, origin, adminHeaders } = await bootApp(100, {
+    unlockGlobalMaxFailures: 5,
+    unlockBackoffBaseMs: 80,
+  })
+  try {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/collections',
+      headers: adminHeaders,
+      payload: {
+        title: '短码分布式防爆破测试',
+        description: '',
+        category: 'document',
+        formats: 'TXT',
+        deadline: '2099-12-31',
+        target: 10,
+        maxFileSizeMB: 5,
+        maxFilesPerSubmission: 5,
+        accessCode: 'Jiyu8294',
+      },
+    })
+    assert.equal(created.statusCode, 200)
+    const c = created.json().collections[0]
+
+    // 1. 单 IP 连续错误 3 次后触发指数退避（第 4 次在退避期内返回 429 + Retry-After）
+    for (let i = 0; i < 3; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/public/${c.uploadToken}/unlock`,
+        remoteAddress: '10.10.0.1',
+        headers: origin,
+        payload: { accessCode: `wrong${i}` },
+      })
+      assert.equal(res.statusCode, 403)
+    }
+    const backedOff = await app.inject({
+      method: 'POST',
+      url: `/api/public/${c.uploadToken}/unlock`,
+      remoteAddress: '10.10.0.1',
+      headers: origin,
+      payload: { accessCode: 'Jiyu8294' },
+    })
+    assert.equal(backedOff.statusCode, 429)
+    assert.ok(Number(backedOff.headers['retry-after']) >= 1)
+
+    // 退避期满后再输错一次（第 4 次失败），退避时长翻倍为 160ms
+    await new Promise((r) => setTimeout(r, 100))
+    const fourthWrong = await app.inject({
+      method: 'POST',
+      url: `/api/public/${c.uploadToken}/unlock`,
+      remoteAddress: '10.10.0.1',
+      headers: origin,
+      payload: { accessCode: 'wrong3' },
+    })
+    assert.equal(fourthWrong.statusCode, 403)
+    await new Promise((r) => setTimeout(r, 90))
+    const stillBackedOff = await app.inject({
+      method: 'POST',
+      url: `/api/public/${c.uploadToken}/unlock`,
+      remoteAddress: '10.10.0.1',
+      headers: origin,
+      payload: { accessCode: 'Jiyu8294' },
+    })
+    assert.equal(stillBackedOff.statusCode, 429, '第 4 次失败后指数退避窗口应翻倍至 >= 160ms')
+
+    // 2. 跨 IP 再错 1 次达到单任务全局上限 5 次，全新 IP 也被全局保护锁定 429
+    const fifthWrong = await app.inject({
+      method: 'POST',
+      url: `/api/public/${c.uploadToken}/unlock`,
+      remoteAddress: '10.10.0.2',
+      headers: origin,
+      payload: { accessCode: 'wrong4' },
+    })
+    assert.equal(fifthWrong.statusCode, 403)
+
+    const blockedFreshIp = await app.inject({
+      method: 'POST',
+      url: `/api/public/${c.uploadToken}/unlock`,
+      remoteAddress: '10.10.0.99',
+      headers: origin,
+      payload: { accessCode: 'Jiyu8294' },
+    })
+    assert.equal(blockedFreshIp.statusCode, 429)
+    assert.match(blockedFreshIp.json().error, /临时保护锁定/)
+
+    // 3. 管理员更换新提取码后，新版本自动解除旧版本全局锁定
+    const rotated = await app.inject({
+      method: 'PATCH',
+      url: `/api/collections/${c.id}`,
+      headers: adminHeaders,
+      payload: {
+        title: c.title,
+        description: c.description,
+        category: c.category,
+        formats: c.formats,
+        deadline: c.deadline,
+        target: c.target,
+        maxFileSizeMB: c.maxFileSizeMB,
+        maxFilesPerSubmission: c.maxFilesPerSubmission,
+        accessCode: 'Xk7mP9',
+      },
+    })
+    assert.equal(rotated.statusCode, 200)
+    const recovered = await app.inject({
+      method: 'POST',
+      url: `/api/public/${c.uploadToken}/unlock`,
+      remoteAddress: '10.10.0.99',
+      headers: origin,
+      payload: { accessCode: 'Xk7mP9' },
+    })
+    assert.equal(recovered.statusCode, 200)
   } finally {
     await app.close()
     await rm(dir, { recursive: true, force: true })

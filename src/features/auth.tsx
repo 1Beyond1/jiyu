@@ -33,6 +33,16 @@ export function AdminGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh()
     const expired = () => {
+      try {
+        const keys: string[] = []
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const k = sessionStorage.key(i)
+          if (k?.startsWith('jiyu:passcode:')) keys.push(k)
+        }
+        for (const k of keys) sessionStorage.removeItem(k)
+      } catch {
+        /* ignore storage access errors */
+      }
       setSession({ authenticated: false, setupRequired: false })
       setCsrf('')
     }

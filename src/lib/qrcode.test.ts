@@ -286,4 +286,22 @@ test('renderQrSvg、qrSvgDataUrl 与 renderShareCardSvg 生成合法自包含 SV
   assert.ok(card.includes('秋季作业收集'))
   assert.ok(card.includes('访问提取码：8866'))
   assert.ok(card.includes('报名表、作品说明'))
+  // 验证分享卡片采用 ISO 规范 margin: 4 与整数像素步长（无浮点 scale 细缝）
+  const matrix = encodeQrMatrix(url, 'M')
+  const expectedViewSize = matrix.size + 8
+  assert.ok(
+    card.includes(
+      `<rect width="${expectedViewSize}" height="${expectedViewSize}" fill="#ffffff"/>`,
+    ),
+    '分享卡片二维码静区应为 ISO 规范 margin=4',
+  )
+  assert.match(
+    card,
+    /transform="translate\(\d+,\d+\) scale\(\d+\)"/,
+    '分享卡片二维码应使用整数平移与整数模块缩放步长，避免 Canvas 导出细缝',
+  )
+
+  // 验证超长 URL (>412 字节) 明确抛出可捕获错误供前端优雅降级
+  const oversizeUrl = `https://jiyu.example.com/#/submit/${'a'.repeat(420)}`
+  assert.throws(() => qrSvgDataUrl(oversizeUrl), /过长|容量|length|字节/)
 })

@@ -6,6 +6,8 @@ export interface RateLimitConfig {
   uploadCreatePerHour?: number
   uploadChunkPerMinute?: number
   unlockPerMinute?: number
+  unlockGlobalMaxFailures?: number
+  unlockBackoffBaseMs?: number
 }
 
 export interface Config {
@@ -42,6 +44,10 @@ export function resolveRateLimits(overrides?: RateLimitConfig) {
       envPositiveInt('JIYU_RATE_LIMIT_UPLOAD_CHUNK', 180, 100000),
     unlockPerMinute:
       overrides?.unlockPerMinute ?? envPositiveInt('JIYU_RATE_LIMIT_UNLOCK', 6, 100000),
+    unlockGlobalMaxFailures:
+      overrides?.unlockGlobalMaxFailures ??
+      envPositiveInt('JIYU_RATE_LIMIT_UNLOCK_GLOBAL', 30, 100000),
+    unlockBackoffBaseMs: overrides?.unlockBackoffBaseMs ?? 2000,
   }
 }
 

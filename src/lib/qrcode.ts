@@ -543,12 +543,16 @@ function truncateLine(text: string, maxChars: number): string {
 
 export function renderShareCardSvg(options: ShareCardOptions): string {
   const matrix = encodeQrMatrix(options.url, 'M')
-  const margin = 3
+  const margin = 4
   const viewSize = matrix.size + margin * 2
   const qrBoxSize = 264
-  const scale = qrBoxSize / viewSize
+  // 使用整数模块像素步长（在 1x SVG 与 2x Canvas PNG 导出中均为精确整数），彻底消除抗锯齿细缝
+  const modulePx = Math.max(2, Math.floor(qrBoxSize / viewSize))
+  const qrDrawSize = viewSize * modulePx
   const qrX = (480 - qrBoxSize) / 2
   const qrY = 174
+  const qrOffsetX = Math.round((480 - qrDrawSize) / 2)
+  const qrOffsetY = Math.round(qrY + (qrBoxSize - qrDrawSize) / 2)
   const qrPath = qrPathData(matrix.modules, margin)
   const title = escapeXml(truncateLine(options.title || '文件收集', 20))
   const subtitle = escapeXml(
@@ -577,7 +581,7 @@ export function renderShareCardSvg(options: ShareCardOptions): string {
 <text x="240" y="114" text-anchor="middle" fill="#2a211c" font-size="22" font-weight="700" font-family="PingFang SC, Noto Sans SC, Microsoft YaHei, sans-serif">${title}</text>
 <text x="240" y="144" text-anchor="middle" fill="#5f5049" font-size="13" font-family="PingFang SC, Noto Sans SC, Microsoft YaHei, sans-serif">${subtitle}</text>
 <rect x="${qrX - 14}" y="${qrY - 14}" width="${qrBoxSize + 28}" height="${qrBoxSize + 28}" rx="18" fill="#ffffff" stroke="#efe4dc" stroke-width="1.5"/>
-<g transform="translate(${qrX.toFixed(2)},${qrY.toFixed(2)}) scale(${scale.toFixed(4)})" shape-rendering="crispEdges">
+<g transform="translate(${qrOffsetX},${qrOffsetY}) scale(${modulePx})" shape-rendering="crispEdges">
 <rect width="${viewSize}" height="${viewSize}" fill="#ffffff"/>
 <path d="${qrPath}" fill="#2a211c"/>
 </g>

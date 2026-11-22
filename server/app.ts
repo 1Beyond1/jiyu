@@ -579,11 +579,39 @@ export async function createApp(
     if (!c.accessCodeHash) return true
     const secret = store.publicAccessSecret()
     const version = c.accessCodeVersion || 'v1'
-    const headerToken =
-      typeof req.headers['x-access-token'] === 'string' ? req.headers['x-access-token'] : undefined
-    if (verifyAccessProof(secret, headerToken, c.id, c.uploadToken!, version)) return true
     const cookieToken = req.cookies[accessCookieName(c.id)]
     return verifyAccessProof(secret, cookieToken, c.id, c.uploadToken!, version)
+  }
+  const UNLOCK_WINDOW_MS = 15 * 60 * 1000
+  const UNLOCK_BACKOFF_MAX_MS = 300 * 1000
+  const UNLOCK_TRACK_MAX_ENTRIES = 2000
+  const unlockIpFailures = new Map<
+    string,
+    { failures: number; lockedUntil: number; lastSeen: number }
+  >()
+  const unlockCollectionFailures = new Map<
+    string,
+    { failures: number; windowStart: number; lockedUntil: number }
+  >()
+  const pruneUnlockTrackers = (now: number) => {
+    for (const [key, item] of unlockIpFailures) {
+      if (now - item.lastSeen > UNLOCK_WINDOW_MS && item.lockedUntil <= now)
+        unlockIpFailures.delete(key)
+    }
+    for (const [key, item] of unlockCollectionFailures) {
+      if (now - item.windowStart > UNLOCK_WINDOW_MS && item.lockedUntil <= now)
+        unlockCollectionFailures.delete(key)
+    }
+    while (unlockIpFailures.size > UNLOCK_TRACK_MAX_ENTRIES) {
+      const oldest = unlockIpFailures.keys().next().value
+      if (oldest === undefined) break
+      unlockIpFailures.delete(oldest)
+    }
+    while (unlockCollectionFailures.size > UNLOCK_TRACK_MAX_ENTRIES) {
+      const oldest = unlockCollectionFailures.keys().next().value
+      if (oldest === undefined) break
+      unlockCollectionFailures.delete(oldest)
+    }
   }
   const requirePublicAccess = (req: FastifyRequest, c: Collection) => {
     if (!isPublicUnlocked(req, c)) throw new HttpError(403, '此收集需要提取码，请先验证提取码')
@@ -629,27 +657,73 @@ export async function createApp(
     async (req, reply) => {
       const c = publicCollection(String(object(req.params).token))
       if (!c.accessCodeHash) return { unlocked: true, ...publicCollectionPayload(c) }
+      const now = Date.now()
+      pruneUnlockTrackers(now)
+      const version = c.accessCodeVersion || 'v1'
+      const collectionKey = `${c.id}:${version}`
+      const colRecord = unlockCollectionFailures.get(collectionKey)
+      if (colRecord && colRecord.lockedUntil > now) {
+        const retryAfter = Math.max(1, Math.ceil((colRecord.lockedUntil - now) / 1000))
+        reply.header('Retry-After', String(retryAfter))
+        throw new HttpError(
+          429,
+          '该收集链接近期提取码错误次数过多，已临时保护锁定，请稍后重试或联系发起人更换提取码',
+        )
+      }
+      const ipKey = `${req.ip}:${c.uploadToken!}`
+      const ipRecord = unlockIpFailures.get(ipKey)
+      if (ipRecord && ipRecord.lockedUntil > now) {
+        const retryAfter = Math.max(1, Math.ceil((ipRecord.lockedUntil - now) / 1000))
+        reply.header('Retry-After', String(retryAfter))
+        throw new HttpError(429, `提取码错误次数过多，请 ${retryAfter} 秒后重试`)
+      }
       const body = object(req.body)
       const code = typeof body.accessCode === 'string' ? body.accessCode.trim() : ''
       if (!code || code.length > 32) throw new HttpError(400, '请输入 4–8 位提取码')
       const valid = await checkPassword(code, c.accessCodeHash)
-      if (!valid) throw new HttpError(403, '提取码不正确，请核对后重试')
-      const expiresAt = Date.now() + 12 * 60 * 60 * 1000
+      if (!valid) {
+        const nextIpFailures =
+          ipRecord && now - ipRecord.lastSeen <= UNLOCK_WINDOW_MS ? ipRecord.failures + 1 : 1
+        const backoffMs =
+          nextIpFailures >= 3
+            ? Math.min(
+                UNLOCK_BACKOFF_MAX_MS,
+                rateLimits.unlockBackoffBaseMs * 2 ** (nextIpFailures - 3),
+              )
+            : 0
+        unlockIpFailures.set(ipKey, {
+          failures: nextIpFailures,
+          lockedUntil: backoffMs ? now + backoffMs : 0,
+          lastSeen: now,
+        })
+        const activeCol =
+          colRecord && now - colRecord.windowStart <= UNLOCK_WINDOW_MS
+            ? colRecord
+            : { failures: 0, windowStart: now, lockedUntil: 0 }
+        activeCol.failures += 1
+        if (activeCol.failures >= rateLimits.unlockGlobalMaxFailures) {
+          activeCol.lockedUntil = activeCol.windowStart + UNLOCK_WINDOW_MS
+        }
+        unlockCollectionFailures.set(collectionKey, activeCol)
+        throw new HttpError(403, '提取码不正确，请核对后重试')
+      }
+      unlockIpFailures.delete(ipKey)
+      const expiresAt = now + 12 * 60 * 60 * 1000
       const proof = signAccessProof(
         store.publicAccessSecret(),
         c.id,
         c.uploadToken!,
-        c.accessCodeVersion || 'v1',
+        version,
         expiresAt,
       )
       reply.setCookie(accessCookieName(c.id), proof, {
-        path: '/api/public/',
+        path: `/api/public/${encodeURIComponent(c.uploadToken!)}`,
         httpOnly: true,
         sameSite: 'strict',
         secure: config.secureCookie,
         maxAge: 12 * 60 * 60,
       })
-      return { unlocked: true, accessToken: proof, ...publicCollectionPayload(c) }
+      return { unlocked: true, ...publicCollectionPayload(c) }
     },
   )
   app.post(
