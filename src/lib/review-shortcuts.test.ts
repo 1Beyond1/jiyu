@@ -37,6 +37,39 @@ test('分栏审阅快捷键解析：支持 J/K/A/R/Ctrl+Enter 并在输入聚焦
   assert.equal(resolveReviewShortcut({ key: 'Enter', metaKey: true }, true), 'submit')
   assert.equal(resolveReviewShortcut({ key: 'Enter', ctrlKey: true }, false), 'submit')
   assert.equal(resolveReviewShortcut({ key: 'Enter', ctrlKey: true, altKey: true }, true), null)
+
+  // IME 组合输入与 Shift 修饰键一律屏蔽
+  assert.equal(resolveReviewShortcut({ key: 'j', isComposing: true }, false), null)
+  assert.equal(resolveReviewShortcut({ key: 'a', keyCode: 229 }, false), null)
+  assert.equal(
+    resolveReviewShortcut({ key: 'Enter', ctrlKey: true, isComposing: true }, true),
+    null,
+  )
+  assert.equal(resolveReviewShortcut({ key: 'J', shiftKey: true }, false), null)
+  assert.equal(resolveReviewShortcut({ key: 'A', shiftKey: true }, false), null)
+  assert.equal(resolveReviewShortcut({ key: 'Enter', ctrlKey: true, shiftKey: true }, true), null)
+
+  // 打开 AI 助手 / 通知弹层 / 移动端菜单等浮层时全部屏蔽
+  assert.equal(resolveReviewShortcut({ key: 'j' }, false, { overlayOpen: true }), null)
+  assert.equal(resolveReviewShortcut({ key: 'a' }, false, { overlayOpen: true }), null)
+  assert.equal(
+    resolveReviewShortcut({ key: 'Enter', ctrlKey: true }, true, { overlayOpen: true }),
+    null,
+  )
+
+  // Ctrl+Enter 仅在审阅容器内聚焦时触发，绝不劫持外部输入框（AI 助手 / 全局搜索）
+  assert.equal(
+    resolveReviewShortcut({ key: 'Enter', ctrlKey: true }, true, { inReviewContainer: false }),
+    null,
+  )
+  assert.equal(
+    resolveReviewShortcut({ key: 'Enter', metaKey: true }, true, { inReviewContainer: false }),
+    null,
+  )
+  assert.equal(
+    resolveReviewShortcut({ key: 'Enter', ctrlKey: true }, true, { inReviewContainer: true }),
+    'submit',
+  )
 })
 
 test('文件循环切换索引计算覆盖空列表、单文件与首尾回绕', () => {

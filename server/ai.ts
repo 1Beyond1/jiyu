@@ -73,13 +73,14 @@ export function isPublicAddress(address: string) {
       (a === 203 && b === 0 && c === 113)
     )
   }
-  const [first, second] = address
-    .toLowerCase()
-    .split(':')
-    .map((part) => parseInt(part || '0', 16))
+  if (isIP(address) !== 6) return false
+  const rawParts = address.toLowerCase().split(':')
+  if (!rawParts[0]) return false
+  const first = parseInt(rawParts[0], 16)
+  const second = parseInt(rawParts[1] || '0', 16)
   return (
-    isIP(address) === 6 &&
-    /^[23]/i.test(address) &&
+    first >= 0x2000 &&
+    first <= 0x3fff &&
     !(first === 0x2001 && (second < 0x200 || second === 0xdb8)) &&
     first !== 0x2002 &&
     first !== 0x3ffe &&
@@ -103,7 +104,10 @@ export function endpointBase(value: unknown) {
     (url.port && url.port !== '443')
   )
     throw new HttpError(400, '服务地址必须为不含账号、查询参数的 HTTPS 地址，端口为 443')
-  const hostname = url.hostname.replace(/^\[|\]$/g, '')
+  const hostname = url.hostname
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.+$/, '')
+    .toLowerCase()
   if (
     hostname === 'localhost' ||
     hostname.endsWith('.localhost') ||

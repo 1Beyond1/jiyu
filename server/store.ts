@@ -4,7 +4,7 @@ import { mkdirSync, readdirSync, rmSync, existsSync, writeFileSync, readFileSync
 import { join } from 'node:path'
 import { token } from './security.ts'
 import { fileExtension } from '../src/lib/collections.ts'
-import { materialProgress } from '../src/lib/materials.ts'
+import { materialSummary } from '../src/lib/materials.ts'
 import type {
   Workspace,
   Collection,
@@ -415,21 +415,22 @@ export class Store {
     if (options.kind === 'image') {
       where.push(`f.ext IN (${IMAGE_EXTENSIONS_SQL})`)
     }
-    const term = (options.q || '').trim()
+    const term = (options.q || '').replaceAll('\0', '').trim()
     if (term) {
       const lower = term.toLowerCase()
+      const codePoints = Array.from(term).length
       const searchClauses = [
         'instr(lower(f.name), ?) > 0',
         'instr(lower(f.owner), ?) > 0',
         "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_type(f.data, '$.tags') = 'array' THEN json_extract(f.data, '$.tags') ELSE '[]' END) WHERE instr(lower(CAST(value AS TEXT)), ?) > 0)",
       ]
       params.push(lower, lower, lower)
-      if (term.length >= 3) {
+      if (codePoints >= 3) {
         cte =
           'WITH fts_hits AS MATERIALIZED (SELECT file_id FROM content_search WHERE content_search MATCH ?) '
         cteParams.push(`"${term.replaceAll('"', '""')}"`)
         searchClauses.push('EXISTS (SELECT 1 FROM fts_hits h WHERE h.file_id = f.id)')
-      } else if (term.length === 2) {
+      } else if (codePoints === 2) {
         cte =
           'WITH fts_hits AS MATERIALIZED (SELECT file_id FROM content_search WHERE instr(lower(body), ?) > 0) '
         cteParams.push(lower)
@@ -638,7 +639,7 @@ export class Store {
         ...pub,
         activeFiles: counts?.active ?? 0,
         pendingFiles: counts?.pending ?? 0,
-        ...(colActive ? { materialSummary: materialProgress(c, colActive) } : {}),
+        ...(colActive ? { materialSummary: materialSummary(c, colActive) } : {}),
         hasAccessCode: Boolean(accessCodeHash),
         ...(requestBytes !== undefined ? { requestLimitMB: requestBytes / 1024 ** 2 } : {}),
       }

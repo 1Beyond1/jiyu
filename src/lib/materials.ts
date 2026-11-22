@@ -132,6 +132,17 @@ export function materialProgress(c: Collection, files: CollectedFile[]) {
   }
 }
 
+export function materialSummary(c: Collection, files: CollectedFile[]) {
+  const people = materialParticipants(c, files)
+  const included = c.expectedSubmitters?.length ? people.filter((p) => p.expected) : people
+  return {
+    total: included.length,
+    received: included.filter((p) => p.receivedComplete).length,
+    reviewed: included.filter((p) => p.reviewComplete).length,
+    needsChanges: included.filter((p) => p.status === 'needs_changes').length,
+  }
+}
+
 export const materialStateLabels = {
   missing: '缺项',
   duplicate: '内容重复',

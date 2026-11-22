@@ -143,10 +143,14 @@ export function ReceiptManager({
     return (
       <section className="receipt-progress" aria-label="本批材料核对进度">
         {overview && (
-          <section className="receipt-overview-card" aria-label="当前任务全部材料槽位总览">
+          <section className="receipt-overview-card" aria-label="本次回执关联的材料槽位进度">
             <div className="receipt-overview-head">
               <div>
-                <strong>我的全部材料进度总览</strong>
+                <strong>
+                  {(overview.linkedBatches ?? 1) > 1
+                    ? `本次及关联补交的材料进度总览（共 ${overview.linkedBatches} 批）`
+                    : '本次回执关联的材料槽位进度'}
+                </strong>
                 <small>
                   标识：{overview.identity} · 必需项已交 {overview.requiredSubmitted} /{' '}
                   {overview.requiredTotal} · 已通过 {overview.requiredAccepted} /{' '}
@@ -231,6 +235,10 @@ export function ReceiptManager({
                 另有 {overview.unclassifiedFiles.length} 份文件暂未分类，等待发起人归类核对。
               </p>
             )}
+
+            <p className="field-hint">
+              仅汇总本回执及凭此凭证续交的批次；若未通过原回执关联而是重新独立提交，请分别凭各自回执查看。
+            </p>
 
             {overview.missingRequired.length > 0 &&
               !closed &&

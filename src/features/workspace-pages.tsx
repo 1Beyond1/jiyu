@@ -8,25 +8,35 @@ import { csvCell, downloadText, formatSize } from '../lib/workspace'
 export function ToolsPage({
   workspace,
   allFiles,
+  filesLoading = false,
+  filesError = '',
+  filesTruncated = false,
+  onRetryFiles,
   onRename,
   onFiles,
   onAI,
 }: {
   workspace: Workspace
   allFiles?: CollectedFile[]
+  filesLoading?: boolean
+  filesError?: string
+  filesTruncated?: boolean
+  onRetryFiles?: () => void
   onRename: () => void
   onFiles: () => void
   onAI: () => void
 }) {
   const { canEdit } = useAccount()
   const [duplicates, setDuplicates] = useState(false)
-  const fileList = allFiles ?? workspace.files
+  const filesReady =
+    !workspace.summaryMode || (allFiles !== undefined && !filesLoading && !filesError)
+  const fileList = filesReady ? (allFiles ?? workspace.files) : []
   const groups = new Map<string, CollectedFile[]>()
   for (const file of fileList)
     if (file.sha256) groups.set(file.sha256, [...(groups.get(file.sha256) || []), file])
   const matches = [...groups.values()].filter((files) => files.length > 1)
-  const totalCount = allFiles
-    ? allFiles.length
+  const totalCount = filesReady
+    ? fileList.length
     : (workspace.stats?.activeFiles ?? workspace.files.length)
   const tools = [
     {
@@ -36,6 +46,7 @@ export function ToolsPage({
       example: '任务名_提交人_序号.pdf',
       label: '开始重命名',
       action: onRename,
+      disabled: !canEdit,
       color: 'green',
     },
     {
@@ -45,15 +56,23 @@ export function ToolsPage({
       example: '每一份文件，都有自己的位置',
       label: '整理文件',
       action: onFiles,
+      disabled: false,
       color: 'blue',
     },
     {
       icon: FileDown,
       title: '导出文件清单',
       description: '把文件名称、提交人和大小导出为 CSV。',
-      example: `${totalCount} 条文件记录，随时带走`,
-      label: '导出清单',
-      action: () =>
+      example: filesError
+        ? '完整文件列表加载失败，暂不可导出'
+        : !filesReady
+          ? '正在读取全部文件列表…'
+          : filesTruncated
+            ? `已读取前 ${fileList.length} 条文件记录`
+            : `${totalCount} 条文件记录，随时带走`,
+      label: filesLoading ? '读取中…' : '导出清单',
+      action: () => {
+        if (!filesReady) return
         downloadText(
           '集屿-文件清单.csv',
           '\uFEFF文件名称,提交人,文件大小\n' +
@@ -61,16 +80,27 @@ export function ToolsPage({
               .map((f) => [f.name, f.owner, formatSize(f.size)].map(csvCell).join(','))
               .join('\n'),
           'text/csv;charset=utf-8',
-        ),
+        )
+      },
+      disabled: !filesReady,
       color: 'amber',
     },
     {
       icon: ScanLine,
       title: '重复文件检查',
       description: '按上传时的 SHA-256 校验值识别相同内容。',
-      example: matches.length ? `${matches.length} 组内容相同的文件` : '目前没有发现重复文件',
-      label: '查看检查结果',
-      action: () => setDuplicates(true),
+      example: filesError
+        ? '完整文件列表加载失败，无法执行去重检查'
+        : !filesReady
+          ? '正在读取全部文件以检查重复内容…'
+          : matches.length
+            ? `${matches.length} 组内容相同的文件`
+            : '目前没有发现重复文件',
+      label: filesLoading ? '读取中…' : '查看检查结果',
+      action: () => {
+        if (filesReady) setDuplicates(true)
+      },
+      disabled: !filesReady,
       color: 'violet',
     },
   ]
@@ -83,6 +113,16 @@ export function ToolsPage({
           <p>把繁琐的整理工作，变成一次轻松的操作。</p>
         </div>
       </div>
+      {filesError && (
+        <div className="error-banner" role="alert">
+          <span>完整文件列表读取失败：{filesError}</span>
+          {onRetryFiles && (
+            <button type="button" className="button" disabled={filesLoading} onClick={onRetryFiles}>
+              重新加载
+            </button>
+          )}
+        </div>
+      )}
       <div className="tools-grid">
         {tools.map((t) => (
           <article className="tool-card" key={t.title}>
@@ -92,11 +132,7 @@ export function ToolsPage({
             <h2>{t.title}</h2>
             <p>{t.description}</p>
             <code>{t.example}</code>
-            <button
-              type="button"
-              disabled={!canEdit && t.title === '批量重命名'}
-              onClick={t.action}
-            >
+            <button type="button" disabled={t.disabled} onClick={t.action}>
               {t.label}
               <ArrowRight size={16} />
             </button>

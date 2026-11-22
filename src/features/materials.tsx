@@ -382,9 +382,18 @@ export function MaterialWorkbench({
   useEffect(() => {
     if (!person || archiveOpen || reminder) return
     const onKeyDown = (e: KeyboardEvent) => {
-      if (document.querySelector('dialog[open]')) return
-      const editable = isEditableTarget(e.target as HTMLElement | null)
-      const shortcut = resolveReviewShortcut(e, editable)
+      const overlayOpen = Boolean(
+        document.querySelector(
+          'dialog[open], .assistant-panel, .notification-popover, .sidebar.open',
+        ),
+      )
+      const targetEl = e.target as HTMLElement | null
+      const editable = isEditableTarget(targetEl)
+      const inReviewContainer = Boolean(targetEl && detail.current?.contains(targetEl))
+      const shortcut = resolveReviewShortcut(e, editable, {
+        inReviewContainer,
+        overlayOpen,
+      })
       if (!shortcut) return
       if (shortcut === 'next' || shortcut === 'prev') {
         if (!person.files.length) return
@@ -396,6 +405,7 @@ export function MaterialWorkbench({
       }
       if (!canEdit || !state.ready || busy) return
       if (shortcut === 'approve') {
+        if (chosen.length > 0 && (staleSelection || chosen.length > 50)) return
         const targets = chosen.length ? chosen : previewFile ? [previewFile] : []
         if (!targets.length) return
         e.preventDefault()
@@ -414,14 +424,9 @@ export function MaterialWorkbench({
         return
       }
       if (shortcut === 'submit') {
-        const targets = chosen.length ? chosen : previewFile ? [previewFile] : []
-        if (!targets.length) return
+        if (!chosen.length || chosen.length > 50 || staleSelection || !draft.decision) return
         e.preventDefault()
-        if (!draft.decision) {
-          setError('请先选择人工核对结论（或按 A 快速通过、按 R 退回）。')
-          return
-        }
-        void submitReview(targets, draft.decision, draft.note, true, chosen.length > 0)
+        void submitReview(chosen, draft.decision, draft.note, true, true)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -438,6 +443,7 @@ export function MaterialWorkbench({
     reminder,
     selectFiles,
     setDraft,
+    staleSelection,
     state.ready,
     submitReview,
   ])
@@ -611,7 +617,7 @@ export function MaterialWorkbench({
             <FolderArchive size={15} />
             定向打包
           </button>
-          {canEdit && (
+          {canEdit && !c.archivedAt && (
             <button
               type="button"
               className="button"
@@ -771,7 +777,7 @@ export function MaterialWorkbench({
           >
             显示全部参与人
           </button>
-          {canEdit && (
+          {canEdit && !c.archivedAt && (
             <button type="button" className="text-button" onClick={onShare}>
               分享收集链接
             </button>
@@ -934,7 +940,7 @@ export function MaterialWorkbench({
                       .map((s) => s.requirement.name)
                       .join('、') || '请检查材料要求'}
                   </p>
-                  {canEdit && (
+                  {canEdit && !c.archivedAt && (
                     <button
                       type="button"
                       className="button"
@@ -967,7 +973,7 @@ export function MaterialWorkbench({
                           ? '当前材料已人工核对通过。文件或规则变化后，旧结论不会自动沿用。'
                           : '左侧直接预览内容，右侧勾选文件并给出核对结论，可一键保存并跳转下一位。'}
                 </p>
-                {canEdit && !person.reviewComplete && (
+                {canEdit && !c.archivedAt && !person.reviewComplete && (
                   <div className="button-row">
                     <button
                       type="button"

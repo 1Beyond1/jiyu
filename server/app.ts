@@ -104,6 +104,7 @@ function parseFileQuery(raw: unknown, forcedCollectionId?: string): FileQueryOpt
   if (!['all', 'image'].includes(rawKind)) throw new HttpError(400, '文件类型筛选无效')
   const search = str('q')
   if (search.length > 120) throw new HttpError(400, '搜索关键词过长')
+  if (search.includes('\0')) throw new HttpError(400, '搜索关键词包含无效控制字符')
   const rawPage = str('page')
   const page = rawPage ? Number(rawPage) : 1
   if (!Number.isInteger(page) || page < 1 || page > 10000) throw new HttpError(400, '页码无效')
@@ -879,6 +880,7 @@ export async function createApp(
             ...entry.file,
             owner,
             name: finalName,
+            status: markReady ? 'ready' : 'pending',
             submissionId: receipt.receiptId,
             submissionFields: parsedFields,
             fieldLabels,

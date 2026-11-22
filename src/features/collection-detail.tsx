@@ -36,7 +36,7 @@ import { fetchAllPaginatedFiles } from '../lib/api'
 
 interface CollectionDetailProps {
   collection: Collection
-  refreshedAt: string
+  dataRevision: number
   files: CollectedFile[]
   summaryMode?: boolean
   onBack: () => void
@@ -59,7 +59,7 @@ export function CollectionDetail({
   collection: c,
   files: propFiles,
   summaryMode = false,
-  refreshedAt,
+  dataRevision,
   onBack,
   onEdit,
   onShare,
@@ -83,17 +83,23 @@ export function CollectionDetail({
     null,
   )
   const [loadedFiles, setLoadedFiles] = useState<CollectedFile[] | null>(null)
+  const [filesLoading, setFilesLoading] = useState(summaryMode)
+  const [filesError, setFilesError] = useState('')
   const [filesReloadTick, setFilesReloadTick] = useState(0)
   const { canEdit, isAdmin } = useAccount()
 
   useEffect(() => {
     if (!summaryMode) {
       setLoadedFiles(null)
+      setFilesLoading(false)
+      setFilesError('')
       return
     }
-    void refreshedAt
+    void dataRevision
     void filesReloadTick
     const controller = new AbortController()
+    setFilesLoading(true)
+    setFilesError('')
     void fetchAllPaginatedFiles(
       `/api/collections/${encodeURIComponent(c.id)}/files`,
       new URLSearchParams({ sort: 'created_desc' }),
@@ -101,19 +107,26 @@ export function CollectionDetail({
       controller.signal,
     )
       .then((res) => {
-        if (!controller.signal.aborted) setLoadedFiles(res.items)
+        if (controller.signal.aborted) return
+        setLoadedFiles(res.items)
+        setFilesError('')
+        setFilesLoading(false)
       })
-      .catch(() => {
-        /* Fallback to propFiles on transient load failure. */
+      .catch((err) => {
+        if (controller.signal.aborted) return
+        setFilesError((err as Error).message || '读取收集完整文件列表失败，请重试')
+        setFilesLoading(false)
       })
     return () => controller.abort()
-  }, [c.id, summaryMode, refreshedAt, filesReloadTick])
+  }, [c.id, summaryMode, dataRevision, filesReloadTick])
 
-  const files = summaryMode ? (loadedFiles ?? propFiles) : propFiles
+  const filesReady = !summaryMode || loadedFiles !== null
+  const files = summaryMode ? (loadedFiles ?? []) : propFiles
+  const detailRefreshKey = `${dataRevision}:${filesReloadTick}`
   const state = collectionState(c)
   const archived = Boolean(c.archivedAt)
   const pending = c.pendingFiles ?? files.filter((f) => f.status === 'pending').length
-  const activeCount = loadedFiles ? loadedFiles.length : (c.activeFiles ?? files.length)
+  const activeCount = loadedFiles ? loadedFiles.length : (c.activeFiles ?? propFiles.length)
   const material = c.materials?.length
     ? loadedFiles
       ? materialProgress(c, loadedFiles)
@@ -173,6 +186,7 @@ export function CollectionDetail({
               <button
                 type="button"
                 className="button"
+                disabled={!filesReady}
                 onClick={() => setOfflineTarget({ owner: '', identity: '' })}
               >
                 <Upload size={15} />
@@ -180,7 +194,12 @@ export function CollectionDetail({
               </button>
             )}
             {onAI && (
-              <button type="button" className="button" onClick={() => onAI(files)}>
+              <button
+                type="button"
+                className="button"
+                disabled={!filesReady}
+                onClick={() => onAI(files)}
+              >
                 检查这项收集
               </button>
             )}
@@ -352,33 +371,74 @@ export function CollectionDetail({
       </div>
       {tab === 'materials' &&
         (c.materials?.length ? (
-          <MaterialWorkbench
-            collection={c}
-            files={files}
-            refreshKey={refreshedAt}
-            onEditRules={onEdit}
-            onShare={onShare}
-            onDetail={onDetail}
-            onAction={onMaterialAction}
-            onOfflineUpload={
-              isAdmin && !archived ? (person) => setOfflineTarget(person) : undefined
-            }
-            onRefresh={async () => {
-              await onRefresh()
-              setFilesReloadTick((n) => n + 1)
-            }}
-          />
+          !filesReady ? (
+            filesError ? (
+              <div className="error-banner" role="alert">
+                <span>读取材料列表失败：{filesError}</span>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={filesLoading}
+                  onClick={() => setFilesReloadTick((n) => n + 1)}
+                >
+                  重新加载
+                </button>
+              </div>
+            ) : (
+              <p className="material-sync" role="status">
+                正在读取本收集完整文件与材料记录…
+              </p>
+            )
+          ) : (
+            <MaterialWorkbench
+              collection={c}
+              files={files}
+              refreshKey={detailRefreshKey}
+              onEditRules={onEdit}
+              onShare={onShare}
+              onDetail={onDetail}
+              onAction={onMaterialAction}
+              onOfflineUpload={
+                isAdmin && !archived ? (person) => setOfflineTarget(person) : undefined
+              }
+              onRefresh={async () => {
+                await onRefresh()
+                setFilesReloadTick((n) => n + 1)
+              }}
+            />
+          )
         ) : (
           <p className="form-note">材料清单已移除，请切换到收到的文件查看。</p>
         ))}
-      {tab === 'people' && (
-        <ParticipantLedger
-          collection={c}
-          files={files}
-          onSelect={(ids, label) => setSelected(ids ? { ids, label: label || '' } : null)}
-          onOfflineUpload={isAdmin && !archived ? (person) => setOfflineTarget(person) : undefined}
-        />
-      )}
+      {tab === 'people' &&
+        (!filesReady ? (
+          filesError ? (
+            <div className="error-banner" role="alert">
+              <span>读取提交人台账失败：{filesError}</span>
+              <button
+                type="button"
+                className="button"
+                disabled={filesLoading}
+                onClick={() => setFilesReloadTick((n) => n + 1)}
+              >
+                重新加载
+              </button>
+            </div>
+          ) : (
+            <p className="material-sync" role="status">
+              正在读取本收集完整提交记录…
+            </p>
+          )
+        ) : (
+          <ParticipantLedger
+            collection={c}
+            files={files}
+            onSelect={(ids, label) => setSelected(ids ? { ids, label: label || '' } : null)}
+            onOfflineUpload={
+              isAdmin && !archived ? (person) => setOfflineTarget(person) : undefined
+            }
+          />
+        ))}
       {(tab === 'files' || selected) && (
         <>
           <div className="section-heading">
@@ -393,7 +453,7 @@ export function CollectionDetail({
             collections={[c]}
             collectionId={selected ? '' : c.id}
             serverPagination={!selected}
-            refreshKey={refreshedAt}
+            refreshKey={detailRefreshKey}
             onRename={onRename}
             onReview={onReview}
             onDetail={onDetail}

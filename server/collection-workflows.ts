@@ -19,6 +19,7 @@ const uuid = /^[a-f0-9-]{36}$/
 export interface SubmissionContext {
   fields: Record<string, string>
   replace?: { receiptId: string; keyHash: string }
+  parentReceipt?: { receiptId: string; keyHash: string }
   materialIds?: string[]
 }
 interface SubmissionRecord {
@@ -26,6 +27,7 @@ interface SubmissionRecord {
   fields: Record<string, string>
   identity: string
   superseded?: boolean
+  parentReceiptId?: string
   receipt: UploadReceipt
 }
 
@@ -154,6 +156,16 @@ export function submissionContext(
       throw new HttpError(400, '回执格式无效')
     replace = { receiptId, keyHash: digest(key) }
   }
+  let parentReceipt: SubmissionContext['parentReceipt']
+  if (body.parentReceipt !== undefined) {
+    if (replace) throw new HttpError(400, '不能同时指定替换与续交回执')
+    const p = object(body.parentReceipt),
+      receiptId = text(p.receiptId, '回执编号', 36),
+      key = text(p.key, '回执凭证', 100)
+    if (!uuid.test(receiptId) || !/^[a-zA-Z0-9_-]{32,100}$/.test(key))
+      throw new HttpError(400, '回执格式无效')
+    parentReceipt = { receiptId, keyHash: digest(key) }
+  }
   let materialIds: string[] | undefined
   if (body.materialIds !== undefined) {
     if (
@@ -167,6 +179,7 @@ export function submissionContext(
   const context = {
     fields,
     ...(replace ? { replace } : {}),
+    ...(parentReceipt ? { parentReceipt } : {}),
     ...(materialIds ? { materialIds } : {}),
   }
   validateSubmission(store, c, owner, context)
@@ -199,13 +212,26 @@ export function validateSubmission(
     if (old.superseded) throw new HttpError(409, '这份回执已被替换，请使用最新回执')
     if (normalized(old.identity) !== normalized(value))
       throw new HttpError(403, '替换时须保持原提交人标识')
-  } else if (
-    c.submissionMode === 'single' &&
-    store
-      .collectionFiles(c.id, false)
-      .some((f) => normalized(f.participant || f.owner) === normalized(value))
-  )
-    throw new HttpError(409, '此标识已提交，请使用本人回执替换，或联系发起人')
+  } else {
+    if (context.parentReceipt) {
+      const parent = record(
+        store,
+        c.id,
+        context.parentReceipt.receiptId,
+        context.parentReceipt.keyHash,
+      )
+      if (parent.superseded) throw new HttpError(409, '这份回执已被替换，请使用最新回执')
+      if (normalized(parent.identity) !== normalized(value))
+        throw new HttpError(403, '补交时须保持原提交人标识')
+    }
+    if (
+      c.submissionMode === 'single' &&
+      store
+        .collectionFiles(c.id, false)
+        .some((f) => normalized(f.participant || f.owner) === normalized(value))
+    )
+      throw new HttpError(409, '此标识已提交，请使用本人回执替换，或联系发起人')
+  }
 }
 
 // Called inside the same transaction that adds the files. No file-system rename.
@@ -253,7 +279,14 @@ export function commitSubmission(
       f.materialId,
     )
   })
-  const data: SubmissionRecord = { owner, fields: context.fields, identity: person, receipt }
+  const parentReceiptId = context.replace?.receiptId || context.parentReceipt?.receiptId
+  const data: SubmissionRecord = {
+    owner,
+    fields: context.fields,
+    identity: person,
+    ...(parentReceiptId ? { parentReceiptId } : {}),
+    receipt,
+  }
   store.db
     .prepare('INSERT INTO submission_records VALUES (?,?,?,?)')
     .run(receipt.receiptId, c.id, keyHash, JSON.stringify(data))
@@ -263,17 +296,98 @@ export function participants(store: Store, c: Collection): Participant[] {
   return collectionParticipants(c, store.collectionFiles(c.id, false))
 }
 
+/**
+ * 仅沿着已验权的凭证信任链（同一 key_hash 或显式验权写入的 parentReceiptId 链，且同规范化标识）
+ * 收集允许汇总的回执 ID，彻底杜绝按未认证明文 participant 跨用户聚合他人文件或管理员线下补录文件。
+ */
+function resolveTrustedReceiptIds(
+  store: Store,
+  collectionId: string,
+  currentReceiptId: string,
+  identityValue: string,
+): Set<string> {
+  const personKey = normalized(identityValue)
+  const rows = store.db
+    .prepare('SELECT id, key_hash, data FROM submission_records WHERE collection_id=?')
+    .all(collectionId) as { id: string; key_hash: string; data: string }[]
+
+  const sameIdentity = new Map<string, { keyHash: string; parentReceiptId?: string }>()
+  for (const row of rows) {
+    let parsed: SubmissionRecord
+    try {
+      parsed = JSON.parse(row.data) as SubmissionRecord
+    } catch {
+      continue
+    }
+    if (normalized(parsed.identity || parsed.owner) !== personKey) continue
+    sameIdentity.set(row.id, {
+      keyHash: row.key_hash,
+      parentReceiptId: parsed.parentReceiptId,
+    })
+  }
+  if (!sameIdentity.has(currentReceiptId)) return new Set([currentReceiptId])
+
+  const neighbors = new Map<string, Set<string>>()
+  const link = (a: string, b: string) => {
+    if (a === b) return
+    let setA = neighbors.get(a)
+    if (!setA) {
+      setA = new Set()
+      neighbors.set(a, setA)
+    }
+    setA.add(b)
+    let setB = neighbors.get(b)
+    if (!setB) {
+      setB = new Set()
+      neighbors.set(b, setB)
+    }
+    setB.add(a)
+  }
+
+  const byKeyHash = new Map<string, string[]>()
+  for (const [id, meta] of sameIdentity) {
+    if (meta.parentReceiptId && sameIdentity.has(meta.parentReceiptId)) {
+      link(id, meta.parentReceiptId)
+    }
+    if (meta.keyHash) {
+      const list = byKeyHash.get(meta.keyHash)
+      if (list) list.push(id)
+      else byKeyHash.set(meta.keyHash, [id])
+    }
+  }
+  for (const ids of byKeyHash.values()) {
+    for (let i = 1; i < ids.length; i++) link(ids[0], ids[i])
+  }
+
+  const visited = new Set<string>([currentReceiptId])
+  const queue = [currentReceiptId]
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    for (const next of neighbors.get(id) || []) {
+      if (!visited.has(next)) {
+        visited.add(next)
+        queue.push(next)
+      }
+    }
+  }
+  return visited
+}
+
 function buildReceiptMaterialOverview(
   c: Collection,
   identityValue: string,
   receiptId: string,
   colActiveFiles: CollectedFile[],
+  trustedReceiptIds: Set<string>,
 ): ReceiptMaterialOverview {
-  const personKey = normalized(identityValue)
-  const personFiles = colActiveFiles.filter(
-    (f) => normalized(f.participant || f.owner) === personKey,
+  const trustedFiles = colActiveFiles.filter(
+    (f) => Boolean(f.submissionId) && trustedReceiptIds.has(f.submissionId!),
   )
-  const computed = materialParticipants({ ...c, expectedSubmitters: undefined }, personFiles)[0]
+  const linkedBatches = new Set([
+    receiptId,
+    ...trustedFiles.map((f) => f.submissionId).filter((id): id is string => Boolean(id)),
+  ]).size
+  const computed = materialParticipants({ ...c, expectedSubmitters: undefined }, trustedFiles)[0]
   const rawSlots =
     computed?.slots ||
     (c.materials || []).map((requirement) => ({
@@ -320,6 +434,7 @@ function buildReceiptMaterialOverview(
   const requiredSlots = slots.filter((s) => s.required)
   return {
     identity: identityValue,
+    linkedBatches,
     receivedComplete: computed?.receivedComplete ?? false,
     reviewComplete: computed?.reviewComplete ?? false,
     status: computed?.status ?? 'missing',
@@ -359,30 +474,37 @@ export function registerCollectionWorkflows(
       r = record(store, c.id, String(p.receiptId), digest(key))
     const colActive = store.collectionFiles(c.id, false)
     const batchFiles = colActive.filter((f) => f.submissionId === r.receipt.receiptId)
+    const trustedReceiptIds = c.materials?.length
+      ? resolveTrustedReceiptIds(store, c.id, r.receipt.receiptId, r.identity || r.owner)
+      : undefined
     return {
       receipt: r.receipt,
       owner: r.owner,
       fields: r.fields,
       superseded: !!r.superseded,
-      files: batchFiles.map((f) => ({
-        id: f.id,
-        name: f.name,
-        size: f.size,
-        ...(c.materials?.length
-          ? {
-              materialId: f.materialId,
-              materialState: materialReviewState(c, f),
-              materialNote: f.materialReview?.note || '',
-            }
-          : {}),
-      })),
-      ...(c.materials?.length
+      files: batchFiles.map((f) => {
+        const matState = c.materials?.length ? materialReviewState(c, f) : undefined
+        return {
+          id: f.id,
+          name: f.name,
+          size: f.size,
+          ...(matState
+            ? {
+                materialId: f.materialId,
+                materialState: matState,
+                materialNote: matState === 'stale' ? '' : f.materialReview?.note || '',
+              }
+            : {}),
+        }
+      }),
+      ...(c.materials?.length && trustedReceiptIds
         ? {
             materialOverview: buildReceiptMaterialOverview(
               c,
               r.identity || r.owner,
               r.receipt.receiptId,
               colActive,
+              trustedReceiptIds,
             ),
           }
         : {}),

@@ -11,6 +11,7 @@ import type {
 } from '../src/types.ts'
 import { isExpired, localDate } from '../src/lib/collections.ts'
 import { materialProgress } from '../src/lib/materials.ts'
+import { isBidiControlCode, isControlCode } from '../src/lib/text-safety.ts'
 import type { Store } from './store.ts'
 import { decrypt, encrypt } from './secrets.ts'
 import { HttpError, object, text } from './security.ts'
@@ -27,7 +28,7 @@ const EVENT_TYPES: readonly WebhookEventType[] = [
 ]
 const MAX_CHANNELS = 10
 const MAX_LOGS = 50
-const MAX_QUEUE_SIZE = 200
+const DEFAULT_MAX_QUEUE_PER_CHANNEL = 50
 const DEFAULT_DEBOUNCE_SECONDS = 60
 
 export const WEBHOOK_EVENT_LABELS: Record<WebhookEventType | 'test', string> = {
@@ -72,6 +73,7 @@ export interface WebhookPolicy {
   retryBaseMs?: number
   maxAttempts?: number
   deadlineIntervalMs?: number
+  maxQueuePerChannel?: number
 }
 
 export interface WebhookDeliveryPayload {
@@ -111,7 +113,10 @@ export function validateWebhookUrl(raw: string): URL {
   ) {
     throw new HttpError(400, 'Webhook 仅支持 HTTPS（443 端口），不支持内嵌账号密码')
   }
-  const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  const hostname = url.hostname
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.+$/, '')
+    .toLowerCase()
   if (
     !hostname ||
     hostname === 'localhost' ||
@@ -136,8 +141,37 @@ export function sanitizeWebhookError(error: unknown): string {
         : '通知投递失败，请检查渠道配置与网络'
   return raw
     .replace(/https?:\/\/\S+/gi, '[已脱敏地址]')
-    .replace(/\b(access_token|token|key|secret|sign)=[^&\s]+/gi, '$1=[已脱敏]')
+    .replace(
+      /\b(access_token|api_key|apikey|bot_token|auth_token|token|key|secret|sign|password)=[^&\s]+/gi,
+      '$1=[已脱敏]',
+    )
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [已脱敏]')
     .slice(0, 200)
+}
+
+export function sanitizeWebhookPlainText(value: string): string {
+  let cleaned = ''
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (isControlCode(code, true) || code === 0x2028 || code === 0x2029) {
+      cleaned += ' '
+    } else if (!isBidiControlCode(code)) {
+      cleaned += value[i]
+    }
+  }
+  return cleaned
+    .replace(/<\s*\/?\s*at\b[^>]*>/gi, '')
+    .replace(/<\s*@[^>]*>/gi, '')
+    .replaceAll('<', '＜')
+    .replaceAll('>', '＞')
+    .replace(/!\[([^\]]*)\]\(([^)]*)\)/g, '$1（$2）')
+    .replace(/\[([^\]]*)\]\(([^)]*)\)/g, '$1（$2）')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+export function sanitizeWebhookMarkdown(value: string): string {
+  return sanitizeWebhookPlainText(value).replace(/([\\[\]()*_`~#])/g, '\\$1')
 }
 
 function formatMessageText(
@@ -153,22 +187,48 @@ function formatMessageText(
     timeZone: 'Asia/Taipei',
     hour12: false,
   })
-  const title = payload.collectionTitle
-    ? `【集屿 · ${eventLabel}】${payload.collectionTitle}`
+  const safePlainTitle = payload.collectionTitle
+    ? sanitizeWebhookPlainText(payload.collectionTitle)
+    : ''
+  const safeMdTitle = payload.collectionTitle
+    ? sanitizeWebhookMarkdown(payload.collectionTitle)
+    : ''
+  const title = safePlainTitle
+    ? `【集屿 · ${eventLabel}】${safePlainTitle}`
     : `【集屿 · ${eventLabel}】`
-  const detailLines = payload.items.slice(0, 8).map((item) => {
-    const parts = [item.summary, item.detail].filter(Boolean).join(' — ')
+  const mdTitle = safeMdTitle
+    ? `【集屿 · ${eventLabel}】${safeMdTitle}`
+    : `【集屿 · ${eventLabel}】`
+  const plainSummary = sanitizeWebhookPlainText(payload.summary)
+  const mdSummary = sanitizeWebhookMarkdown(payload.summary)
+  const visibleItems = payload.items.slice(0, 8)
+  const plainDetailLines = visibleItems.map((item) => {
+    const parts = [item.summary, item.detail]
+      .filter((p): p is string => Boolean(p))
+      .map((p) => sanitizeWebhookPlainText(p))
+      .filter(Boolean)
+      .join(' — ')
     return `- ${parts}`
   })
-  if (payload.mergedCount > detailLines.length) {
-    detailLines.push(`- 另有 ${payload.mergedCount - detailLines.length} 条记录已聚合`)
+  const mdDetailLines = visibleItems.map((item) => {
+    const parts = [item.summary, item.detail]
+      .filter((p): p is string => Boolean(p))
+      .map((p) => sanitizeWebhookMarkdown(p))
+      .filter(Boolean)
+      .join(' — ')
+    return `- ${parts}`
+  })
+  if (payload.mergedCount > visibleItems.length) {
+    const extraLine = `- 另有 ${payload.mergedCount - visibleItems.length} 条记录已聚合`
+    plainDetailLines.push(extraLine)
+    mdDetailLines.push(extraLine)
   }
-  const plain = [title, payload.summary, ...detailLines, `时间：${timeText}（UTC+8）`].join('\n')
+  const plain = [title, plainSummary, ...plainDetailLines, `时间：${timeText}（UTC+8）`].join('\n')
   const markdown = [
-    `### ${title}`,
-    `> ${payload.summary}`,
+    `### ${mdTitle}`,
+    `> ${mdSummary}`,
     '',
-    ...detailLines,
+    ...mdDetailLines,
     '',
     `时间：${timeText}（UTC+8）`,
   ].join('\n')
@@ -314,6 +374,17 @@ function secretKeyReady(store: Store): boolean {
   }
 }
 
+function channelKeyReady(store: Store, ch: StoredWebhookChannel): boolean {
+  if (!secretKeyReady(store)) return false
+  try {
+    decrypt(store, ch.encryptedUrl)
+    if (ch.encryptedSecret) decrypt(store, ch.encryptedSecret)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function toPublicChannel(ch: StoredWebhookChannel, keyReady: boolean): WebhookChannel {
   return {
     id: ch.id,
@@ -425,20 +496,27 @@ interface PendingAggregate {
   items: { actor?: string; summary: string; detail?: string; at: string }[]
   mergedCount: number
   totalFiles: number
+  deadlineMarker?: string
   timer: ReturnType<typeof setTimeout>
 }
 
 interface DeliveryJob {
   channelId: string
   payload: WebhookDeliveryPayload
+  deadlineMarker?: string
 }
 
 function buildAggregatedSummary(agg: PendingAggregate): string {
-  const titlePrefix = agg.collectionTitle ? `「${agg.collectionTitle}」` : ''
+  const safeTitle = agg.collectionTitle ? sanitizeWebhookPlainText(agg.collectionTitle) : ''
+  const titlePrefix = safeTitle ? `「${safeTitle}」` : ''
   if (agg.mergedCount === 1) return agg.items[0]?.summary || `${titlePrefix}收到新事件`
   if (agg.event === 'submission.created') {
     const actors = [
-      ...new Set(agg.items.map((i) => i.actor).filter((a): a is string => Boolean(a))),
+      ...new Set(
+        agg.items
+          .map((i) => (i.actor ? sanitizeWebhookPlainText(i.actor) : ''))
+          .filter((a): a is string => Boolean(a)),
+      ),
     ]
     const actorText = actors.length
       ? `（来自 ${actors.slice(0, 3).join('、')}${actors.length > 3 ? ` 等 ${actors.length} 人` : ''}）`
@@ -463,12 +541,17 @@ export function registerWebhooks(
   const http = policy.http ?? remoteHTTP
   const maxAttempts = Math.max(1, Math.min(5, policy.maxAttempts ?? 3))
   const retryBaseMs = Math.max(10, policy.retryBaseMs ?? 2000)
+  const maxQueuePerChannel = Math.max(
+    1,
+    Math.min(200, policy.maxQueuePerChannel ?? DEFAULT_MAX_QUEUE_PER_CHANNEL),
+  )
   const controller = new AbortController()
   let stopped = false
 
   const pending = new Map<string, PendingAggregate>()
-  const queue: DeliveryJob[] = []
-  let draining: Promise<void> | null = null
+  const channelQueues = new Map<string, DeliveryJob[]>()
+  const channelDrainers = new Map<string, Promise<void>>()
+  const inFlightDeadlines = new Set<string>()
 
   async function sleep(ms: number) {
     if (stopped || controller.signal.aborted) return
@@ -586,22 +669,106 @@ export function registerWebhooks(
     return failedLog
   }
 
-  function startDrain() {
-    if (draining || stopped) return
-    draining = (async () => {
+  function readDeadlineNotified(): Record<string, string> {
+    const raw = store.get('webhooks.deadlineNotified')
+    if (!raw) return {}
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, string>)
+        : {}
+    } catch {
+      return {}
+    }
+  }
+
+  function markDeadlineNotified(marker: string) {
+    if (stopped) return
+    const notified = readDeadlineNotified()
+    const now = Date.now()
+    notified[marker] = new Date(now).toISOString()
+    const cutoff = now - 30 * 24 * 60 * 60 * 1000
+    for (const [k, v] of Object.entries(notified)) {
+      if (Date.parse(v) < cutoff) delete notified[k]
+    }
+    store.set('webhooks.deadlineNotified', JSON.stringify(notified))
+  }
+
+  function startChannelDrain(channelId: string) {
+    if (stopped || channelDrainers.has(channelId)) return
+    const drainer = (async () => {
       try {
-        while (!stopped && queue.length > 0) {
-          const job = queue.shift()!
-          const cfg = readConfig(store)
-          const ch = cfg.channels.find((c) => c.id === job.channelId)
-          if (!ch || !ch.enabled) continue
-          await deliverNow(ch, job.payload, maxAttempts)
+        while (!stopped) {
+          const q = channelQueues.get(channelId)
+          if (!q || q.length === 0) break
+          const job = q.shift()!
+          try {
+            const cfg = readConfig(store)
+            const ch = cfg.channels.find((c) => c.id === channelId)
+            if (
+              !ch ||
+              !ch.enabled ||
+              (job.payload.event !== 'test' && !ch.events.includes(job.payload.event))
+            ) {
+              continue
+            }
+            const log = await deliverNow(ch, job.payload, maxAttempts)
+            if (job.deadlineMarker && log.status === 'succeeded' && !stopped) {
+              markDeadlineNotified(job.deadlineMarker)
+            }
+          } finally {
+            if (job.deadlineMarker) inFlightDeadlines.delete(job.deadlineMarker)
+          }
         }
       } finally {
-        draining = null
-        if (!stopped && queue.length > 0) startDrain()
+        channelDrainers.delete(channelId)
+        const remaining = channelQueues.get(channelId)
+        if (remaining && remaining.length === 0) channelQueues.delete(channelId)
+        if (!stopped && remaining && remaining.length > 0) startChannelDrain(channelId)
       }
     })()
+    channelDrainers.set(channelId, drainer)
+  }
+
+  function enqueueJob(channelId: string, job: DeliveryJob) {
+    let q = channelQueues.get(channelId)
+    if (!q) {
+      q = []
+      channelQueues.set(channelId, q)
+    }
+    if (q.length >= maxQueuePerChannel) {
+      const dropped = q.shift()!
+      if (dropped.deadlineMarker) inFlightDeadlines.delete(dropped.deadlineMarker)
+      const ch = readConfig(store).channels.find((c) => c.id === channelId)
+      app.log.warn(
+        {
+          channelId,
+          event: dropped.payload.event,
+          deliveryId: dropped.payload.deliveryId,
+          targetHint: ch?.urlHostHint || '',
+        },
+        'webhook channel queue full; dropped oldest delivery',
+      )
+      if (!stopped && ch) {
+        recordLog(store, {
+          id: dropped.payload.deliveryId,
+          channelId: ch.id,
+          channelName: ch.name,
+          channelType: ch.type,
+          event: dropped.payload.event,
+          ...(dropped.payload.collectionId ? { collectionId: dropped.payload.collectionId } : {}),
+          status: 'failed',
+          attempts: 0,
+          mergedCount: dropped.payload.mergedCount,
+          summary: sanitizeWebhookPlainText(dropped.payload.summary),
+          error: '该渠道待投递队列已满，较早的通知已丢弃',
+          targetHint: ch.urlHostHint,
+          createdAt: new Date().toISOString(),
+        })
+      }
+    }
+    q.push(job)
+    startChannelDrain(channelId)
   }
 
   function flushKey(key: string) {
@@ -609,7 +776,10 @@ export function registerWebhooks(
     if (!agg) return
     clearTimeout(agg.timer)
     pending.delete(key)
-    if (stopped) return
+    if (stopped) {
+      if (agg.deadlineMarker) inFlightDeadlines.delete(agg.deadlineMarker)
+      return
+    }
     const payload: WebhookDeliveryPayload = {
       deliveryId: randomUUID(),
       event: agg.event,
@@ -619,9 +789,57 @@ export function registerWebhooks(
       summary: buildAggregatedSummary(agg),
       items: agg.items,
     }
-    if (queue.length >= MAX_QUEUE_SIZE) queue.shift()
-    queue.push({ channelId: agg.channelId, payload })
-    startDrain()
+    enqueueJob(agg.channelId, {
+      channelId: agg.channelId,
+      payload,
+      ...(agg.deadlineMarker ? { deadlineMarker: agg.deadlineMarker } : {}),
+    })
+  }
+
+  function emitToChannel(
+    ch: StoredWebhookChannel,
+    input: WebhookEmitInput,
+    nowIso: string,
+    deadlineMarker?: string,
+  ) {
+    const key = `${ch.id}:${input.collectionId || 'global'}:${input.event}`
+    const existing = pending.get(key)
+    if (existing) {
+      existing.mergedCount += 1
+      existing.totalFiles += input.fileCount || 0
+      if (deadlineMarker && !existing.deadlineMarker) existing.deadlineMarker = deadlineMarker
+      if (existing.items.length < 20) {
+        existing.items.push({
+          ...(input.actor ? { actor: input.actor } : {}),
+          summary: input.summary,
+          ...(input.detail ? { detail: input.detail } : {}),
+          at: nowIso,
+        })
+      }
+      return
+    }
+    const delayMs =
+      policy.debounceMs !== undefined ? Math.max(0, policy.debounceMs) : ch.debounceSeconds * 1000
+    const timer = setTimeout(() => flushKey(key), delayMs)
+    timer.unref()
+    pending.set(key, {
+      channelId: ch.id,
+      event: input.event,
+      collectionId: input.collectionId,
+      collectionTitle: input.collectionTitle,
+      items: [
+        {
+          ...(input.actor ? { actor: input.actor } : {}),
+          summary: input.summary,
+          ...(input.detail ? { detail: input.detail } : {}),
+          at: nowIso,
+        },
+      ],
+      mergedCount: 1,
+      totalFiles: input.fileCount || 0,
+      ...(deadlineMarker ? { deadlineMarker } : {}),
+      timer,
+    })
   }
 
   function emit(input: WebhookEmitInput) {
@@ -630,94 +848,58 @@ export function registerWebhooks(
     const nowIso = new Date().toISOString()
     for (const ch of cfg.channels) {
       if (!ch.enabled || !ch.events.includes(input.event)) continue
-      const key = `${ch.id}:${input.collectionId || 'global'}:${input.event}`
-      const existing = pending.get(key)
-      if (existing) {
-        existing.mergedCount += 1
-        existing.totalFiles += input.fileCount || 0
-        if (existing.items.length < 20) {
-          existing.items.push({
-            ...(input.actor ? { actor: input.actor } : {}),
-            summary: input.summary,
-            ...(input.detail ? { detail: input.detail } : {}),
-            at: nowIso,
-          })
-        }
-      } else {
-        const delayMs =
-          policy.debounceMs !== undefined
-            ? Math.max(0, policy.debounceMs)
-            : ch.debounceSeconds * 1000
-        const timer = setTimeout(() => flushKey(key), delayMs)
-        timer.unref()
-        pending.set(key, {
-          channelId: ch.id,
-          event: input.event,
-          collectionId: input.collectionId,
-          collectionTitle: input.collectionTitle,
-          items: [
-            {
-              ...(input.actor ? { actor: input.actor } : {}),
-              summary: input.summary,
-              ...(input.detail ? { detail: input.detail } : {}),
-              at: nowIso,
-            },
-          ],
-          mergedCount: 1,
-          totalFiles: input.fileCount || 0,
-          timer,
-        })
-      }
+      emitToChannel(ch, input, nowIso)
     }
   }
 
   function checkDeadlines(force = false): number {
     if (stopped) return 0
     const cfg = readConfig(store)
-    if (!cfg.channels.some((c) => c.enabled && c.events.includes('collection.deadline_soon'))) {
-      return 0
-    }
+    const eligibleChannels = cfg.channels.filter(
+      (c) => c.enabled && c.events.includes('collection.deadline_soon'),
+    )
+    if (!eligibleChannels.length) return 0
     const today = localDate()
     const tomorrow = localDate(new Date(Date.now() + 24 * 60 * 60 * 1000))
-    const notifiedRaw = store.get('webhooks.deadlineNotified')
-    let notified: Record<string, string> = {}
-    if (notifiedRaw) {
-      try {
-        notified = JSON.parse(notifiedRaw) as Record<string, string>
-      } catch {
-        notified = {}
-      }
-    }
+    const notified = readDeadlineNotified()
     const active = store.collections().filter((c) => !c.archivedAt && c.status === 'active')
     let emitted = 0
     const now = Date.now()
+    const nowIso = new Date(now).toISOString()
     for (const c of active) {
       if (isExpired(c, now)) continue
       if (c.deadline !== today && c.deadline !== tomorrow) continue
-      const marker = `${c.id}:${c.deadline}`
-      if (!force && notified[marker]) continue
+      const legacyMarker = `${c.id}:${c.deadline}`
+      const targetChannels = eligibleChannels.filter((ch) => {
+        const chMarker = `${ch.id}:${c.id}:${c.deadline}`
+        if (force) return true
+        if (notified[legacyMarker] || notified[chMarker]) return false
+        if (inFlightDeadlines.has(chMarker)) return false
+        return true
+      })
+      if (!targetChannels.length) continue
       let detail = `已收 ${c.received} / 目标 ${c.target} 份，截止 ${c.deadline} 23:59`
       if (c.materials?.length) {
         const prog = materialProgress(c, store.collectionFiles(c.id, false))
         detail = `必需材料已收齐 ${prog.received}/${prog.total} 人，核对通过 ${prog.reviewed} 人，截止 ${c.deadline} 23:59`
       }
-      emit({
-        event: 'collection.deadline_soon',
-        collectionId: c.id,
-        collectionTitle: c.title,
-        summary: `「${c.title}」即将于 ${c.deadline} 截止`,
-        detail,
-      })
-      notified[marker] = new Date(now).toISOString()
-      emitted++
-    }
-    if (emitted > 0) {
-      // Prune stale markers older than 30 days
-      const cutoff = now - 30 * 24 * 60 * 60 * 1000
-      for (const [k, v] of Object.entries(notified)) {
-        if (Date.parse(v) < cutoff) delete notified[k]
+      for (const ch of targetChannels) {
+        const chMarker = `${ch.id}:${c.id}:${c.deadline}`
+        inFlightDeadlines.add(chMarker)
+        emitToChannel(
+          ch,
+          {
+            event: 'collection.deadline_soon',
+            collectionId: c.id,
+            collectionTitle: c.title,
+            summary: `「${c.title}」即将于 ${c.deadline} 截止`,
+            detail,
+          },
+          nowIso,
+          chMarker,
+        )
       }
-      store.set('webhooks.deadlineNotified', JSON.stringify(notified))
+      emitted++
     }
     return emitted
   }
@@ -737,9 +919,8 @@ export function registerWebhooks(
   // Admin-only HTTP API (enforced by app.ts onRequest for /api/webhooks*)
   app.get('/api/webhooks', async () => {
     const cfg = readConfig(store)
-    const keyReady = secretKeyReady(store)
     return {
-      channels: cfg.channels.map((ch) => toPublicChannel(ch, keyReady)),
+      channels: cfg.channels.map((ch) => toPublicChannel(ch, channelKeyReady(store, ch))),
       logs: readLogs(store),
     }
   })
@@ -779,7 +960,7 @@ export function registerWebhooks(
     })
     reply.code(201)
     return {
-      channel: toPublicChannel(channel, secretKeyReady(store)),
+      channel: toPublicChannel(channel, channelKeyReady(store, channel)),
     }
   })
 
@@ -798,11 +979,19 @@ export function registerWebhooks(
     const debounceSeconds = parseDebounceSeconds(body.debounceSeconds, current.debounceSeconds)
     const enabled = body.enabled === undefined ? current.enabled : Boolean(body.enabled)
 
+    const typeChanged = type !== current.type
+    let urlChanged = false
     let encryptedUrl = current.encryptedUrl
     let urlHostHint = current.urlHostHint
     if (body.url !== undefined && String(body.url).trim() !== '') {
       const url = validateWebhookUrl(String(body.url))
-      encryptedUrl = encrypt(store, url.toString())
+      const nextUrlStr = url.toString()
+      try {
+        urlChanged = decrypt(store, current.encryptedUrl) !== nextUrlStr
+      } catch {
+        urlChanged = true
+      }
+      encryptedUrl = encrypt(store, nextUrlStr)
       urlHostHint = maskWebhookUrl(url)
     }
 
@@ -811,6 +1000,9 @@ export function registerWebhooks(
       encryptedSecret = undefined
     } else if (body.secret !== undefined && String(body.secret) !== '') {
       encryptedSecret = encrypt(store, text(body.secret, '加签密钥', 512))
+    } else if (urlChanged || typeChanged) {
+      // 更换目标地址或平台类型时若未提供新密钥，强制清空旧加签密钥，严禁跨目标复用
+      encryptedSecret = undefined
     }
 
     const updated: StoredWebhookChannel = {
@@ -833,8 +1025,31 @@ export function registerWebhooks(
       writeConfig(store, { channels: nextChannels })
       store.activity(`更新了通知渠道「${updated.name}」`)
     })
+
+    for (const [key, agg] of pending) {
+      if (agg.channelId === id && (!updated.enabled || !updated.events.includes(agg.event))) {
+        clearTimeout(agg.timer)
+        pending.delete(key)
+        if (agg.deadlineMarker) inFlightDeadlines.delete(agg.deadlineMarker)
+      }
+    }
+    const queued = channelQueues.get(id)
+    if (queued) {
+      for (let i = queued.length - 1; i >= 0; i--) {
+        const job = queued[i]
+        if (
+          !updated.enabled ||
+          (job.payload.event !== 'test' && !updated.events.includes(job.payload.event))
+        ) {
+          if (job.deadlineMarker) inFlightDeadlines.delete(job.deadlineMarker)
+          queued.splice(i, 1)
+        }
+      }
+      if (queued.length === 0) channelQueues.delete(id)
+    }
+
     return {
-      channel: toPublicChannel(updated, secretKeyReady(store)),
+      channel: toPublicChannel(updated, channelKeyReady(store, updated)),
     }
   })
 
@@ -847,7 +1062,15 @@ export function registerWebhooks(
       if (agg.channelId === id) {
         clearTimeout(agg.timer)
         pending.delete(key)
+        if (agg.deadlineMarker) inFlightDeadlines.delete(agg.deadlineMarker)
       }
+    }
+    const queued = channelQueues.get(id)
+    if (queued) {
+      for (const job of queued) {
+        if (job.deadlineMarker) inFlightDeadlines.delete(job.deadlineMarker)
+      }
+      channelQueues.delete(id)
     }
     store.transaction(() => {
       writeConfig(store, { channels: cfg.channels.filter((c) => c.id !== id) })
@@ -901,16 +1124,19 @@ export function registerWebhooks(
     checkDeadlines,
     async flushPending() {
       for (const key of [...pending.keys()]) flushKey(key)
-      if (draining) await draining
+      while (channelDrainers.size > 0) {
+        await Promise.all([...channelDrainers.values()])
+      }
     },
     async stop() {
       stopped = true
       clearInterval(deadlineTimer)
       for (const agg of pending.values()) clearTimeout(agg.timer)
       pending.clear()
-      queue.length = 0
+      channelQueues.clear()
+      inFlightDeadlines.clear()
       controller.abort()
-      if (draining) await draining.catch(() => {})
+      await Promise.allSettled([...channelDrainers.values()])
     },
   }
 }

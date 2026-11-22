@@ -73,7 +73,7 @@ export function ParticipantLedger({
           <span>{c.expectedSubmitters?.length ? '人待提交' : '尚未设置应交名单'}</span>
         </div>
         <div className="button-row">
-          {canEdit && (
+          {canEdit && !c.archivedAt && (
             <button type="button" className="button" onClick={() => setReminder({ mode: 'group' })}>
               <MessageSquareText size={15} />
               一键催交话术
@@ -162,7 +162,7 @@ export function ParticipantLedger({
                       >
                         查看文件
                       </button>
-                      {canEdit && (!p.fileIds.length || p.duplicates > 0) && (
+                      {canEdit && !c.archivedAt && (!p.fileIds.length || p.duplicates > 0) && (
                         <button
                           type="button"
                           className="text-button"

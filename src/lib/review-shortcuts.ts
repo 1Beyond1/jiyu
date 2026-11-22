@@ -7,6 +7,13 @@ export interface ShortcutKeyLike {
   altKey?: boolean
   shiftKey?: boolean
   repeat?: boolean
+  isComposing?: boolean
+  keyCode?: number
+}
+
+export interface ReviewShortcutOptions {
+  inReviewContainer?: boolean
+  overlayOpen?: boolean
 }
 
 export interface EditableTargetLike {
@@ -24,8 +31,13 @@ export function isEditableTarget(target: EditableTargetLike | null | undefined):
 export function resolveReviewShortcut(
   event: ShortcutKeyLike,
   editable: boolean,
+  options?: ReviewShortcutOptions,
 ): ReviewShortcutAction | null {
+  if (event.isComposing || event.keyCode === 229) return null
+  if (event.shiftKey) return null
+  if (options?.overlayOpen) return null
   if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key === 'Enter') {
+    if (options?.inReviewContainer === false) return null
     return 'submit'
   }
   if (editable) return null

@@ -73,9 +73,20 @@ test('暖炭深色模式 CSS 完整覆盖 5 项语义变量、表格交互、复
     ':root[data-theme="dark"] .receipt-slot-item',
     ':root[data-theme="dark"] .offline-file-item',
     ':root[data-theme="dark"] .archive-scope-tabs',
+    ':root[data-theme="dark"] .archive-scope-tabs button.active',
+    ':root[data-theme="dark"] .webhook-channel-card .button:not(.primary)',
   ]) {
     assert.ok(darkBlock.includes(selector), `深色主题缺少选择器覆盖：${selector}`)
   }
+  const slotRuleMatch = darkBlock.match(
+    /:root\[data-theme="dark"\]\s*\.receipt-slot-item\s*\{[^}]*\}/,
+  )
+  assert.ok(slotRuleMatch, '应存在独立的 :root[data-theme="dark"] .receipt-slot-item 规则')
+  assert.equal(
+    /\bborder-color\s*:/.test(slotRuleMatch[0]),
+    false,
+    '暗色 .receipt-slot-item 不得使用全四边 border-color 覆写状态左边框',
+  )
   assert.ok(
     css.includes('@media (prefers-color-scheme: dark)'),
     'CSS 应包含首屏 prefers-color-scheme: dark 兜底防闪',

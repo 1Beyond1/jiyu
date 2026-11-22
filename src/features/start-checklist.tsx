@@ -7,7 +7,7 @@ import { useAccount } from './auth'
 
 interface ChecklistPreferences {
   collapsed: boolean
-  download?: { id: string; size: number; sha256?: string }
+  download?: { id: string; size: number; sha256?: string; name?: string }
 }
 function readPreferences(key: string): ChecklistPreferences {
   try {
@@ -19,7 +19,8 @@ function readPreferences(key: string): ChecklistPreferences {
       typeof download.id === 'string' &&
       Number.isSafeInteger(download.size) &&
       download.size >= 0 &&
-      (download.sha256 === undefined || typeof download.sha256 === 'string')
+      (download.sha256 === undefined || typeof download.sha256 === 'string') &&
+      (download.name === undefined || typeof download.name === 'string')
         ? { download }
         : {}),
     }
@@ -74,13 +75,26 @@ export function StartChecklist({
   }, [load])
   const totalActiveFiles = workspace.stats?.activeFiles ?? workspace.files.length
   const hasFiles = totalActiveFiles > 0
+  const savedDownload = preferences.download
+  const inRecentWindow = savedDownload
+    ? workspace.files.find((f) => f.id === savedDownload.id)
+    : undefined
+  const persistedOutsideWindow = Boolean(
+    hasFiles &&
+      workspace.summaryMode &&
+      savedDownload &&
+      !inRecentWindow &&
+      selectedFileId === savedDownload.id,
+  )
   const selectedFile = workspace.files.find((f) => f.id === selectedFileId) || workspace.files[0]
   const collectionNames = new Map(workspace.collections.map((c) => [c.id, c.title]))
   const checked =
-    !!selectedFile &&
-    preferences.download?.id === selectedFile.id &&
-    preferences.download.size === selectedFile.size &&
-    preferences.download.sha256 === selectedFile.sha256
+    hasFiles &&
+    (persistedOutsideWindow ||
+      (!!selectedFile &&
+        savedDownload?.id === selectedFile.id &&
+        savedDownload.size === selectedFile.size &&
+        savedDownload.sha256 === selectedFile.sha256))
   const hasBackup = !!backup?.backups.length,
     scheduled = !!backup?.settings.enabled
   const items = [
@@ -170,17 +184,22 @@ export function StartChecklist({
                 <h3>{item.title}</h3>
                 <small>{item.state}</small>
                 <p>{item.text}</p>
-                {i === 1 && selectedFile && (
+                {i === 1 && (selectedFile || persistedOutsideWindow) && (
                   <div className="download-confirmation">
                     <label className="field">
                       核对文件
                       <select
-                        value={selectedFile.id}
+                        value={persistedOutsideWindow ? savedDownload!.id : selectedFile!.id}
                         onChange={(e) => {
                           setSelectedFileId(e.target.value)
                           savePreferences({ ...preferences, download: undefined })
                         }}
                       >
+                        {persistedOutsideWindow && savedDownload && (
+                          <option value={savedDownload.id}>
+                            {savedDownload.name || '已核对的历史文件'} · 已确认核对
+                          </option>
+                        )}
                         {workspace.files.map((f) => (
                           <option value={f.id} key={f.id}>
                             {f.name} · {collectionNames.get(f.collectionId) || '收集任务'}
@@ -196,11 +215,16 @@ export function StartChecklist({
                           savePreferences({
                             ...preferences,
                             download: e.target.checked
-                              ? {
-                                  id: selectedFile.id,
-                                  size: selectedFile.size,
-                                  sha256: selectedFile.sha256,
-                                }
+                              ? persistedOutsideWindow && savedDownload
+                                ? savedDownload
+                                : selectedFile
+                                  ? {
+                                      id: selectedFile.id,
+                                      size: selectedFile.size,
+                                      sha256: selectedFile.sha256,
+                                      name: selectedFile.name,
+                                    }
+                                  : undefined
                               : undefined,
                           })
                         }

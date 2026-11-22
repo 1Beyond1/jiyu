@@ -200,6 +200,9 @@ function Submission({
     ),
     [replacement, setReplacement] = useState<SubmissionMetadata['replace']>(
       () => pendingSubmission(uploadToken).replace,
+    ),
+    [parentReceipt, setParentReceipt] = useState<SubmissionMetadata['parentReceipt']>(
+      () => pendingSubmission(uploadToken).parentReceipt,
     )
   const [confirming, setConfirming] = useState(false)
   const [feedback, setFeedback] = useState<UploadFeedback | null>(null)
@@ -224,6 +227,7 @@ function Submission({
     setName(detail.owner)
     setFields(detail.fields)
     setReplacement(replace ? { receiptId: detail.receipt.receiptId, key } : undefined)
+    setParentReceipt(!replace ? { receiptId: detail.receipt.receiptId, key } : undefined)
     setReceipt(null)
     setFeedback(null)
     setFiles([])
@@ -323,6 +327,7 @@ function Submission({
                 }
               : {}),
             ...(replacement ? { replace: replacement } : {}),
+            ...(!replacement && parentReceipt ? { parentReceipt } : {}),
           },
           setFeedback,
         ),
@@ -492,6 +497,21 @@ function Submission({
                         onClick={() => setReplacement(undefined)}
                       >
                         取消替换，改为普通提交
+                      </button>
+                    </div>
+                  )}
+                  {!replacement && parentReceipt && (
+                    <div className="replacement-note">
+                      <strong>正在凭原回执继续补交</strong>
+                      <p>
+                        新提交的批次会与原回执安全关联，方便在同一进度总览中查看各材料槽位，原有文件保持保留。
+                      </p>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => setParentReceipt(undefined)}
+                      >
+                        取消关联，改为独立新提交
                       </button>
                     </div>
                   )}

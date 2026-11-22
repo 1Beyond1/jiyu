@@ -6912,13 +6912,38 @@ h3,
   margin-bottom: 0;
 }
 .archive-scope-tabs {
+  gap: 4px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface);
 }
 .archive-scope-tabs button {
+  align-items: center;
+  padding: 6px 12px;
+  border: none;
+  border-bottom: none;
   border-radius: 999px;
+  color: var(--secondary);
+}
+.archive-scope-tabs button:hover {
+  color: var(--ink);
+}
+.archive-scope-tabs button.active {
+  background: var(--paper);
+  color: var(--accent-dark);
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.archive-scope-tabs button span {
+  background: var(--paper);
+  color: var(--secondary);
+  padding: 0 6px;
+  border-radius: 999px;
+}
+.archive-scope-tabs button.active span {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
 }
 .collection-card.archived {
   opacity: 0.86;
@@ -7394,11 +7419,55 @@ h3,
 :root[data-theme="dark"] .webhook-meta-pill,
 :root[data-theme="dark"] .webhook-url-hint code,
 :root[data-theme="dark"] .webhook-log-foot code,
-:root[data-theme="dark"] .receipt-slot-item,
 :root[data-theme="dark"] .offline-material-select select {
   background: var(--paper);
   border-color: var(--line);
   color: var(--ink);
+}
+:root[data-theme="dark"] .receipt-slot-item {
+  background: var(--paper);
+  border-top-color: var(--line);
+  border-right-color: var(--line);
+  border-bottom-color: var(--line);
+  color: var(--ink);
+}
+:root[data-theme="dark"] .archive-scope-tabs button {
+  color: var(--secondary);
+}
+:root[data-theme="dark"] .archive-scope-tabs button:hover {
+  color: var(--ink);
+}
+:root[data-theme="dark"] .archive-scope-tabs button.active {
+  background: var(--paper);
+  color: var(--accent-dark);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .archive-scope-tabs button span {
+  background: var(--paper);
+  color: var(--secondary);
+}
+:root[data-theme="dark"] .archive-scope-tabs button.active span {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+:root[data-theme="dark"] .webhook-channel-card .button:not(.primary) {
+  background: var(--paper);
+  border-color: #4a3d36;
+  color: var(--ink);
+}
+:root[data-theme="dark"] .webhook-channel-card .button:not(.primary):hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+:root[data-theme="dark"] .webhook-channel-card .button.danger {
+  background: var(--paper);
+  border-color: rgba(249, 112, 102, 0.48);
+  color: #fda29b;
+}
+:root[data-theme="dark"] .webhook-channel-card .button.danger:hover:not(:disabled) {
+  background: rgba(249, 112, 102, 0.16);
+  border-color: rgba(249, 112, 102, 0.72);
 }
 :root[data-theme="dark"] .webhook-meta-pill.warn {
   background: var(--warn-soft);

@@ -432,6 +432,73 @@ test('真 SQL 分页 queryFiles（含 FTS5 EXISTS、标签、排序、增改删�
       .get(target.id) as { deleted_at: string | null }
     assert.equal(afterRestore.deleted_at, null)
     assert.equal(store.queryFiles({ page: 1, pageSize: 10, sort: 'created_desc' }).total, 240)
+
+    // 6. 【P1-1 回归】NUL 字节拦截防 FTS5 500 崩溃 + 双生僻字/双 Emoji 按码点走 instr 命中
+    const astralId = randomUUID()
+    store.addFile(
+      {
+        id: astralId,
+        name: 'astral_test.pdf',
+        size: 128,
+        collectionId: colA.id,
+        owner: '测试员',
+        participant: 'ASTRAL',
+        createdAt: new Date(baseMs + 999_000).toISOString(),
+        storage: 'local',
+        status: 'pending',
+      },
+      randomUUID(),
+    )
+    store.db
+      .prepare('INSERT INTO content_search(file_id, body) VALUES (?, ?)')
+      .run(astralId, '包含两个生僻字 𠀀𠀁 以及两个 Emoji 🚀🎯 的索引正文')
+
+    const nulFilesRes = await app.inject({
+      method: 'GET',
+      url: `/api/files?q=${encodeURIComponent('abc\0def')}`,
+      headers: { cookie },
+    })
+    assert.equal(nulFilesRes.statusCode, 400, '含 NUL 字节搜索词必须返回 400 而非 500')
+
+    const nulContentRes = await app.inject({
+      method: 'GET',
+      url: `/api/content/search?q=${encodeURIComponent('abc\0def')}`,
+      headers: { cookie },
+    })
+    assert.equal(nulContentRes.statusCode, 400, '/api/content/search 含 NUL 字节必须返回 400')
+
+    assert.doesNotThrow(() =>
+      store.queryFiles({ page: 1, pageSize: 10, sort: 'created_desc', q: 'abc\0def' }),
+    )
+
+    // 两个 Emoji（UTF-16 length=4，Unicode 码点数=2）与两个扩展汉字（length=4，码点数=2）必须命中
+    for (const term of ['🚀🎯', '𠀀𠀁']) {
+      const filesHit = await app.inject({
+        method: 'GET',
+        url: `/api/files?q=${encodeURIComponent(term)}`,
+        headers: { cookie },
+      })
+      assert.equal(filesHit.statusCode, 200, filesHit.body)
+      assert.equal(filesHit.json().total, 1, `/api/files 应按码点检索命中 ${term}`)
+      assert.equal(filesHit.json().items[0].id, astralId)
+
+      const contentHit = await app.inject({
+        method: 'GET',
+        url: `/api/content/search?q=${encodeURIComponent(term)}`,
+        headers: { cookie },
+      })
+      assert.equal(contentHit.statusCode, 200, contentHit.body)
+      assert.equal(contentHit.json().matches.length, 1, `/api/content/search 应命中 ${term}`)
+      assert.equal(contentHit.json().matches[0].id, astralId)
+    }
+
+    // 单个 Emoji（length=2 但仅 1 个码点）在 /api/content/search 应返回 400
+    const singleEmojiRes = await app.inject({
+      method: 'GET',
+      url: `/api/content/search?q=${encodeURIComponent('🚀')}`,
+      headers: { cookie },
+    })
+    assert.equal(singleEmojiRes.statusCode, 400)
   } finally {
     await app.close()
     await rm(dir, { recursive: true, force: true })

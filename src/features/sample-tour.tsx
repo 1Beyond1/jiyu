@@ -80,22 +80,25 @@ async function createSample(create: (body: unknown) => Promise<Workspace | undef
 }
 
 function tourStep(c: Collection, workspace: Workspace) {
+  const summary = c.materialSummary
   const person = materialParticipants(c, workspace.files).find((p) => p.identity === 'DEMO-01')
+  const reviewComplete = summary ? summary.reviewed >= 1 : Boolean(person?.reviewComplete)
+  const needsChanges = summary
+    ? (summary.needsChanges ?? 0) >= 1
+    : person?.status === 'needs_changes'
+  const receivedAnyComplete = summary ? summary.received >= 1 : (person?.files.length ?? 0) >= 2
   const replaced =
     (workspace.trash || []).some(
       (f) => f.collectionId === c.id && (f.participant || f.owner) === 'DEMO-01',
     ) ||
-    (Boolean(workspace.summaryMode) &&
-      c.activeFiles !== undefined &&
-      c.received > c.activeFiles &&
-      (person?.files.length ?? 0) >= 2)
-  if (person?.reviewComplete)
+    (c.activeFiles !== undefined && c.received > c.activeFiles && receivedAnyComplete)
+  if (reviewComplete)
     return {
       n: 4,
       title: '体验完成',
       why: 'DEMO-01 已人工通过。DEMO-02 还缺作品说明：材料矩阵里能导出缺件清单，也可以问右下角的 AI 助手“谁还没交齐”。',
     }
-  if (person?.status === 'needs_changes')
+  if (needsChanges)
     return {
       n: 2,
       title: '换成提交人，凭回执补交',

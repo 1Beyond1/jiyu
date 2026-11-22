@@ -278,6 +278,9 @@ function comparableSignature(signature: string) {
     ),
     ...(b.materialIds ? { materialIds: b.materialIds } : {}),
     ...(b.replace ? { replace: { receiptId: b.replace.receiptId, key: b.replace.key } } : {}),
+    ...(b.parentReceipt
+      ? { parentReceipt: { receiptId: b.parentReceipt.receiptId, key: b.parentReceipt.key } }
+      : {}),
   })
 }
 export function forgetUpload(uploadToken: string) {

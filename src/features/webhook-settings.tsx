@@ -317,7 +317,7 @@ export function WebhookSettingsPanel() {
                       </span>
                       {ch.hasSecret && <span className="webhook-meta-pill">已配置加签密钥</span>}
                       {!ch.keyReady && (
-                        <span className="webhook-meta-pill warn">主密钥缺失，请重新填写</span>
+                        <span className="webhook-meta-pill warn">凭证无法解密，请重新填写</span>
                       )}
                     </div>
                     <p className="webhook-url-hint">
@@ -487,7 +487,11 @@ export function WebhookSettingsPanel() {
                   value={editor.secret}
                   onChange={(e) => setEditor({ ...editor, secret: e.target.value })}
                   placeholder={
-                    editor.editing?.hasSecret ? '已加密保存，留空保留原密钥' : '选填，加密存储'
+                    editor.editing?.hasSecret
+                      ? editor.url.trim() || editor.type !== editor.editing.type
+                        ? '更换地址或平台后旧密钥会自动清空，如需加签请填写新密钥'
+                        : '已加密保存，留空保留原密钥'
+                      : '选填，加密存储'
                   }
                 />
                 <small>{CHANNEL_META[editor.type].secretHint}</small>

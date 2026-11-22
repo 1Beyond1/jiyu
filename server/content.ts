@@ -443,15 +443,18 @@ export function registerContent(
     documents: store.db.prepare('SELECT * FROM documents').all(),
   }))
   app.get('/api/content/search', async (req) => {
-    const q = text(object(req.query).q, '搜索内容', 100, 2),
-      active = new Set(
-        store
-          .files()
-          .filter((f) => !f.deletedAt)
-          .map((f) => f.id),
-      )
+    const q = text(object(req.query).q, '搜索内容', 100, 2)
+    if (q.includes('\0')) throw new HttpError(400, '搜索内容包含无效控制字符')
+    const codePoints = Array.from(q).length
+    if (codePoints < 2) throw new HttpError(400, '搜索内容需填写 2–100 个字符')
+    const active = new Set(
+      store
+        .files()
+        .filter((f) => !f.deletedAt)
+        .map((f) => f.id),
+    )
     const rows =
-      q.length >= 3
+      codePoints >= 3
         ? store.db
             .prepare(
               'SELECT file_id,body FROM content_search WHERE content_search MATCH ? LIMIT 500',

@@ -22,14 +22,40 @@ export type RemoteHTTP = (input: RemoteRequest) => Promise<RemoteResponse>
 export const remoteHTTP: RemoteHTTP = async ({ url, method, headers, body, signal }) => {
   if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443'))
     throw new HttpError(400, '远端只接受 HTTPS 443')
-  const hostname = url.hostname.replace(/^\[|\]$/g, '')
+  const hostname = url.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '')
   let timer: ReturnType<typeof setTimeout> | undefined
-  const addresses = await Promise.race([
-    lookup(hostname, { all: true, verbatim: true }),
-    new Promise<never>((_r, reject) => {
-      timer = setTimeout(() => reject(new Error('DNS timeout')), 5000)
-    }),
-  ]).finally(() => clearTimeout(timer))
+  let addresses: { address: string; family: number }[]
+  try {
+    addresses = await Promise.race([
+      lookup(hostname, { all: true, verbatim: true }),
+      new Promise<never>((_r, reject) => {
+        timer = setTimeout(() => reject(new Error('DNS timeout')), 5000)
+      }),
+    ]).finally(() => clearTimeout(timer))
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code || ''
+    const isTimeout = err instanceof Error && err.message === 'DNS timeout'
+    const retryable =
+      isTimeout ||
+      [
+        'EAI_AGAIN',
+        'EAI_FAIL',
+        'ETIMEDOUT',
+        'ECONNRESET',
+        'ECONNREFUSED',
+        'EHOSTUNREACH',
+        'ENETUNREACH',
+        'ESERVFAIL',
+        'ENOTFOUND',
+      ].includes(code)
+    throw Object.assign(
+      new HttpError(
+        502,
+        isTimeout ? '远端域名解析超时，请稍后重试' : '远端地址暂时无法解析，请检查网络与服务地址',
+      ),
+      { retryable },
+    )
+  }
   if (!addresses.length || addresses.some((a) => !isPublicAddress(a.address)))
     throw new HttpError(400, '远端地址解析到本机、内网或保留地址')
   const address = addresses[0]
@@ -72,7 +98,8 @@ export async function remoteBody(response: RemoteResponse, limit = 256 * 1024) {
     return Buffer.concat(chunks)
   } catch (e) {
     response.body.destroy?.()
-    throw e
+    if (e instanceof HttpError) throw e
+    throw Object.assign(new HttpError(502, '读取远端响应中断，请稍后重试'), { retryable: true })
   }
 }
 export function remoteOK(response: RemoteResponse, allowed: number[] = []) {

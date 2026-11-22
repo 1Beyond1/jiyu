@@ -19,7 +19,7 @@ export interface Collection {
   received: number
   activeFiles?: number
   pendingFiles?: number
-  materialSummary?: { total: number; received: number; reviewed: number }
+  materialSummary?: { total: number; received: number; reviewed: number; needsChanges?: number }
   target: number
   deadline: string
   storage: StorageId
@@ -225,6 +225,7 @@ export interface CollectionTemplate {
 export interface SubmissionMetadata {
   fields?: Record<string, string>
   replace?: { receiptId: string; key: string }
+  parentReceipt?: { receiptId: string; key: string }
   materialIds?: string[]
 }
 export interface Participant {
@@ -258,6 +259,7 @@ export interface ReceiptMaterialSlotOverview {
 }
 export interface ReceiptMaterialOverview {
   identity: string
+  linkedBatches?: number
   receivedComplete: boolean
   reviewComplete: boolean
   status: 'missing' | 'needs_changes' | 'unclassified' | 'pending' | 'accepted'

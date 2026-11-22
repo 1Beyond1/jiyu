@@ -84,7 +84,7 @@ export function FileTable({
   const { canEdit } = useAccount()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
-  const [selected, setSelected] = useState<string[]>([])
+  const [selectedMap, setSelectedMap] = useState<Map<string, CollectedFile>>(() => new Map())
   const [sort, setSort] = useState<FileSortOption>('created_desc')
   const [pageSize, setPageSize] = useState(50)
   const [pageData, setPageData] = useState<PaginatedFiles | null>(null)
@@ -257,11 +257,37 @@ export function FileTable({
           ? pageData.items
           : visible.slice((page - 1) * pageSize, page * pageSize)
       : visible
-  const chosenMap = new Map<string, CollectedFile>()
-  for (const f of files) chosenMap.set(f.id, f)
-  for (const f of list) chosenMap.set(f.id, f)
-  const chosen = selected.map((id) => chosenMap.get(id)).filter((f): f is CollectedFile => !!f)
-  const allChecked = list.length > 0 && list.every((f) => selected.includes(f.id))
+  const latestById = new Map<string, CollectedFile>()
+  for (const f of files) latestById.set(f.id, f)
+  for (const f of list) latestById.set(f.id, f)
+  const selected = [...selectedMap.keys()]
+  const chosen = selected
+    .map((id) => latestById.get(id) ?? selectedMap.get(id))
+    .filter((f): f is CollectedFile => Boolean(f))
+  const allChecked = list.length > 0 && list.every((f) => selectedMap.has(f.id))
+
+  function toggleSelected(file: CollectedFile) {
+    setSelectedMap((prev) => {
+      const next = new Map(prev)
+      if (next.has(file.id)) next.delete(file.id)
+      else next.set(file.id, file)
+      return next
+    })
+  }
+  function togglePageSelected() {
+    setSelectedMap((prev) => {
+      const next = new Map(prev)
+      if (allChecked) {
+        for (const f of list) next.delete(f.id)
+      } else {
+        for (const f of list) next.set(f.id, f)
+      }
+      return next
+    })
+  }
+  function clearSelection() {
+    setSelectedMap(new Map())
+  }
 
   async function resolveFilteredFiles(maxItems: number): Promise<CollectedFile[]> {
     if (!useServerPaging) return visible.slice(0, maxItems)
@@ -360,7 +386,7 @@ export function FileTable({
                 value={filter}
                 onChange={(e) => {
                   setFilter(e.target.value)
-                  setSelected([])
+                  clearSelection()
                 }}
               >
                 <option value="all">全部文件</option>
@@ -458,7 +484,7 @@ export function FileTable({
                 type="button"
                 onClick={() => {
                   onReview(selected)
-                  setSelected([])
+                  clearSelection()
                 }}
               >
                 <Check size={15} />
@@ -469,7 +495,7 @@ export function FileTable({
                   type="button"
                   onClick={() => {
                     onTrash(selected)
-                    setSelected([])
+                    clearSelection()
                   }}
                 >
                   <Trash2 size={15} />
@@ -482,7 +508,7 @@ export function FileTable({
             type="button"
             className="icon-button"
             aria-label="取消选择"
-            onClick={() => setSelected([])}
+            onClick={clearSelection}
           >
             <X size={16} />
           </button>
@@ -497,11 +523,7 @@ export function FileTable({
                   type="checkbox"
                   aria-label="全选当前文件"
                   checked={allChecked}
-                  onChange={() =>
-                    setSelected(
-                      allChecked ? [] : [...new Set([...selected, ...list.map((f) => f.id)])],
-                    )
-                  }
+                  onChange={togglePageSelected}
                 />
               </th>
               <th>
@@ -547,19 +569,13 @@ export function FileTable({
           </thead>
           <tbody>
             {list.map((f) => (
-              <tr key={f.id} className={selected.includes(f.id) ? 'selected' : ''}>
+              <tr key={f.id} className={selectedMap.has(f.id) ? 'selected' : ''}>
                 <td>
                   <input
                     type="checkbox"
-                    checked={selected.includes(f.id)}
+                    checked={selectedMap.has(f.id)}
                     aria-label={`选择${f.name}`}
-                    onChange={() =>
-                      setSelected(
-                        selected.includes(f.id)
-                          ? selected.filter((id) => id !== f.id)
-                          : [...selected, f.id],
-                      )
-                    }
+                    onChange={() => toggleSelected(f)}
                   />
                 </td>
                 <td>
@@ -805,7 +821,7 @@ export function TrashPage({
   const [loading, setLoading] = useState(false)
   const [pageError, setPageError] = useState('')
   const [retryTick, setRetryTick] = useState(0)
-  const [selected, setSelected] = useState<string[]>([])
+  const [selectedMap, setSelectedMap] = useState<Map<string, CollectedFile>>(() => new Map())
   const [purgeTargets, setPurgeTargets] = useState<CollectedFile[] | null>(null)
   const [purgeChecked, setPurgeChecked] = useState(false)
   const [purgeText, setPurgeText] = useState('')
@@ -888,8 +904,34 @@ export function TrashPage({
   const fileMap = new Map<string, CollectedFile>()
   for (const f of files) fileMap.set(f.id, f)
   for (const f of items) fileMap.set(f.id, f)
-  const chosen = selected.map((id) => fileMap.get(id)).filter((f): f is CollectedFile => Boolean(f))
-  const allChecked = items.length > 0 && items.every((f) => selected.includes(f.id))
+  const selected = [...selectedMap.keys()]
+  const chosen = selected
+    .map((id) => fileMap.get(id) ?? selectedMap.get(id))
+    .filter((f): f is CollectedFile => Boolean(f))
+  const allChecked = items.length > 0 && items.every((f) => selectedMap.has(f.id))
+
+  function toggleTrashSelected(file: CollectedFile) {
+    setSelectedMap((prev) => {
+      const next = new Map(prev)
+      if (next.has(file.id)) next.delete(file.id)
+      else next.set(file.id, file)
+      return next
+    })
+  }
+  function toggleTrashPageSelected() {
+    setSelectedMap((prev) => {
+      const next = new Map(prev)
+      if (allChecked) {
+        for (const f of items) next.delete(f.id)
+      } else {
+        for (const f of items) next.set(f.id, f)
+      }
+      return next
+    })
+  }
+  function clearTrashSelection() {
+    setSelectedMap(new Map())
+  }
 
   function openPurge(targets: CollectedFile[]) {
     if (!isAdmin || !targets.length) return
@@ -926,7 +968,7 @@ export function TrashPage({
                         ).items
                   if (!targets.length) return
                   await onRestore(targets.map((f) => f.id))
-                  setSelected([])
+                  clearTrashSelection()
                 } catch (err) {
                   setPageError((err as Error).message || '读取回收站列表失败，请重试')
                 }
@@ -1001,7 +1043,7 @@ export function TrashPage({
                 disabled={busy}
                 onClick={async () => {
                   await onRestore(chosen.map((f) => f.id))
-                  setSelected([])
+                  clearTrashSelection()
                 }}
               >
                 <RotateCcw size={15} />
@@ -1023,7 +1065,7 @@ export function TrashPage({
               type="button"
               className="icon-button"
               aria-label="取消选择"
-              onClick={() => setSelected([])}
+              onClick={clearTrashSelection}
             >
               <X size={16} />
             </button>
@@ -1034,31 +1076,17 @@ export function TrashPage({
           <div className="trash-list">
             <div className="trash-select-all">
               <label className="check-field">
-                <input
-                  type="checkbox"
-                  checked={allChecked}
-                  onChange={() =>
-                    setSelected(
-                      allChecked ? [] : [...new Set([...selected, ...items.map((f) => f.id)])],
-                    )
-                  }
-                />
+                <input type="checkbox" checked={allChecked} onChange={toggleTrashPageSelected} />
                 全选当前页（{items.length} 个）
               </label>
             </div>
             {items.map((f) => (
-              <div key={f.id} className={selected.includes(f.id) ? 'selected' : ''}>
+              <div key={f.id} className={selectedMap.has(f.id) ? 'selected' : ''}>
                 <input
                   type="checkbox"
                   aria-label={`选择回收站文件${f.name}`}
-                  checked={selected.includes(f.id)}
-                  onChange={() =>
-                    setSelected(
-                      selected.includes(f.id)
-                        ? selected.filter((id) => id !== f.id)
-                        : [...selected, f.id],
-                    )
-                  }
+                  checked={selectedMap.has(f.id)}
+                  onChange={() => toggleTrashSelected(f)}
                 />
                 <FileIcon name={f.name} />
                 <div>
@@ -1072,7 +1100,15 @@ export function TrashPage({
                     type="button"
                     className="button"
                     disabled={!canEdit || busy}
-                    onClick={() => void onRestore([f.id])}
+                    onClick={async () => {
+                      await onRestore([f.id])
+                      setSelectedMap((prev) => {
+                        if (!prev.has(f.id)) return prev
+                        const next = new Map(prev)
+                        next.delete(f.id)
+                        return next
+                      })
+                    }}
                   >
                     <RotateCcw size={14} />
                     恢复
@@ -1210,9 +1246,11 @@ export function TrashPage({
               onClick={async () => {
                 const ok = await onPurge(purgeTargets.map((f) => f.id))
                 if (ok) {
-                  setSelected((old) =>
-                    old.filter((id) => !purgeTargets.some((target) => target.id === id)),
-                  )
+                  setSelectedMap((old) => {
+                    const next = new Map(old)
+                    for (const target of purgeTargets) next.delete(target.id)
+                    return next
+                  })
                   setPurgeTargets(null)
                 }
               }}

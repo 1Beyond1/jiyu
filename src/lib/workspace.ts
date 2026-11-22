@@ -15,7 +15,8 @@ export function useWorkspace() {
   const [loading, setLoading] = useState(true),
     [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false),
-    [updatedAt, setUpdatedAt] = useState('')
+    [lastCheckedAt, setLastCheckedAt] = useState(''),
+    [dataRevision, setDataRevision] = useState(0)
   const sequence = useRef(0)
   const inFlight = useRef(0)
   const reading = useRef(false)
@@ -34,10 +35,11 @@ export function useWorkspace() {
         if (result.status === 200) {
           etag.current = result.etag
           setWorkspace(result.data)
+          setDataRevision((n) => n + 1)
         } else if (result.etag) {
           etag.current = result.etag
         }
-        setUpdatedAt(new Date().toISOString())
+        setLastCheckedAt(new Date().toISOString())
         setError('')
       }
     } catch (e) {
@@ -68,7 +70,8 @@ export function useWorkspace() {
     sequence.current++
     etag.current = ''
     setWorkspace(next)
-    setUpdatedAt(new Date().toISOString())
+    setDataRevision((n) => n + 1)
+    setLastCheckedAt(new Date().toISOString())
     setError('')
   }, [])
   const mutate = async (path: string, body: unknown, method = 'POST') => {
@@ -90,7 +93,8 @@ export function useWorkspace() {
       if (current === sequence.current) {
         etag.current = ''
         setWorkspace('workspace' in result ? result.workspace : result)
-        setUpdatedAt(new Date().toISOString())
+        setDataRevision((n) => n + 1)
+        setLastCheckedAt(new Date().toISOString())
         setError('')
       }
       return result
@@ -98,7 +102,17 @@ export function useWorkspace() {
       inFlight.current--
     }
   }
-  return { workspace, loading, error, refresh, refreshing, updatedAt, mutate, applyWorkspace }
+  return {
+    workspace,
+    loading,
+    error,
+    refresh,
+    refreshing,
+    lastCheckedAt,
+    dataRevision,
+    mutate,
+    applyWorkspace,
+  }
 }
 export function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`

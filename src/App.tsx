@@ -132,8 +132,17 @@ export default function App() {
 
 function WorkspaceApp() {
   const { canEdit, user, isAdmin } = useAccount()
-  const { workspace, loading, error, refresh, refreshing, updatedAt, mutate, applyWorkspace } =
-    useWorkspace()
+  const {
+    workspace,
+    loading,
+    error,
+    refresh,
+    refreshing,
+    lastCheckedAt,
+    dataRevision,
+    mutate,
+    applyWorkspace,
+  } = useWorkspace()
   const [busy, setBusy] = useState(false)
   const [operationError, setOperationError] = useState('')
   const busyRef = useRef(false)
@@ -150,7 +159,13 @@ function WorkspaceApp() {
   const [share, setShare] = useState<Collection | null>(null)
   const [detail, setDetail] = useState<CollectedFile | null>(null)
   const [renaming, setRenaming] = useState<CollectedFile[] | null>(null)
-  const [toolsFiles, setToolsFiles] = useState<CollectedFile[] | null>(null)
+  const [toolsFilesState, setToolsFilesState] = useState<{
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    items: CollectedFile[]
+    truncated: boolean
+    error: string
+  }>({ status: 'idle', items: [], truncated: false, error: '' })
+  const [toolsReloadTick, setToolsReloadTick] = useState(0)
   const [aiOpen, setAiOpen] = useState(false)
   const [assistantFileIds, setAssistantFileIds] = useState<string[]>([])
   const [assistantCollectionId, setAssistantCollectionId] = useState('')
@@ -243,11 +258,13 @@ function WorkspaceApp() {
   }, [createOpen, editing, cloning, archiving, renaming, share, trashing, aiProposal])
   useEffect(() => {
     if (page !== 'tools' || !workspace.summaryMode) {
-      setToolsFiles(null)
+      setToolsFilesState({ status: 'idle', items: [], truncated: false, error: '' })
       return
     }
-    void updatedAt
+    void dataRevision
+    void toolsReloadTick
     const controller = new AbortController()
+    setToolsFilesState((prev) => ({ ...prev, status: 'loading', error: '' }))
     void fetchAllPaginatedFiles(
       '/api/files',
       new URLSearchParams({ sort: 'created_desc' }),
@@ -255,13 +272,25 @@ function WorkspaceApp() {
       controller.signal,
     )
       .then((res) => {
-        if (!controller.signal.aborted) setToolsFiles(res.items)
+        if (controller.signal.aborted) return
+        setToolsFilesState({
+          status: 'ready',
+          items: res.items,
+          truncated: res.truncated,
+          error: '',
+        })
       })
-      .catch(() => {
-        /* Fallback to summary files if load fails. */
+      .catch((err) => {
+        if (controller.signal.aborted) return
+        setToolsFilesState({
+          status: 'error',
+          items: [],
+          truncated: false,
+          error: (err as Error).message || '读取全部文件列表失败，请重试',
+        })
       })
     return () => controller.abort()
-  }, [page, workspace.summaryMode, updatedAt])
+  }, [page, workspace.summaryMode, dataRevision, toolsReloadTick])
   function notify(text: string, failed = false) {
     setToastError(failed)
     setToast(text)
@@ -624,8 +653,8 @@ function WorkspaceApp() {
         <main className="main-content" id="main-content">
           <div className="workspace-refresh">
             <span>
-              {updatedAt
-                ? `更新于 ${new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })} · 每 15 秒刷新`
+              {lastCheckedAt
+                ? `更新于 ${new Date(lastCheckedAt).toLocaleTimeString('zh-CN', { hour12: false })} · 每 15 秒刷新`
                 : '尚未更新'}
             </span>
             <button
@@ -859,7 +888,7 @@ function WorkspaceApp() {
             (viewedCollection ? (
               <CollectionDetail
                 key={viewedCollection.id}
-                refreshedAt={updatedAt}
+                dataRevision={dataRevision}
                 summaryMode={workspace.summaryMode}
                 onMaterialAction={async (kind, body) => {
                   await mutate(`/api/materials/${kind}`, body)
@@ -899,14 +928,16 @@ function WorkspaceApp() {
                 </div>
                 {canEdit &&
                   (currentCollection ? (
-                    <button
-                      type="button"
-                      className="button primary"
-                      onClick={() => setShare(currentCollection)}
-                    >
-                      <Link size={16} />
-                      分享收集
-                    </button>
+                    !currentCollection.archivedAt && (
+                      <button
+                        type="button"
+                        className="button primary"
+                        onClick={() => setShare(currentCollection)}
+                      >
+                        <Link size={16} />
+                        分享收集
+                      </button>
+                    )
                   ) : (
                     <button
                       type="button"
@@ -974,7 +1005,7 @@ function WorkspaceApp() {
                 key={`files-${collectionId}`}
                 {...fileProps}
                 serverPagination
-                refreshKey={updatedAt}
+                refreshKey={String(dataRevision)}
                 search={search}
                 collectionId={collectionId}
               />
@@ -984,7 +1015,17 @@ function WorkspaceApp() {
             <>
               <ToolsPage
                 workspace={workspace}
-                allFiles={toolsFiles ?? workspace.files}
+                allFiles={
+                  workspace.summaryMode
+                    ? toolsFilesState.status === 'ready'
+                      ? toolsFilesState.items
+                      : undefined
+                    : workspace.files
+                }
+                filesLoading={workspace.summaryMode && toolsFilesState.status === 'loading'}
+                filesError={workspace.summaryMode ? toolsFilesState.error : ''}
+                filesTruncated={workspace.summaryMode && toolsFilesState.truncated}
+                onRetryFiles={() => setToolsReloadTick((n) => n + 1)}
                 onRename={() => void openRename()}
                 onFiles={() => {
                   setCollectionId('')
@@ -992,14 +1033,22 @@ function WorkspaceApp() {
                 }}
                 onAI={() => openAssistant()}
               />
-              <ContentPanel files={toolsFiles ?? workspace.files} />
+              <ContentPanel
+                files={
+                  workspace.summaryMode
+                    ? toolsFilesState.status === 'ready'
+                      ? toolsFilesState.items
+                      : []
+                    : workspace.files
+                }
+              />
             </>
           )}
           {page === 'storage' && <StoragePage workspace={workspace} onCreate={startCollection} />}
           {page === 'trash' && (
             <TrashPage
               files={workspace.trash || []}
-              refreshKey={updatedAt}
+              refreshKey={String(dataRevision)}
               totalHint={trashFilesCount}
               busy={busy}
               serverError={operationError}

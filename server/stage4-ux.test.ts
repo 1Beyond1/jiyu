@@ -223,6 +223,7 @@ test('J3.3 提交人私密回执缺项总览：跨批次汇总本人在当前任
       content: string,
       materialId: string,
       uploadKey: string,
+      parentReceipt?: { receiptId: string; key: string },
     ) => {
       const batchId = randomUUID()
       const bytes = Buffer.from(content, 'utf8')
@@ -237,6 +238,7 @@ test('J3.3 提交人私密回执缺项总览：跨批次汇总本人在当前任
           fields: { field_code: code },
           files: [{ name: fileName, size: bytes.length, lastModified: 1 }],
           materialIds: [materialId],
+          ...(parentReceipt ? { parentReceipt } : {}),
         },
       })
       assert.equal(init.statusCode, 200, init.body)
@@ -264,6 +266,7 @@ test('J3.3 提交人私密回执缺项总览：跨批次汇总本人在当前任
     const keyA1 = 'a'.repeat(40)
     const keyA2 = 'b'.repeat(40)
     const keyB1 = 'c'.repeat(40)
+    const keyAttacker = 'd'.repeat(40)
 
     // 提交人 A 第 1 批交立项书，提交人 B 交预算表
     const receiptA1 = await submitBatch('同学甲', 'STU01', 'plan.txt', 'plan-v1', 'mat_plan', keyA1)
@@ -279,12 +282,13 @@ test('J3.3 提交人私密回执缺项总览：跨批次汇总本人在当前任
     const r1 = r1Res.json() as ReceiptDetail
     assert.ok(r1.materialOverview)
     assert.equal(r1.materialOverview.identity, 'STU01')
+    assert.equal(r1.materialOverview.linkedBatches, 1)
     assert.equal(r1.materialOverview.requiredTotal, 2)
     assert.equal(r1.materialOverview.requiredSubmitted, 1)
     assert.deepEqual(r1.materialOverview.missingRequired, ['预算表'])
     assert.equal(r1Res.body.includes('other.txt'), false, '私密回执不得泄露他人文件')
 
-    // 提交人 A 第 2 批补交预算表
+    // 提交人 A 第 2 批凭原回执 A1 凭证续交预算表（建立可信回执链）
     const receiptA2 = await submitBatch(
       '同学甲',
       'STU01',
@@ -292,9 +296,33 @@ test('J3.3 提交人私密回执缺项总览：跨批次汇总本人在当前任
       'budget-v1',
       'mat_budget',
       keyA2,
+      { receiptId: receiptA1, key: keyA1 },
     )
 
-    // 管理员审核：立项书通过，预算表退回并附原因
+    // 管理员替 STU01 线下补录一份附件（不得暴露给任何未验权冒充者）
+    const offlineBoundary = 'offline-idor-check'
+    const offlineBody = buildMultipart(
+      offlineBoundary,
+      {
+        owner: '同学甲',
+        fields: JSON.stringify({ field_code: 'STU01' }),
+        materialIds: JSON.stringify(['mat_extra']),
+        note: '管理员线下代传私密件',
+      },
+      [{ name: 'offline-secret.txt', bytes: Buffer.from('offline-secret-body') }],
+    )
+    const offlineRes = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/collections/${c.id}/offline-upload`,
+      headers: {
+        ...ctx.adminHeaders,
+        'content-type': `multipart/form-data; boundary=${offlineBoundary}`,
+      },
+      payload: offlineBody,
+    })
+    assert.equal(offlineRes.statusCode, 201, offlineRes.body)
+
+    // 管理员审核：立项书通过，预算表退回并附私密原因
     const reportRes = await ctx.app.inject({
       method: 'GET',
       url: `/api/collections/${c.id}/materials`,
@@ -348,7 +376,7 @@ test('J3.3 提交人私密回执缺项总览：跨批次汇总本人在当前任
       200,
     )
 
-    // 凭回执 A1 或 A2 查询，均应一眼看到全部 3 个槽位的完整进度及最新退回原因
+    // 凭回执 A2 查询：因已通过 parentReceipt 绑定回执 A1，可见 A1+A2 两批槽位进度及最新退回原因，但不泄露线下独立补录文件
     const r2Res = await ctx.app.inject({
       method: 'GET',
       url: `/api/public/${c.uploadToken}/receipts/${receiptA2}`,
@@ -356,6 +384,7 @@ test('J3.3 提交人私密回执缺项总览：跨批次汇总本人在当前任
     })
     assert.equal(r2Res.statusCode, 200)
     const ov = (r2Res.json() as ReceiptDetail).materialOverview!
+    assert.equal(ov.linkedBatches, 2)
     assert.equal(ov.status, 'needs_changes')
     assert.equal(ov.acceptedCount, 1)
     assert.equal(ov.needsChangesCount, 1)
@@ -370,6 +399,102 @@ test('J3.3 提交人私密回执缺项总览：跨批次汇总本人在当前任
     assert.equal(budgetSlot.files[0].inCurrentBatch, true)
     assert.equal(extraSlot.state, 'missing')
     assert.equal(extraSlot.required, false)
+    assert.equal(r2Res.body.includes('offline-secret.txt'), false, '未链入的线下补录不得泄露')
+
+    // 【P0-1 跨用户 IDOR 冒充拦截回归】攻击者冒用相同学号 STU01 独立提交一份文件
+    const attackerReceipt = await submitBatch(
+      '冒充者',
+      'STU01',
+      'attacker-probe.txt',
+      'probe-payload',
+      'mat_extra',
+      keyAttacker,
+    )
+    const attackerRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/public/${c.uploadToken}/receipts/${attackerReceipt}`,
+      headers: { 'x-receipt-key': keyAttacker },
+    })
+    assert.equal(attackerRes.statusCode, 200, attackerRes.body)
+    assert.equal(attackerRes.body.includes('plan.txt'), false, 'IDOR 防护：不得泄露受害者立项书')
+    assert.equal(attackerRes.body.includes('budget.txt'), false, 'IDOR 防护：不得泄露受害者预算表')
+    assert.equal(
+      attackerRes.body.includes('预算缺少指导老师签字页'),
+      false,
+      'IDOR 防护：不得泄露管理员私密退回批注',
+    )
+    assert.equal(
+      attackerRes.body.includes('offline-secret.txt'),
+      false,
+      'IDOR 防护：不得泄露管理员线下补录文件',
+    )
+    const attackerOv = (attackerRes.json() as ReceiptDetail).materialOverview!
+    assert.equal(attackerOv.linkedBatches, 1)
+    assert.equal(attackerOv.requiredSubmitted, 0)
+    assert.deepEqual(attackerOv.missingRequired, ['立项书', '预算表'])
+
+    // 伪造 parentReceipt 凭证或跨身份挂接必须返回 403
+    const forgedParent = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/public/${c.uploadToken}/uploads/${randomUUID()}`,
+      headers: { origin: ctx.config.origin, 'x-upload-key': 'e'.repeat(40) },
+      payload: {
+        owner: '冒充者',
+        fields: { field_code: 'STU01' },
+        files: [{ name: 'x.txt', size: 4, lastModified: 1 }],
+        materialIds: ['mat_plan'],
+        parentReceipt: { receiptId: receiptA1, key: 'z'.repeat(40) },
+      },
+    })
+    assert.equal(forgedParent.statusCode, 403)
+
+    const crossIdentityParent = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/public/${c.uploadToken}/uploads/${randomUUID()}`,
+      headers: { origin: ctx.config.origin, 'x-upload-key': 'f'.repeat(40) },
+      payload: {
+        owner: '串人者',
+        fields: { field_code: 'STU99' },
+        files: [{ name: 'x.txt', size: 4, lastModified: 1 }],
+        materialIds: ['mat_plan'],
+        parentReceipt: { receiptId: receiptA1, key: keyA1 },
+      },
+    })
+    assert.equal(crossIdentityParent.statusCode, 403)
+
+    // 【P0-1 附带修复】规则变化导致核对记录进入 stale 后，单批 files[] 与总览均须过滤过期批注
+    const ruleUpdate = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/collections/${c.id}`,
+      headers: ctx.adminHeaders,
+      payload: {
+        title: c.title,
+        description: '更新后的材料规则说明',
+        category: c.category,
+        target: c.target,
+        deadline: c.deadline,
+        formats: c.formats,
+        maxFileSizeMB: c.maxFileSizeMB,
+        maxFilesPerSubmission: c.maxFilesPerSubmission,
+        fields: c.fields,
+        identityField: c.identityField,
+        materials: c.materials,
+      },
+    })
+    assert.equal(ruleUpdate.statusCode, 200, ruleUpdate.body)
+    const staleRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/public/${c.uploadToken}/receipts/${receiptA2}`,
+      headers: { 'x-receipt-key': keyA2 },
+    })
+    assert.equal(staleRes.statusCode, 200)
+    const staleBody = staleRes.json() as ReceiptDetail
+    assert.equal(staleBody.files[0].materialState, 'stale')
+    assert.equal(staleBody.files[0].materialNote, '', '单批 files[] 须过滤 stale 过期批注')
+    assert.equal(
+      staleBody.materialOverview!.slots.find((s) => s.materialId === 'mat_budget')!.latestNote,
+      '',
+    )
   } finally {
     await ctx.cleanup()
   }
@@ -485,6 +610,44 @@ test('J3.4 管理员线下补录文件：仅限管理员、无视暂停截止、
     assert.equal(body.files[0].materialId, 'mat_report')
     assert.equal(body.files[0].status, 'ready')
     assert.equal(body.workspace.summaryMode, true)
+
+    // 线下补录 multipart 字段顺序无关：即使 files 排在 markReady 之前仍须生效
+    const reversedBoundary = 'offline-reversed-order'
+    const reversedPayload = Buffer.concat([
+      Buffer.from(
+        `--${reversedBoundary}\r\nContent-Disposition: form-data; name="files"; filename="late-flag.pdf"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+      ),
+      Buffer.from('%PDF-1.4 reversed order'),
+      Buffer.from('\r\n'),
+      Buffer.from(
+        `--${reversedBoundary}\r\nContent-Disposition: form-data; name="owner"\r\n\r\n李小红\r\n`,
+      ),
+      Buffer.from(
+        `--${reversedBoundary}\r\nContent-Disposition: form-data; name="fields"\r\n\r\n${JSON.stringify({ field_sid: '202698' })}\r\n`,
+      ),
+      Buffer.from(
+        `--${reversedBoundary}\r\nContent-Disposition: form-data; name="materialIds"\r\n\r\n${JSON.stringify(['mat_report'])}\r\n`,
+      ),
+      Buffer.from(
+        `--${reversedBoundary}\r\nContent-Disposition: form-data; name="markReady"\r\n\r\ntrue\r\n`,
+      ),
+      Buffer.from(`--${reversedBoundary}--\r\n`),
+    ])
+    const reversedRes = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/collections/${c.id}/offline-upload`,
+      headers: {
+        ...ctx.adminHeaders,
+        'content-type': `multipart/form-data; boundary=${reversedBoundary}`,
+      },
+      payload: reversedPayload,
+    })
+    assert.equal(reversedRes.statusCode, 201, reversedRes.body)
+    assert.equal(
+      reversedRes.json().files[0].status,
+      'ready',
+      'markReady 字段位于文件之后时仍须正确标记为 ready',
+    )
 
     // 归档后禁止线下补录（409）
     await ctx.app.inject({
