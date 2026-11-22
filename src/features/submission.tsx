@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, CheckCircle2, FileUp, LockKeyhole } from 'lucide-react'
 import { Brand } from '../components/ui'
+import { ThemeSwitch } from '../components/theme-switch'
 import {
   api,
   uploadFiles,
@@ -331,7 +332,10 @@ function Submission({
     <main className="submission-page">
       <div className="submission-top">
         <Brand />
-        <span className="preview-badge">文件提交</span>
+        <div className="submission-top-right">
+          <ThemeSwitch compact />
+          <span className="preview-badge">文件提交</span>
+        </div>
       </div>
       <section className="submission-card">
         {receipt ? (

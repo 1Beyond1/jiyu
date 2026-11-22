@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUpRight,
   Check,
@@ -16,7 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { Empty, FileIcon, Modal } from '../components/ui'
-import type { CollectedFile, Collection, PaginatedFiles } from '../types'
+import type { CollectedFile, Collection, FileSortOption, PaginatedFiles } from '../types'
 import { storageNames } from '../types'
 import { csvCell, downloadText, formatDate, formatSize } from '../lib/workspace'
 import { fileExtension } from '../lib/collections'
@@ -24,6 +25,32 @@ import { ArchiveModal } from './archive'
 import { useAccount } from './auth'
 import { FilePreview } from './content'
 import { api, EtagCache } from '../lib/api'
+
+const SORT_OPTIONS: { value: FileSortOption; label: string }[] = [
+  { value: 'created_desc', label: '最新提交优先' },
+  { value: 'created_asc', label: '最早提交优先' },
+  { value: 'name_asc', label: '文件名 A → Z' },
+  { value: 'name_desc', label: '文件名 Z → A' },
+  { value: 'size_desc', label: '文件由大到小' },
+  { value: 'size_asc', label: '文件由小到大' },
+]
+
+function compareFiles(a: CollectedFile, b: CollectedFile, sort: FileSortOption): number {
+  switch (sort) {
+    case 'created_asc':
+      return Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id)
+    case 'name_asc':
+      return a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id)
+    case 'name_desc':
+      return b.name.localeCompare(a.name, 'zh-CN') || b.id.localeCompare(a.id)
+    case 'size_asc':
+      return a.size - b.size || a.id.localeCompare(b.id)
+    case 'size_desc':
+      return b.size - a.size || b.id.localeCompare(a.id)
+    default:
+      return Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id)
+  }
+}
 
 interface FileTableProps {
   files: CollectedFile[]
@@ -56,7 +83,7 @@ export function FileTable({
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
   const [selected, setSelected] = useState<string[]>([])
-  const [sortAsc, setSortAsc] = useState(false)
+  const [sort, setSort] = useState<FileSortOption>('created_desc')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [pageData, setPageData] = useState<PaginatedFiles | null>(null)
@@ -68,8 +95,8 @@ export function FileTable({
     [searching, setSearching] = useState(false)
   const term = (search || query).trim()
   const useServerPaging = !compact && serverPagination
-  const prevQueryKey = useRef(`${term}\0${filter}\0${sortAsc}\0${collectionId}\0${pageSize}`)
-  const queryKey = `${term}\0${filter}\0${sortAsc}\0${collectionId}\0${pageSize}`
+  const prevQueryKey = useRef(`${term}\0${filter}\0${sort}\0${collectionId}\0${pageSize}`)
+  const queryKey = `${term}\0${filter}\0${sort}\0${collectionId}\0${pageSize}`
   if (prevQueryKey.current !== queryKey) {
     prevQueryKey.current = queryKey
     if (page !== 1) setPage(1)
@@ -86,9 +113,10 @@ export function FileTable({
     const params = new URLSearchParams({
       page: String(page),
       pageSize: String(pageSize),
-      sort: sortAsc ? 'created_asc' : 'created_desc',
+      sort,
     })
     if (filter === 'pending') params.set('status', 'pending')
+    else if (filter === 'ready') params.set('status', 'ready')
     else if (filter === 'image') params.set('kind', 'image')
     if (term) params.set('q', term)
     const endpoint = collectionId
@@ -116,7 +144,7 @@ export function FileTable({
       clearTimeout(timer)
       controller.abort()
     }
-  }, [useServerPaging, collectionId, filter, term, sortAsc, page, pageSize, files])
+  }, [useServerPaging, collectionId, filter, term, sort, page, pageSize, files])
 
   useEffect(() => {
     setMatches([])
@@ -162,14 +190,13 @@ export function FileTable({
         (filter === 'all' ||
           (filter === 'pending'
             ? f.status === 'pending'
-            : ['jpg', 'jpeg', 'png', 'heic', 'svg', 'webp', 'gif'].includes(
-                fileExtension(f.name),
-              ))),
+            : filter === 'ready'
+              ? f.status === 'ready'
+              : ['jpg', 'jpeg', 'png', 'heic', 'svg', 'webp', 'gif'].includes(
+                  fileExtension(f.name),
+                ))),
     )
-    .sort(
-      (a, b) =>
-        (sortAsc ? 1 : -1) * (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
-    )
+    .sort((a, b) => compareFiles(a, b, sort))
   const totalCount = useServerPaging && pageData ? pageData.total : visible.length
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
   const list = compact
@@ -244,7 +271,22 @@ export function FileTable({
               >
                 <option value="all">全部文件</option>
                 <option value="pending">待整理</option>
+                <option value="ready">已整理</option>
                 <option value="image">图片文件</option>
+              </select>
+              <ChevronDown size={14} />
+            </label>
+            <label className="select-filter">
+              <select
+                aria-label="排序方式"
+                value={sort}
+                onChange={(e) => setSort(e.target.value as FileSortOption)}
+              >
+                {SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
               <ChevronDown size={14} />
             </label>
@@ -348,16 +390,44 @@ export function FileTable({
                   }
                 />
               </th>
-              <th>文件名称</th>
+              <th>
+                <button
+                  type="button"
+                  className={`table-sort ${sort.startsWith('name_') ? 'active' : ''}`}
+                  onClick={() => setSort(sort === 'name_asc' ? 'name_desc' : 'name_asc')}
+                >
+                  文件名称
+                  {sort.startsWith('name_') && (
+                    <ArrowDown size={12} className={sort === 'name_asc' ? 'rotated' : ''} />
+                  )}
+                </button>
+              </th>
               <th>所属收集</th>
               <th>提交人</th>
               <th>
-                <button type="button" className="table-sort" onClick={() => setSortAsc(!sortAsc)}>
+                <button
+                  type="button"
+                  className={`table-sort ${sort.startsWith('created_') ? 'active' : ''}`}
+                  onClick={() => setSort(sort === 'created_desc' ? 'created_asc' : 'created_desc')}
+                >
                   提交时间
-                  <ArrowDown size={12} className={sortAsc ? 'rotated' : ''} />
+                  {sort.startsWith('created_') && (
+                    <ArrowDown size={12} className={sort === 'created_asc' ? 'rotated' : ''} />
+                  )}
                 </button>
               </th>
-              <th>大小</th>
+              <th>
+                <button
+                  type="button"
+                  className={`table-sort ${sort.startsWith('size_') ? 'active' : ''}`}
+                  onClick={() => setSort(sort === 'size_desc' ? 'size_asc' : 'size_desc')}
+                >
+                  大小
+                  {sort.startsWith('size_') && (
+                    <ArrowDown size={12} className={sort === 'size_asc' ? 'rotated' : ''} />
+                  )}
+                </button>
+              </th>
               <th aria-label="操作" />
             </tr>
           </thead>
@@ -599,60 +669,396 @@ export function FileDetail({
 export function TrashPage({
   files,
   onRestore,
+  onPurge,
+  busy = false,
+  serverError = '',
 }: {
   files: CollectedFile[]
-  onRestore: (ids: string[]) => void
+  onRestore: (ids: string[]) => Promise<void> | void
+  onPurge?: (ids: string[]) => Promise<boolean>
+  busy?: boolean
+  serverError?: string
 }) {
-  const { canEdit } = useAccount()
+  const { canEdit, isAdmin } = useAccount()
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<FileSortOption>('created_desc')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+  const [pageData, setPageData] = useState<PaginatedFiles | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+  const [purgeTargets, setPurgeTargets] = useState<CollectedFile[] | null>(null)
+  const [purgeChecked, setPurgeChecked] = useState(false)
+  const [purgeText, setPurgeText] = useState('')
+  const cacheRef = useRef(new EtagCache<PaginatedFiles>(30))
+
+  const term = query.trim()
+  const queryKey = `${term}\0${sort}\0${pageSize}`
+  const prevQueryKey = useRef(queryKey)
+  if (prevQueryKey.current !== queryKey) {
+    prevQueryKey.current = queryKey
+    if (page !== 1) setPage(1)
+  }
+
+  useEffect(() => {
+    const syncTick = files
+    void syncTick
+    const controller = new AbortController()
+    const params = new URLSearchParams({
+      trashed: 'true',
+      page: String(page),
+      pageSize: String(pageSize),
+      sort,
+    })
+    if (term) params.set('q', term)
+    const endpoint = `/api/files?${params}`
+    setLoading(true)
+    const timer = setTimeout(
+      () => {
+        void cacheRef.current
+          .fetch(endpoint, controller.signal)
+          .then((res) => {
+            if (controller.signal.aborted) return
+            setPageData(res.data)
+            const maxPage = Math.max(1, Math.ceil(res.data.total / res.data.pageSize))
+            if (page > maxPage) setPage(maxPage)
+            setLoading(false)
+          })
+          .catch(() => {
+            if (!controller.signal.aborted) setLoading(false)
+          })
+      },
+      term ? 200 : 0,
+    )
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [term, sort, page, pageSize, files])
+
+  const fallbackVisible = files
+    .filter((f) => `${f.name} ${f.owner}`.toLowerCase().includes(term.toLowerCase()))
+    .sort((a, b) => compareFiles(a, b, sort))
+  const items = pageData
+    ? pageData.items
+    : fallbackVisible.slice((page - 1) * pageSize, page * pageSize)
+  const totalCount = pageData ? pageData.total : fallbackVisible.length
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+
+  const fileMap = new Map<string, CollectedFile>()
+  for (const f of files) fileMap.set(f.id, f)
+  for (const f of items) fileMap.set(f.id, f)
+  const chosen = selected.map((id) => fileMap.get(id)).filter((f): f is CollectedFile => Boolean(f))
+  const allChecked = items.length > 0 && items.every((f) => selected.includes(f.id))
+
+  function openPurge(targets: CollectedFile[]) {
+    if (!isAdmin || !targets.length) return
+    setPurgeTargets(targets.slice(0, 500))
+    setPurgeChecked(false)
+    setPurgeText('')
+  }
+
   return (
     <>
       <div className="page-title">
         <div>
           <p className="eyebrow">A SECOND CHANCE</p>
           <h1>暂时放下，也能找回。</h1>
-          <p>移入回收站的文件仍占用存储空间，可随时恢复。</p>
+          <p>移入回收站的文件仍占用存储空间，可随时恢复；管理员可在确认备份后永久清理。</p>
         </div>
-        {!!files.length && (
-          <button
-            type="button"
-            className="button"
-            disabled={!canEdit}
-            onClick={() => onRestore(files.slice(0, 500).map((f) => f.id))}
-          >
-            <RotateCcw size={15} />
-            恢复全部（最多 500 个）
-          </button>
-        )}
+        <div className="button-row">
+          {!!files.length && (
+            <button
+              type="button"
+              className="button"
+              disabled={!canEdit || busy}
+              onClick={async () => {
+                await onRestore(files.slice(0, 500).map((f) => f.id))
+                setSelected([])
+              }}
+            >
+              <RotateCcw size={15} />
+              恢复全部（最多 500 个）
+            </button>
+          )}
+          {isAdmin && onPurge && !!files.length && (
+            <button
+              type="button"
+              className="button danger"
+              disabled={busy}
+              onClick={() => openPurge(chosen.length ? chosen : items)}
+            >
+              <Trash2 size={15} />
+              {chosen.length
+                ? `永久清理所选（${chosen.length}）`
+                : `永久清理本页（${items.length}）`}
+            </button>
+          )}
+        </div>
       </div>
-      {files.length ? (
-        <div className="trash-list">
-          {files.map((f) => (
-            <div key={f.id}>
-              <FileIcon name={f.name} />
-              <div>
-                <strong>{f.name}</strong>
-                <small>
-                  {f.owner} · {formatSize(f.size)} · {formatDate(f.deletedAt!)}
-                </small>
-              </div>
+
+      <div className="file-panel">
+        <div className="file-toolbar">
+          <div className="input-with-icon">
+            <Search size={16} />
+            <input
+              placeholder="搜索回收站文件名、提交人…"
+              aria-label="搜索回收站文件"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          <div className="toolbar-actions">
+            <label className="select-filter">
+              <select
+                aria-label="回收站排序方式"
+                value={sort}
+                onChange={(e) => setSort(e.target.value as FileSortOption)}
+              >
+                {SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={14} />
+            </label>
+          </div>
+        </div>
+
+        {!!chosen.length && (
+          <div className="selection-bar">
+            <span>
+              已选择 <b>{chosen.length}</b> 个回收站文件
+            </span>
+            {canEdit && (
               <button
                 type="button"
-                className="button"
-                disabled={!canEdit}
-                onClick={() => onRestore([f.id])}
+                disabled={busy}
+                onClick={async () => {
+                  await onRestore(chosen.map((f) => f.id))
+                  setSelected([])
+                }}
               >
-                <RotateCcw size={14} />
-                恢复
+                <RotateCcw size={15} />
+                恢复所选
               </button>
+            )}
+            {isAdmin && onPurge && (
+              <button
+                type="button"
+                className="danger-inline"
+                disabled={busy}
+                onClick={() => openPurge(chosen)}
+              >
+                <Trash2 size={15} />
+                永久清理所选
+              </button>
+            )}
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="取消选择"
+              onClick={() => setSelected([])}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {items.length ? (
+          <div className="trash-list">
+            <div className="trash-select-all">
+              <label className="check-field">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={() =>
+                    setSelected(
+                      allChecked ? [] : [...new Set([...selected, ...items.map((f) => f.id)])],
+                    )
+                  }
+                />
+                全选当前页（{items.length} 个）
+              </label>
             </div>
-          ))}
-        </div>
-      ) : (
-        <Empty title="回收站是空的" text="移除的文件会先放在这里，方便找回。" />
-      )}
-      <div className="form-note">
-        第一版不提供不可逆的在线清空，避免误删。需要释放空间时，先完成备份并按部署文档执行离线清理。
+            {items.map((f) => (
+              <div key={f.id} className={selected.includes(f.id) ? 'selected' : ''}>
+                <input
+                  type="checkbox"
+                  aria-label={`选择回收站文件${f.name}`}
+                  checked={selected.includes(f.id)}
+                  onChange={() =>
+                    setSelected(
+                      selected.includes(f.id)
+                        ? selected.filter((id) => id !== f.id)
+                        : [...selected, f.id],
+                    )
+                  }
+                />
+                <FileIcon name={f.name} />
+                <div>
+                  <strong>{f.name}</strong>
+                  <small>
+                    {f.owner} · {formatSize(f.size)} · 移入于 {formatDate(f.deletedAt!)}
+                  </small>
+                </div>
+                <div className="button-row">
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={!canEdit || busy}
+                    onClick={() => void onRestore([f.id])}
+                  >
+                    <RotateCcw size={14} />
+                    恢复
+                  </button>
+                  {isAdmin && onPurge && (
+                    <button
+                      type="button"
+                      className="button danger"
+                      disabled={busy}
+                      onClick={() => openPurge([f])}
+                    >
+                      <Trash2 size={14} />
+                      永久清理
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty
+            title={term ? '没有匹配的回收站文件' : '回收站是空的'}
+            text={term ? '换个关键词试试。' : '移除的文件会先放在这里，方便找回。'}
+          />
+        )}
+
+        <footer className="table-footer">
+          <span>
+            共 {totalCount} 个文件
+            {totalPages > 1 ? ` · 第 ${page} / ${totalPages} 页` : ''}
+            {loading ? ' · 同步中…' : ''}
+          </span>
+          <div className="table-pagination">
+            <label className="page-size-select">
+              <span>每页</span>
+              <select
+                aria-label="回收站每页显示数量"
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+              >
+                <option value={20}>20 条</option>
+                <option value={50}>50 条</option>
+                <option value={100}>100 条</option>
+              </select>
+            </label>
+            {totalPages > 1 && (
+              <>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  <ChevronLeft size={14} />
+                  上一页
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  下一页
+                  <ChevronRight size={14} />
+                </button>
+              </>
+            )}
+          </div>
+        </footer>
       </div>
+
+      <div className="form-note">
+        {isAdmin
+          ? '管理员在线永久清理会立即删除服务器本地正文与全文索引并释放空间，且会自动阻止正在被打包或备份引用的文件。清理前建议先在「设置 → 完整备份」完成快照。'
+          : '移入回收站的文件可由编辑者或管理员恢复；永久清理释放空间仅限管理员执行。'}
+      </div>
+
+      {purgeTargets && isAdmin && onPurge && (
+        <Modal
+          title="永久清理回收站文件？"
+          subtitle="此操作不可撤销，请务必完成二次确认。"
+          onClose={() => {
+            if (!busy) setPurgeTargets(null)
+          }}
+        >
+          <div className="danger-banner" role="alert">
+            <AlertTriangle size={18} />
+            <div>
+              <strong>
+                即将彻底删除 {purgeTargets.length} 个文件，释放约{' '}
+                {formatSize(purgeTargets.reduce((sum, f) => sum + f.size, 0))} 空间
+              </strong>
+              <p>
+                删除后本地正文与全文检索记录无法找回。若部分文件正被活跃 ZIP
+                打包或在线备份引用，服务端会自动拦截本次清理。
+              </p>
+            </div>
+          </div>
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={purgeChecked}
+              disabled={busy}
+              onChange={(e) => setPurgeChecked(e.target.checked)}
+            />
+            我已确认已完成必要备份，了解永久清理不可恢复
+          </label>
+          <label className="field">
+            请输入「永久清理」以确认
+            <input
+              value={purgeText}
+              disabled={busy}
+              placeholder="永久清理"
+              onChange={(e) => setPurgeText(e.target.value)}
+            />
+          </label>
+          {serverError && (
+            <p className="error-text" role="alert">
+              {serverError}
+            </p>
+          )}
+          <footer className="modal-footer">
+            <button
+              type="button"
+              className="button"
+              disabled={busy}
+              onClick={() => setPurgeTargets(null)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="button danger-solid"
+              disabled={busy || !purgeChecked || purgeText.trim() !== '永久清理'}
+              onClick={async () => {
+                const ok = await onPurge(purgeTargets.map((f) => f.id))
+                if (ok) {
+                  setSelected((old) =>
+                    old.filter((id) => !purgeTargets.some((target) => target.id === id)),
+                  )
+                  setPurgeTargets(null)
+                }
+              }}
+            >
+              <Trash2 size={15} />
+              {busy ? '清理中…' : `确认永久清理 ${purgeTargets.length} 个文件`}
+            </button>
+          </footer>
+        </Modal>
+      )}
     </>
   )
 }

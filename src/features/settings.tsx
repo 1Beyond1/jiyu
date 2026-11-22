@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowRight, Check, FileDown, LogOut, ShieldAlert } from 'lucide-react'
 import { Modal } from '../components/ui'
+import { ThemeSwitch } from '../components/theme-switch'
 import type { Workspace } from '../types'
 import { downloadText } from '../lib/workspace'
 import { buildMetadataExport } from '../lib/metadata-export'
@@ -99,6 +100,11 @@ export function SettingsPage({
           >
             修改我的密码
           </button>
+        </section>
+        <section className="settings-panel">
+          <h2>界面外观</h2>
+          <p>支持跟随系统、暖白日间与暖炭深色，设置会自动保存在当前浏览器。</p>
+          <ThemeSwitch />
         </section>
         {isAdmin && (
           <>

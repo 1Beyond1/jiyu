@@ -26,6 +26,7 @@ import {
   X,
 } from 'lucide-react'
 import { Brand, Empty, Modal } from './components/ui'
+import { ThemeSwitch } from './components/theme-switch'
 import {
   CollectionCard,
   Collections,
@@ -496,6 +497,7 @@ function WorkspaceApp() {
               <i />
               自托管工作台
             </span>
+            <ThemeSwitch compact />
             <form
               className="global-search"
               onSubmit={(e) => {
@@ -922,9 +924,24 @@ function WorkspaceApp() {
           {page === 'trash' && (
             <TrashPage
               files={workspace.trash || []}
+              busy={busy}
+              serverError={operationError}
               onRestore={async (ids) => {
                 if (await action('/api/files/restore', { ids })) notify('文件已恢复')
               }}
+              onPurge={
+                isAdmin
+                  ? async (ids) => {
+                      const next = await action('/api/files/purge', {
+                        ids,
+                        confirm: 'PERMANENT_DELETE',
+                      })
+                      if (!next) return false
+                      notify(`已永久清理 ${ids.length} 个回收站文件`)
+                      return true
+                    }
+                  : undefined
+              }
             />
           )}
           {page === 'settings' && (

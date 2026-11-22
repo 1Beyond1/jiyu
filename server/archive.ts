@@ -387,4 +387,14 @@ export function registerArchives(app: FastifyInstance, store: Store) {
     for (const plan of plans.values()) plan.stop?.()
     plans.clear()
   })
+  return {
+    hasReferencedFiles(ids: Set<string>) {
+      prune()
+      for (const plan of plans.values()) {
+        if (!['ready', 'streaming'].includes(plan.status)) continue
+        if (plan.files.some(({ file }) => ids.has(file.id))) return true
+      }
+      return false
+    },
+  }
 }

@@ -188,9 +188,12 @@ export async function registerBackups(app: FastifyInstance, store: Store, backup
   const timer = setInterval(tick, 30000)
   timer.unref()
   tick()
-  return async () => {
-    stopping = true
-    clearInterval(timer)
-    await running
+  return {
+    stop: async () => {
+      stopping = true
+      clearInterval(timer)
+      await running
+    },
+    isRunning: () => Boolean(running),
   }
 }

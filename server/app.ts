@@ -304,6 +304,7 @@ export async function createApp(
       const adminOnly =
         url.startsWith('/api/users') ||
         url.startsWith('/api/backups') ||
+        url === '/api/files/purge' ||
         (writes &&
           (url.startsWith('/api/settings') ||
             url.startsWith('/api/storage') ||
@@ -1106,16 +1107,59 @@ export async function createApp(
     options.aiFailureDiagnostics,
     options.materialToolMode === true,
   )
-  registerArchives(app, store)
+  const archives = registerArchives(app, store)
   registerCollectionWorkflows(app, store, requirePublicAccess)
   registerMaterials(app, store, config, session)
   await registerUploads(app, store, config, budget, requirePublicAccess)
   registerUsers(app, store, (req) => session(req)?.id)
-  const stopBackups = await registerBackups(
+  const backups = await registerBackups(
     app,
     store,
     config.backupDir || resolve(config.dataDir, '..', 'backups'),
   )
+  app.post('/api/files/purge', async (req) => {
+    const body = object(req.body)
+    if (body.confirm !== 'PERMANENT_DELETE')
+      throw new HttpError(400, '请先完成二次确认后再执行永久清理')
+    const list = chosenFiles(body.ids, true)
+    if (list.some((f) => !f.deletedAt))
+      throw new HttpError(409, '仅可永久清理回收站中的文件，请刷新重试')
+    const idSet = new Set(list.map((f) => f.id))
+    if (backups.isRunning())
+      throw new HttpError(409, '当前有在线备份正在执行，请等待备份完成后再永久清理')
+    if (archives.hasReferencedFiles(idSet))
+      throw new HttpError(409, '部分文件正被活跃打包任务引用，请等待打包结束或取消后再清理')
+    const auth = session(req)!
+    let keys: string[] = []
+    let freedBytes = 0
+    store.transaction(() => {
+      const fresh = list.map((f) => {
+        const current = store.file(f.id)
+        if (!current || !current.deletedAt)
+          throw new HttpError(409, '部分文件状态已变化或已恢复，请刷新后重试')
+        const key = store.fileKey(f.id)
+        if (!key || !/^[a-f0-9-]{36}$/.test(key)) throw new HttpError(409, '文件存储记录无效')
+        return { file: current, key }
+      })
+      keys = fresh.map((item) => item.key)
+      freedBytes = fresh.reduce((sum, item) => sum + item.file.size, 0)
+      for (const { file } of fresh) {
+        store.db.prepare('DELETE FROM content_search WHERE file_id=?').run(file.id)
+        store.db.prepare('DELETE FROM files WHERE id=?').run(file.id)
+      }
+      store.activity(
+        `管理员「${auth.display_name}」在线永久清理了回收站中的 ${fresh.length} 个文件`,
+      )
+    })
+    for (const key of keys) {
+      await rm(join(config.dataDir, 'objects', key), { force: true }).catch(() => {})
+    }
+    return {
+      workspace: store.workspace(config.quotaBytes, config.requestBytes),
+      purged: keys.length,
+      freedBytes,
+    }
+  })
   const stopContent = registerContent(app, store, options.contentExtractor)
   const stopStorage = registerStorage(
     app,
@@ -1128,7 +1172,7 @@ export async function createApp(
   app.addHook('onClose', async () => {
     await stopStorage()
     await stopContent()
-    await stopBackups()
+    await backups.stop()
     store.close()
   })
   if (options.serveFrontend !== false && existsSync(resolve('dist/index.html'))) {

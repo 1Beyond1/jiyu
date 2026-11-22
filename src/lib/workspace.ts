@@ -61,11 +61,10 @@ export function useWorkspace() {
     inFlight.current++
     const current = ++sequence.current
     try {
-      const result = await api<Workspace | { workspace: Workspace; operationId: string }>(
-        path,
-        method,
-        body,
-      )
+      const result = await api<
+        | Workspace
+        | { workspace: Workspace; operationId?: string; purged?: number; freedBytes?: number }
+      >(path, method, body)
       if (current === sequence.current) {
         etag.current = ''
         setWorkspace('workspace' in result ? result.workspace : result)
