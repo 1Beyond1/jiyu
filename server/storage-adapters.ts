@@ -79,21 +79,55 @@ export function s3Headers(
   }
 }
 
+export interface StorageAdapterOptions {
+  strictReadback?: boolean
+}
+
+function isStrictReadback(options?: StorageAdapterOptions) {
+  return options?.strictReadback === true || process.env.JIYU_STORAGE_STRICT_READBACK === '1'
+}
+
+function headerValue(headers: RemoteResponse['headers'], name: string) {
+  const raw = headers[name.toLowerCase()]
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeSha256Header(raw: string): string | null {
+  const cleaned = raw.replace(/^"+|"+$/g, '').trim()
+  if (!cleaned) return null
+  if (/^[a-f0-9]{64}$/i.test(cleaned)) return cleaned.toLowerCase()
+  const decoded = Buffer.from(cleaned, 'base64')
+  if (decoded.length === 32 && decoded.toString('base64') === cleaned)
+    return decoded.toString('hex')
+  return null
+}
+
+async function computeFileMd5(source: string | Buffer): Promise<string> {
+  if (Buffer.isBuffer(source)) return createHash('md5').update(source).digest('hex')
+  const hash = createHash('md5')
+  for await (const chunk of createReadStream(source)) hash.update(chunk)
+  return hash.digest('hex')
+}
+
 export class StandardStorage {
   profile: StorageProfile
   credentials: StorageCredentials
   http: RemoteHTTP
   signal: AbortSignal
+  strictReadback: boolean
   constructor(
     profile: StorageProfile,
     credentials: StorageCredentials,
     http: RemoteHTTP,
     signal: AbortSignal,
+    options?: StorageAdapterOptions,
   ) {
     this.profile = profile
     this.credentials = credentials
     this.http = http
     this.signal = signal
+    this.strictReadback = isStrictReadback(options)
   }
   private async request(
     method: string,
@@ -101,6 +135,7 @@ export class StandardStorage {
     body?: Buffer | Readable,
     size = 0,
     sha256 = hex(''),
+    extraHeaders?: Record<string, string>,
   ) {
     const url = objectUrl(this.profile, path)
     const auth =
@@ -114,6 +149,7 @@ export class StandardStorage {
       method,
       headers: {
         ...auth,
+        ...(extraHeaders || {}),
         ...(body
           ? { 'content-length': String(size), 'content-type': 'application/octet-stream' }
           : {}),
@@ -131,6 +167,29 @@ export class StandardStorage {
       await remoteBody(result)
     }
   }
+  private async verifiedByS3Headers(
+    response: RemoteResponse,
+    source: string | Buffer,
+    sha256: string,
+  ): Promise<boolean> {
+    if (this.strictReadback || this.profile.id !== 's3') return false
+    const remoteChecksum = headerValue(response.headers, 'x-amz-checksum-sha256')
+    if (remoteChecksum) {
+      const normalized = normalizeSha256Header(remoteChecksum)
+      if (!normalized || normalized !== sha256.toLowerCase())
+        throw new HttpError(502, '远端 SHA-256 校验和不匹配，本机原件已保留')
+      return true
+    }
+    const rawEtag = headerValue(response.headers, 'etag')
+    if (rawEtag && !/^W\//i.test(rawEtag)) {
+      const cleaned = rawEtag.replace(/^"+|"+$/g, '')
+      if (/^[a-f0-9]{32}$/i.test(cleaned)) {
+        const localMd5 = await computeFileMd5(source)
+        if (cleaned.toLowerCase() === localMd5) return true
+      }
+    }
+    return false
+  }
   async put(
     path: string,
     source: string | Buffer,
@@ -138,17 +197,23 @@ export class StandardStorage {
     sha256: string,
   ): Promise<RemoteObject> {
     await this.folders(path)
+    const extraHeaders =
+      this.profile.id === 's3'
+        ? { 'x-amz-checksum-sha256': Buffer.from(sha256, 'hex').toString('base64') }
+        : undefined
     const result = await this.request(
       'PUT',
       path,
       typeof source === 'string' ? createReadStream(source) : source,
       size,
       sha256,
+      extraHeaders,
     )
     remoteOK(result)
     await remoteBody(result)
-    // Read back rather than trusting ETag (which is not universally an MD5).
-    await this.verify(path, size, sha256)
+    if (!(await this.verifiedByS3Headers(result, source, sha256))) {
+      await this.verify(path, size, sha256)
+    }
     return { path, size, sha256 }
   }
   async verify(path: string, size: number, sha256: string) {

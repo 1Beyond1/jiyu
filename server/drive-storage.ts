@@ -1,10 +1,54 @@
 import { createHash } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { open } from 'node:fs/promises'
 import type { StorageProfile } from '../src/types.ts'
 import type { RemoteHTTP, RemoteResponse } from './remote-http.ts'
 import { remoteBody, remoteOK } from './remote-http.ts'
-import type { StorageCredentials, RemoteObject } from './storage-adapters.ts'
+import type { StorageAdapterOptions, StorageCredentials, RemoteObject } from './storage-adapters.ts'
 import { HttpError } from './security.ts'
+
+export function quickXorHashBuffer(input: Uint8Array): string {
+  const data = new Uint8Array(20)
+  let shiftSoFar = 0
+  for (let i = 0; i < input.length; i++) {
+    const byte = input[i]
+    const bytePos = shiftSoFar >> 3
+    const bitOffset = shiftSoFar & 7
+    data[bytePos] ^= (byte << bitOffset) & 0xff
+    if (bitOffset > 0) data[(bytePos + 1) % 20] ^= byte >>> (8 - bitOffset)
+    shiftSoFar = (shiftSoFar + 11) % 160
+  }
+  let length = BigInt(input.length)
+  for (let i = 0; i < 8; i++) {
+    data[12 + i] ^= Number(length & 0xffn)
+    length >>= 8n
+  }
+  return Buffer.from(data).toString('base64')
+}
+
+export async function quickXorHashSource(source: string | Buffer): Promise<string> {
+  if (Buffer.isBuffer(source)) return quickXorHashBuffer(source)
+  const data = new Uint8Array(20)
+  let shiftSoFar = 0
+  let total = 0n
+  for await (const chunk of createReadStream(source)) {
+    const bytes = chunk as Buffer
+    for (let i = 0; i < bytes.length; i++) {
+      const byte = bytes[i]
+      const bytePos = shiftSoFar >> 3
+      const bitOffset = shiftSoFar & 7
+      data[bytePos] ^= (byte << bitOffset) & 0xff
+      if (bitOffset > 0) data[(bytePos + 1) % 20] ^= byte >>> (8 - bitOffset)
+      shiftSoFar = (shiftSoFar + 11) % 160
+    }
+    total += BigInt(bytes.length)
+  }
+  for (let i = 0; i < 8; i++) {
+    data[12 + i] ^= Number(total & 0xffn)
+    total >>= 8n
+  }
+  return Buffer.from(data).toString('base64')
+}
 
 const itemPath = (id: string) =>
   id === 'root' ? '/me/drive/root' : `/me/drive/items/${encodeURIComponent(id)}`
@@ -46,16 +90,20 @@ export class DriveStorage {
   credentials: StorageCredentials
   http: RemoteHTTP
   signal: AbortSignal
+  strictReadback: boolean
   constructor(
     profile: StorageProfile,
     credentials: StorageCredentials,
     http: RemoteHTTP,
     signal: AbortSignal,
+    options?: StorageAdapterOptions,
   ) {
     this.profile = profile
     this.credentials = credentials
     this.http = http
     this.signal = signal
+    this.strictReadback =
+      options?.strictReadback === true || process.env.JIYU_STORAGE_STRICT_READBACK === '1'
   }
   private async api(path: string, method = 'GET', payload?: object) {
     const body = payload ? Buffer.from(JSON.stringify(payload)) : undefined
@@ -123,6 +171,42 @@ export class DriveStorage {
     }
     return id
   }
+  private async verifiedByMetadata(
+    item: Record<string, unknown>,
+    source: string | Buffer,
+    sha256: string,
+  ): Promise<boolean> {
+    if (this.strictReadback) return false
+    if (this.profile.id === 'onedrive') {
+      const file = item.file as { hashes?: Record<string, unknown> } | undefined
+      const hashes = file?.hashes
+      if (hashes && typeof hashes === 'object') {
+        const remoteSha =
+          typeof hashes.sha256Hash === 'string' ? hashes.sha256Hash.trim().toLowerCase() : ''
+        if (/^[a-f0-9]{64}$/.test(remoteSha)) {
+          if (remoteSha !== sha256.toLowerCase())
+            throw new HttpError(502, 'OneDrive SHA-256 校验失败，本机原件已保留')
+          return true
+        }
+        const remoteXor = typeof hashes.quickXorHash === 'string' ? hashes.quickXorHash.trim() : ''
+        if (remoteXor) {
+          const localXor = await quickXorHashSource(source)
+          if (remoteXor !== localXor)
+            throw new HttpError(502, 'OneDrive QuickXorHash 校验失败，本机原件已保留')
+          return true
+        }
+      }
+      return false
+    }
+    const remoteSha =
+      typeof item.sha256Checksum === 'string' ? item.sha256Checksum.trim().toLowerCase() : ''
+    if (/^[a-f0-9]{64}$/.test(remoteSha)) {
+      if (remoteSha !== sha256.toLowerCase())
+        throw new HttpError(502, 'Google Drive SHA-256 校验失败，本机原件已保留')
+      return true
+    }
+    return false
+  }
   private async verify(id: string, size: number, sha256: string) {
     let response = await this.api(
       this.profile.id === 'onedrive'
@@ -168,7 +252,7 @@ export class DriveStorage {
       const q = `name='${name.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}' and '${parent}' in parents and trashed=false`
       const data = await json(
         await this.api(
-          `/files?${new URLSearchParams({ q, fields: 'files(id,size)', pageSize: '2' })}`,
+          `/files?${new URLSearchParams({ q, fields: 'files(id,size,sha256Checksum)', pageSize: '2' })}`,
         ),
       )
       const list = data.files as Record<string, unknown>[] | undefined
@@ -179,7 +263,9 @@ export class DriveStorage {
     if (existing) {
       if (typeof existing.id !== 'string' || Number(existing.size) !== size)
         throw new HttpError(409, '云端对象已改变，不会覆盖，请人工核对')
-      await this.verify(existing.id, size, sha256)
+      if (!(await this.verifiedByMetadata(existing, source, sha256))) {
+        await this.verify(existing.id, size, sha256)
+      }
       return { path, size, sha256 }
     }
     if (size === 0) {
@@ -200,7 +286,7 @@ export class DriveStorage {
             }),
           )
         : await json(
-            await this.api('/files?fields=id,size', 'POST', {
+            await this.api('/files?fields=id,size,sha256Checksum', 'POST', {
               name,
               parents: [parent],
               mimeType: 'application/octet-stream',
@@ -208,7 +294,9 @@ export class DriveStorage {
           )
       if (typeof result.id !== 'string' || Number(result.size) !== 0)
         throw new HttpError(502, '网盘未确认空文件')
-      await this.verify(result.id, 0, sha256)
+      if (!(await this.verifiedByMetadata(result, source, sha256))) {
+        await this.verify(result.id, 0, sha256)
+      }
       return { path, size, sha256 }
     }
     let upload: URL
@@ -231,7 +319,7 @@ export class DriveStorage {
       )
       const response = await this.http({
         url: new URL(
-          'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,size',
+          'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,size,sha256Checksum',
         ),
         method: 'POST',
         body,
@@ -278,7 +366,9 @@ export class DriveStorage {
       }
       if (!result || typeof result.id !== 'string' || Number(result.size) !== size)
         throw new HttpError(502, '网盘没有确认完整文件，本机原件已保留')
-      await this.verify(result.id, size, sha256)
+      if (!(await this.verifiedByMetadata(result, source, sha256))) {
+        await this.verify(result.id, size, sha256)
+      }
       return { path, size, sha256 }
     } finally {
       await file?.close()
