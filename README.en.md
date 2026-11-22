@@ -36,15 +36,17 @@ Submitters open a random share link to fill custom fields and upload files direc
 ### 1. Structured Collection & Material Review Workbench
 
 - **Guided Creation & Reusable Templates**: Built-in templates for assignments, registration packages, and project deliverables; save, reuse, archive, and restore custom templates from existing collections (sensitive rosters, deadlines, tokens, and storage bindings are never copied).
-- **Custom Fields & Automatic Naming**: Define up to 8 custom text fields, identify submitters by name or a required field, and compose auto-naming rules (name, collection, date, sequence, original filename, and field values) with live preview while preserving original extensions and preventing per-collection collisions.
-- **Per-Participant Material Checklist**: Define up to 8 required/optional material slots per collection; assign files explicitly and track _required items received_ separately from _manually approved_ (duplicate file content cannot satisfy two required slots). Reviews bind to rule and file versions with atomic conflict rejection and automatic staleness invalidation when rules or files change. Desktop matrix view + mobile participant cards.
+- **Local QR Distribution & Access Protection**: Share modal embeds a zero-dependency local SVG QR code (CSP-friendly), downloadable share card image, and one-click structured group announcement copy. Supports optional **4–8 character access passcodes** (scrypt-hashed inside `collections.data` JSON with no SQLite schema bump, rate-limited unlock endpoint, zero detail/checklist leak before unlock) and an **expected-roster-only submission** switch with generic anti-enumeration rejections.
+- **Custom Fields & Automatic Naming**: Define up to 8 custom text fields, identify submitters by name or a required field, and compose auto-naming / batch-rename rules (name, collection, `{材料项}` material item, date, sequence, original filename, and field values) with live preview while preserving original extensions and preventing per-collection collisions.
+- **Split-Pane Continuous Review & Zero-Send Reminders**: Define up to 8 required/optional material slots per collection. Reviewing a participant opens a responsive **split-pane workbench** (inline image/PDF and instant lightweight 2 MiB UTF-8 text / anti-XXE DOCX preview on the left, attribution & review form on the right) with one-click _Save & jump to next pending review_. Both the Material Workbench and Participant Ledger provide **zero-external-send reminder copy generators** (desensitized group summary + 1-on-1 DM with exact missing items, `materialReview.note`, and receipt replacement steps).
 - **Roster Ledger & Private Receipts**: Compare submissions against an expected submitter roster (visible only inside the workbench) and export CSV ledgers. Submitters can inspect status, import legacy text receipts, supplement, or replace their own batch using a private receipt key (superseded batches move to trash; concurrent replacements succeed only once). Public pages clearly distinguish active file counts from cumulative historical submissions.
 
-### 2. Resumable Uploads, Search & Efficient Sync
+### 2. Resumable Uploads, Search, Targeted Archives & Polish
 
 - **Reliable Chunked Uploads**: 4 MiB chunks, per-chunk and whole-batch SHA-256 verification, pause/resume, 24-hour continuation, and idempotent receipts. Includes pure-JS SHA-256 and UUID fallbacks so LAN non-HTTPS origins do not crash when WebCrypto is unavailable.
-- **Server-Side Pagination & `ETag` Incremental Sync**: Dedicated `GET /api/files` and `GET /api/collections/:id/files` endpoints supporting collection, status, kind, trash, search (`q`), sort, and page parameters. Both `GET /api/workspace` and file pagination endpoints emit strong-consistency `ETag` headers with `Cache-Control: no-cache` and return `304 Not Modified` on `If-None-Match`, minimizing serialization and frontend re-renders during 15-second polling.
-- **Previews, Full-Text OCR & Streaming ZIP Archives**: Built-in image/PDF previews and text indexing for TXT, DOCX, PDF, and images (runtime Docker image ships with Poppler and Tesseract for Simplified Chinese & English OCR). Preview archive paths and stream ZIP downloads directly to the browser (flat, by collection, by submitter, or collection/submitter; up to 500 files / 10 GiB per archive).
+- **Server-Side Pagination, 6 Sort Orders & `ETag` Cache**: `FileTable` exposes all 6 backend sort orders (time/name/size asc/desc) and `ready` status filtering, maintains a per-endpoint `ETag` / `If-None-Match` → `304 Not Modified` cache, and avoids duplicate full-text search calls under server pagination.
+- **Instant Previews, OCR & Material-Scoped ZIP Archives**: Instant lightweight previews for small UTF-8 text and DOCX files (2 MiB + anti-XXE bounds) alongside image/PDF previews and Poppler/Tesseract OCR indexing. Streaming ZIP downloads support 6 directory layouts (adding `material/owner` and `owner/material`) plus an `accepted`-only filter strictly bound to `rulesRevision` at both plan creation and download time (up to 500 files / 10 GiB).
+- **Paginated Trash Purge & Tri-State Theme**: `TrashPage` uses backend pagination/search and provides an admin-only, two-step confirmed permanent purge guarded against active ZIP archive and online backup references. Built-in persisted theme switcher supports System, Warm White Light, and Warm Charcoal Dark modes.
 
 ### 3. Cloud Storage Sync, Backups & Access Control
 
@@ -80,7 +82,7 @@ npm run dev           # Start Vite frontend dev server on port 5173 (proxies /ap
 npm run check         # TypeScript check across frontend and backend (tsc -b)
 npm run format        # Format codebase with Biome
 npm run format:check  # Verify Biome formatting (enforced in CI)
-npm run lint          # Run Biome static analysis
+npm run lint          # Run Biome static analysis (0-error CI gate)
 npm test              # Run unit and real HTTP integration test suites
 npm run build         # Type-check and build production frontend bundle (dist/)
 npm run data          # Offline data inspection and backup restore CLI
@@ -116,6 +118,7 @@ Key environment variables (see [.env.example](.env.example) and [Deployment Guid
 | `JIYU_RATE_LIMIT_UPLOAD_MULTIPART`                   | `30`                    | Multipart upload requests per hour limit                                                    |
 | `JIYU_RATE_LIMIT_UPLOAD_CREATE`                      | `60`                    | Chunked upload session creations per hour limit                                             |
 | `JIYU_RATE_LIMIT_UPLOAD_CHUNK`                       | `180`                   | Chunk PUT requests per minute limit                                                         |
+| `JIYU_RATE_LIMIT_UNLOCK`                             | `6`                     | Public passcode unlock attempts per minute limit (anti-brute-force)                         |
 
 > Warning: Never run `docker compose down -v` unless you intend to delete persistent volumes. Metadata JSON exports do not include file contents and cannot replace full backups.
 

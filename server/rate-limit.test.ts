@@ -12,6 +12,7 @@ const KEYS = [
   'JIYU_RATE_LIMIT_UPLOAD_MULTIPART',
   'JIYU_RATE_LIMIT_UPLOAD_CREATE',
   'JIYU_RATE_LIMIT_UPLOAD_CHUNK',
+  'JIYU_RATE_LIMIT_UNLOCK',
 ] as const
 
 function withEnv(values: Partial<Record<(typeof KEYS)[number], string>>) {
@@ -34,6 +35,7 @@ test('限流配置保留原默认值，支持通过环境变量覆盖并拦截�
       multipartPerHour: 30,
       uploadCreatePerHour: 60,
       uploadChunkPerMinute: 180,
+      unlockPerMinute: 6,
     })
   } finally {
     restoreDefault()
@@ -44,6 +46,7 @@ test('限流配置保留原默认值，支持通过环境变量覆盖并拦截�
     JIYU_RATE_LIMIT_UPLOAD_MULTIPART: '12',
     JIYU_RATE_LIMIT_UPLOAD_CREATE: '25',
     JIYU_RATE_LIMIT_UPLOAD_CHUNK: '90',
+    JIYU_RATE_LIMIT_UNLOCK: '10',
   })
   try {
     assert.deepEqual(resolveRateLimits(), {
@@ -51,6 +54,7 @@ test('限流配置保留原默认值，支持通过环境变量覆盖并拦截�
       multipartPerHour: 12,
       uploadCreatePerHour: 25,
       uploadChunkPerMinute: 90,
+      unlockPerMinute: 10,
     })
   } finally {
     restoreCustom()
