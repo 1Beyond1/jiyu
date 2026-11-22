@@ -406,7 +406,7 @@ export function ConnectionWizard({
               <button type="button" className="button" onClick={close}>
                 取消
               </button>
-              <button className="button primary">
+              <button type="submit" className="button primary">
                 {busy ? '正在连接…' : oauth && !saved.authorized ? '保存并继续授权' : '连接并检查'}
                 <ArrowRight size={15} />
               </button>
@@ -462,6 +462,7 @@ export function ConnectionWizard({
                 {new Date(authorization.expiresAt).toLocaleTimeString('zh-CN', { hour12: false })}
               </small>
               <button
+                type="button"
                 className="text-button"
                 disabled={busy}
                 onClick={() => void copy(authorization.userCode)}
@@ -485,6 +486,7 @@ export function ConnectionWizard({
           <div className="button-row">
             {oauth ? (
               <button
+                type="button"
                 className="button"
                 disabled={busy}
                 onClick={() => void operation(finishAuthorization)}
@@ -494,6 +496,7 @@ export function ConnectionWizard({
               </button>
             ) : (
               <button
+                type="button"
                 className="button primary"
                 disabled={busy}
                 onClick={() => void operation(() => test(saved))}
@@ -504,6 +507,7 @@ export function ConnectionWizard({
             )}
             {oauth && (
               <button
+                type="button"
                 className="text-button"
                 disabled={busy}
                 onClick={() => void operation(() => authorize(saved))}
@@ -513,6 +517,7 @@ export function ConnectionWizard({
             )}
           </div>
           <button
+            type="button"
             className="text-button"
             disabled={busy}
             onClick={() => {
@@ -537,11 +542,11 @@ export function ConnectionWizard({
             文件保存到 <strong>{saved.root}</strong>。
           </p>
           <div className="button-row">
-            <button className="button primary" onClick={() => onCreate(saved.id)}>
+            <button type="button" className="button primary" onClick={() => onCreate(saved.id)}>
               用它创建收集
               <ArrowRight size={15} />
             </button>
-            <button className="button" onClick={close}>
+            <button type="button" className="button" onClick={close}>
               完成
             </button>
           </div>

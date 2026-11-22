@@ -14,6 +14,7 @@ export function DiagnosticsPanel() {
           <p>首次启动或迁移 VPS 后，检查本机收集所需环境。</p>
         </div>
         <button
+          type="button"
           className="button"
           disabled={busy}
           onClick={async () => {

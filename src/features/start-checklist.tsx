@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ArrowRight, Check } from 'lucide-react'
 import type { BackupStatus, Workspace } from '../types'
 import { api } from '../lib/api'
@@ -57,7 +57,7 @@ export function StartChecklist({
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
   const address = shareAddress(location.origin)
-  async function load() {
+  const load = useCallback(async () => {
     setBusy(true)
     setError('')
     try {
@@ -68,10 +68,10 @@ export function StartChecklist({
     } finally {
       setBusy(false)
     }
-  }
+  }, [])
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
   const hasFiles = !!workspace.files.length
   const selectedFile = workspace.files.find((f) => f.id === selectedFileId) || workspace.files[0]
   const collectionNames = new Map(workspace.collections.map((c) => [c.id, c.title]))
@@ -138,11 +138,17 @@ export function StartChecklist({
         </div>
         <div className="checklist-header-actions">
           {!preferences.collapsed && (
-            <button className="text-button" disabled={busy} onClick={() => void load()}>
+            <button
+              type="button"
+              className="text-button"
+              disabled={busy}
+              onClick={() => void load()}
+            >
               {busy ? '读取中…' : '更新状态'}
             </button>
           )}
           <button
+            type="button"
             className="text-button"
             aria-expanded={!preferences.collapsed}
             aria-controls="start-checklist-content"
@@ -202,7 +208,7 @@ export function StartChecklist({
                     </label>
                   </div>
                 )}
-                <button className="text-button" onClick={item.run}>
+                <button type="button" className="text-button" onClick={item.run}>
                   {item.action}
                   <ArrowRight size={14} />
                 </button>

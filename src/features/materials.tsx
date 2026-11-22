@@ -273,6 +273,7 @@ export function MaterialWorkbench({
         <div className="form-note material-sync-error" role="alert">
           <p>{state.error} 当前显示的是上次读取的结果，更新后才能处理。</p>
           <button
+            type="button"
             className="button"
             onClick={async () => {
               await onRefresh()
@@ -283,8 +284,9 @@ export function MaterialWorkbench({
           </button>
         </div>
       )}
-      <div className="material-next-tasks" aria-label="材料待办">
+      <section className="material-next-tasks" aria-label="材料待办">
         <button
+          type="button"
           className={`material-next missing ${filter === 'missing' ? 'active' : ''}`}
           disabled={busy || !state.ready}
           aria-pressed={filter === 'missing'}
@@ -298,6 +300,7 @@ export function MaterialWorkbench({
           <small>查看谁缺什么 →</small>
         </button>
         <button
+          type="button"
           className={`material-next pending ${filter === 'pending' ? 'active' : ''}`}
           disabled={busy || !state.ready}
           aria-pressed={filter === 'pending'}
@@ -311,6 +314,7 @@ export function MaterialWorkbench({
           <small>开始核对下一位 →</small>
         </button>
         <button
+          type="button"
           className={`material-next needs_changes ${filter === 'needs_changes' ? 'active' : ''}`}
           disabled={busy || !state.ready}
           aria-pressed={filter === 'needs_changes'}
@@ -323,7 +327,7 @@ export function MaterialWorkbench({
           <span>材料需补充</span>
           <small>查看原因与当前材料 →</small>
         </button>
-      </div>
+      </section>
       {report && (
         <div className="material-summary">
           <span>
@@ -332,11 +336,12 @@ export function MaterialWorkbench({
             {!!outsiders && ` · 名单外另有 ${outsiders} 人已收齐`}
           </span>
           {!!report.summary.unclassified && (
-            <button className="text-button" onClick={() => setFilter('unclassified')}>
+            <button type="button" className="text-button" onClick={() => setFilter('unclassified')}>
               {report.summary.unclassified} 份文件待确认归属
             </button>
           )}
           <button
+            type="button"
             className="text-button"
             onClick={() => {
               setFilter('all')
@@ -351,7 +356,7 @@ export function MaterialWorkbench({
         <div className="form-note">
           未设置应交名单，只能统计已出现的参与人。
           {canEdit && (
-            <button className="text-button" onClick={onEditRules}>
+            <button type="button" className="text-button" onClick={onEditRules}>
               添加应交名单
             </button>
           )}
@@ -379,6 +384,7 @@ export function MaterialWorkbench({
           </select>
         </label>
         <button
+          type="button"
           className="button"
           disabled={busy || exporting || !state.ready}
           onClick={() => void exportReport()}
@@ -445,6 +451,7 @@ export function MaterialWorkbench({
                 </td>
                 <td>
                   <button
+                    type="button"
                     className="text-button"
                     disabled={busy || !state.ready}
                     aria-label={`${personAction(p.status)}：${p.identity}`}
@@ -496,6 +503,7 @@ export function MaterialWorkbench({
             </ul>
             {!!p.unclassified.length && <p>{p.unclassified.length} 份未分类，尚不计入材料项</p>}
             <button
+              type="button"
               className="button"
               disabled={busy || !state.ready}
               aria-label={`${personAction(p.status)}：${p.identity}`}
@@ -514,6 +522,7 @@ export function MaterialWorkbench({
               : '还没有提交记录。分享链接，让参与人按材料清单交件。'}
           </p>
           <button
+            type="button"
             className="text-button"
             onClick={() => {
               setFilter('all')
@@ -523,7 +532,7 @@ export function MaterialWorkbench({
             显示全部参与人
           </button>
           {canEdit && (
-            <button className="text-button" onClick={onShare}>
+            <button type="button" className="text-button" onClick={onShare}>
               分享收集链接
             </button>
           )}
@@ -543,7 +552,12 @@ export function MaterialWorkbench({
               </h3>
               <p>这位参与人的材料与人工处理记录。</p>
             </div>
-            <button className="text-button" disabled={busy} onClick={() => openPerson('')}>
+            <button
+              type="button"
+              className="text-button"
+              disabled={busy}
+              onClick={() => openPerson('')}
+            >
               收起详情
             </button>
           </div>
@@ -566,7 +580,7 @@ export function MaterialWorkbench({
                       : '先查看或下载文件，再勾选要处理的文件，明确选择核对结论。'}
             </p>
             {canEdit && !person.receivedComplete && (
-              <button className="button" onClick={onShare}>
+              <button type="button" className="button" onClick={onShare}>
                 分享链接，提醒本人补交
               </button>
             )}
@@ -638,7 +652,12 @@ export function MaterialWorkbench({
                       </p>
                     )}
                     <div className="button-row">
-                      <button className="button" disabled={busy} onClick={() => onDetail(f)}>
+                      <button
+                        type="button"
+                        className="button"
+                        disabled={busy}
+                        onClick={() => onDetail(f)}
+                      >
                         查看{f.name}内容
                       </button>
                       <a className="button" href={`/api/files/${f.id}/download`}>
@@ -660,6 +679,7 @@ export function MaterialWorkbench({
               <div className="section-heading">
                 <h4>处理所选 {selection.files.length} 份文件</h4>
                 <button
+                  type="button"
                   className="text-button"
                   disabled={busy || !state.ready}
                   onClick={() => selectFiles(person.files.slice(0, 50))}
@@ -672,7 +692,12 @@ export function MaterialWorkbench({
                   材料规则、文件分类或核对版本已变化，请清除后重新选择。
                 </p>
               )}
-              <button className="text-button" disabled={busy} onClick={() => selectFiles([])}>
+              <button
+                type="button"
+                className="text-button"
+                disabled={busy}
+                onClick={() => selectFiles([])}
+              >
                 清除选择
               </button>
               <fieldset
@@ -694,7 +719,7 @@ export function MaterialWorkbench({
                     ))}
                   </select>
                 </label>
-                <button className="button" onClick={() => void apply('classify')}>
+                <button type="button" className="button" onClick={() => void apply('classify')}>
                   保存所选归属
                 </button>
                 <label className="field">
@@ -722,6 +747,7 @@ export function MaterialWorkbench({
                   />
                 </label>
                 <button
+                  type="button"
                   className="button primary"
                   disabled={!draft.decision}
                   onClick={() => void apply('review')}
@@ -767,6 +793,7 @@ export function MaterialWorkbench({
         <div className="error-text" role="alert">
           {error}
           <button
+            type="button"
             className="text-button"
             disabled={busy}
             onClick={async () => {

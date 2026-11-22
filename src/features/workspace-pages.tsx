@@ -86,7 +86,11 @@ export function ToolsPage({
             <h2>{t.title}</h2>
             <p>{t.description}</p>
             <code>{t.example}</code>
-            <button disabled={!canEdit && t.title === '批量重命名'} onClick={t.action}>
+            <button
+              type="button"
+              disabled={!canEdit && t.title === '批量重命名'}
+              onClick={t.action}
+            >
               {t.label}
               <ArrowRight size={16} />
             </button>
@@ -101,7 +105,7 @@ export function ToolsPage({
           <h3>先看看建议，再决定怎么整理。</h3>
           <p>可用内置规则，也可配置自己的模型；整理建议确认后才会应用。</p>
         </div>
-        <button className="button" disabled={!canEdit} onClick={onAI}>
+        <button type="button" className="button" disabled={!canEdit} onClick={onAI}>
           打开助手
           <ArrowRight size={15} />
         </button>
@@ -135,7 +139,7 @@ export function ToolsPage({
             只显示检查结果，不会自动删除文件。请在文件管理中检查后决定是否移入回收站。
           </div>
           <footer className="modal-footer">
-            <button className="button primary" onClick={() => setDuplicates(false)}>
+            <button type="button" className="button primary" onClick={() => setDuplicates(false)}>
               完成
             </button>
           </footer>

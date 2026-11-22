@@ -53,6 +53,7 @@ import { diagnostics } from './diagnostics.ts'
 import { materialRuleKey, registerMaterials } from './materials.ts'
 import { confirmCollectionDraft } from './collection-draft.ts'
 import { publicSubmissionError } from './public-errors.ts'
+import { hasUnsafeTagChars } from '../src/lib/text-safety.ts'
 
 function makeEtag(...parts: (string | number | undefined)[]) {
   const hash = createHash('sha256')
@@ -861,7 +862,7 @@ export async function createApp(
         tag.tags.length > 5 ||
         tag.oldTags.length > 5 ||
         [...tag.tags, ...tag.oldTags].some(
-          (t) => typeof t !== 'string' || !t.trim() || t.length > 20 || /[\x00-\x1f<>]/.test(t),
+          (t) => typeof t !== 'string' || !t.trim() || t.length > 20 || hasUnsafeTagChars(t),
         )
       )
         throw new HttpError(400, '分类标签无效')

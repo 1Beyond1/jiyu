@@ -1,5 +1,5 @@
 import { isExpired } from '../lib/collections'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Collection, ReceiptDetail, UploadReceipt } from '../types'
 import { formatSize } from '../lib/workspace'
 import { materialStateLabels } from '../lib/materials'
@@ -29,6 +29,46 @@ export function ReceiptManager({
   const readSequence = useRef(0),
     readController = useRef<AbortController | null>(null),
     reading = useRef(false)
+  const read = useCallback(
+    async (receiptId: string, secret: string) => {
+      const ticket = ++readSequence.current
+      readController.current?.abort()
+      const controller = new AbortController()
+      readController.current = controller
+      reading.current = true
+      setBusy(true)
+      setError('')
+      try {
+        const res = await fetch(
+          `/api/public/${encodeURIComponent(uploadToken)}/receipts/${encodeURIComponent(receiptId)}`,
+          {
+            signal: controller.signal,
+            credentials: 'same-origin',
+            headers: { 'X-Receipt-Key': secret },
+          },
+        )
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || '暂时无法读取回执')
+        if (ticket !== readSequence.current || controller.signal.aborted) return null
+        setDetail(data)
+        setId(receiptId)
+        setKey(secret)
+        return data as ReceiptDetail
+      } catch (e) {
+        if (ticket === readSequence.current && !controller.signal.aborted) {
+          setDetail(null)
+          setError((e as Error).message)
+        }
+        return null
+      } finally {
+        if (ticket === readSequence.current) {
+          reading.current = false
+          setBusy(false)
+        }
+      }
+    },
+    [uploadToken],
+  )
   useEffect(() => {
     const update = () => {
       if (receipt?.editKey && !reading.current && document.visibilityState === 'visible')
@@ -46,7 +86,7 @@ export function ReceiptManager({
       readController.current?.abort()
       reading.current = false
     }
-  }, [uploadToken, receipt?.receiptId, receipt?.editKey])
+  }, [read, receipt?.receiptId, receipt?.editKey])
   async function importReceipt(file?: File) {
     if (!file || busy) return
     setBusy(true)
@@ -72,43 +112,6 @@ export function ReceiptManager({
       setError((e as Error).message)
     } finally {
       setBusy(false)
-    }
-  }
-  async function read(receiptId: string, secret: string) {
-    const ticket = ++readSequence.current
-    readController.current?.abort()
-    const controller = new AbortController()
-    readController.current = controller
-    reading.current = true
-    setBusy(true)
-    setError('')
-    try {
-      const res = await fetch(
-        `/api/public/${encodeURIComponent(uploadToken)}/receipts/${encodeURIComponent(receiptId)}`,
-        {
-          signal: controller.signal,
-          credentials: 'same-origin',
-          headers: { 'X-Receipt-Key': secret },
-        },
-      )
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || '暂时无法读取回执')
-      if (ticket !== readSequence.current || controller.signal.aborted) return null
-      setDetail(data)
-      setId(receiptId)
-      setKey(secret)
-      return data as ReceiptDetail
-    } catch (e) {
-      if (ticket === readSequence.current && !controller.signal.aborted) {
-        setDetail(null)
-        setError((e as Error).message)
-      }
-      return null
-    } finally {
-      if (ticket === readSequence.current) {
-        reading.current = false
-        setBusy(false)
-      }
     }
   }
   function saveReceipt() {
@@ -227,7 +230,7 @@ export function ReceiptManager({
         <p className="field-hint">
           请保存私密回执，换设备后也能查看补充原因或替换文件。这个浏览器会记住最新回执。
         </p>
-        <button className="button primary receipt-save" onClick={saveReceipt}>
+        <button type="button" className="button primary receipt-save" onClick={saveReceipt}>
           保存私密回执
         </button>
         <div className="receipt-progress-heading">

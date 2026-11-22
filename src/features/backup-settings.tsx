@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Check, DatabaseBackup, Play } from 'lucide-react'
 import { api } from '../lib/api'
 import type { BackupStatus } from '../types'
@@ -10,24 +10,24 @@ export function BackupPanel() {
     [notice, setNotice] = useState(''),
     [busy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false)
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       setInfo(await api<BackupStatus>('/api/backups'))
       setError('')
     } catch (e) {
       setError((e as Error).message)
     }
-  }
+  }, [])
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
   const running = info?.lastRun?.status === 'running'
   const maxKeep = info?.maxKeep ?? 30
   useEffect(() => {
     if (!running) return
     const timer = setInterval(() => void load(), 2000)
     return () => clearInterval(timer)
-  }, [running])
+  }, [running, load])
   return (
     <section id="settings-backups" tabIndex={-1} className="settings-panel full">
       <div className="section-heading">
@@ -114,7 +114,7 @@ export function BackupPanel() {
                 </label>
               </div>
               <div className="button-row">
-                <button className="button primary">
+                <button type="submit" className="button primary">
                   <Check size={15} />
                   保存备份计划
                 </button>

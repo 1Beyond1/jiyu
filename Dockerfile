@@ -23,6 +23,7 @@ COPY --from=build --chown=node:node /app/src/lib/participants.ts ./src/lib/parti
 COPY --from=build --chown=node:node /app/src/lib/materials.ts ./src/lib/materials.ts
 COPY --from=build --chown=node:node /app/src/lib/material-atomic.ts ./src/lib/material-atomic.ts
 COPY --from=build --chown=node:node /app/src/lib/material-tool-actions.ts ./src/lib/material-tool-actions.ts
+COPY --from=build --chown=node:node /app/src/lib/text-safety.ts ./src/lib/text-safety.ts
 COPY --from=build --chown=node:node /app/package*.json ./
 COPY --chown=node:node LICENSE ./LICENSE
 RUN mkdir -p /data /backups && chown node:node /data /backups

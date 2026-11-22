@@ -138,7 +138,7 @@ test('真实 HTTP：12 人争用配额、并发完成、服务重启与逐字节
     const results = await Promise.all(
       accepted.map((b) => retry(`${b.url}/complete`, 'POST', {}, b.key)),
     )
-    results.forEach((r) => assert.equal(r.status, 201, JSON.stringify(r.data)))
+    for (const r of results) assert.equal(r.status, 201, JSON.stringify(r.data))
     for (let i = 0; i < accepted.length; i++) {
       const b = accepted[i],
         again = await call(`${b.url}/complete`, 'POST', {}, b.key)
@@ -263,7 +263,7 @@ test('分片损坏与数据库写满：失败不产生回执或孤立正文，�
     service.store.addFile = () => {
       throw diskError
     }
-    let failed
+    let failed: Awaited<ReturnType<typeof complete>>
     try {
       failed = await complete()
     } finally {

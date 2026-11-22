@@ -90,7 +90,7 @@ export function StoragePage({
           <h1>文件存在哪里，一目了然。</h1>
           <p>本机直接可用，需要时再连接云端。</p>
         </div>
-        <button className="button" disabled={loading} onClick={() => void load(true)}>
+        <button type="button" className="button" disabled={loading} onClick={() => void load(true)}>
           <RefreshCw size={15} />
           {loading ? '正在刷新…' : '刷新容量与连接'}
         </button>
@@ -184,7 +184,7 @@ export function StoragePage({
             <p>连接成功后，在收集任务中选择使用。</p>
           </div>
           {isAdmin && (
-            <button className="button primary" onClick={() => setChoosing(true)}>
+            <button type="button" className="button primary" onClick={() => setChoosing(true)}>
               <Plus size={15} />
               添加存储
             </button>
@@ -198,7 +198,7 @@ export function StoragePage({
         {error && (
           <div className="error-banner" role="alert">
             连接列表读取失败：{error}
-            <button className="text-button" onClick={() => void load(true)}>
+            <button type="button" className="text-button" onClick={() => void load(true)}>
               重试
             </button>
           </div>
@@ -214,7 +214,7 @@ export function StoragePage({
               </p>
             </div>
             {isAdmin && (
-              <button className="text-button" onClick={() => setChoosing(true)}>
+              <button type="button" className="text-button" onClick={() => setChoosing(true)}>
                 选择存储方式
                 <ArrowRight size={15} />
               </button>
@@ -245,11 +245,11 @@ export function StoragePage({
                 {isAdmin && (
                   <div className="button-row">
                     {p.enabled && (
-                      <button className="button" onClick={() => onCreate(p.id)}>
+                      <button type="button" className="button" onClick={() => onCreate(p.id)}>
                         用它创建收集
                       </button>
                     )}
-                    <button className="text-button" onClick={() => open(p)}>
+                    <button type="button" className="text-button" onClick={() => open(p)}>
                       {p.enabled ? '管理连接' : '继续连接'}
                       <ArrowRight size={14} />
                     </button>
@@ -273,6 +273,7 @@ export function StoragePage({
             </div>
             {isAdmin && !!retryable.length && (
               <button
+                type="button"
                 className="button"
                 disabled={retrying !== null}
                 onClick={async () => {
@@ -321,6 +322,7 @@ export function StoragePage({
                   workspace.files.some((f) => f.id === t.file_id) &&
                   state.profiles.some((p) => p.id === t.provider && p.enabled) && (
                     <button
+                      type="button"
                       className="button"
                       disabled={retrying !== null}
                       onClick={async () => {
@@ -359,6 +361,7 @@ export function StoragePage({
           <div className="storage-picker">
             {storageChoices.map((choice) => (
               <button
+                type="button"
                 key={choice.id}
                 onClick={() => {
                   const p = state?.profiles.find((p) => p.id === choice.id)

@@ -75,12 +75,16 @@ export function Assistant({
     }
   }, [])
   useEffect(() => {
+    void [messages.length, busy]
     list.current?.scrollTo({
       top: list.current.scrollHeight,
       behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
     })
-  }, [messages, busy])
-  useEffect(() => setConsent(false), [selected, includeOwners, includeContent, mode])
+  }, [messages.length, busy])
+  useEffect(() => {
+    void [selected, includeOwners, includeContent, mode]
+    setConsent(false)
+  }, [selected, includeOwners, includeContent, mode])
   useEffect(() => {
     setSelected(initialFileIds.slice(0, 30))
     setConsent(false)
@@ -215,6 +219,7 @@ export function Assistant({
           </p>
         </div>
         <button
+          type="button"
           className="icon-button"
           onClick={onConfigure}
           disabled={!isAdmin}
@@ -223,7 +228,7 @@ export function Assistant({
         >
           <Settings2 size={17} />
         </button>
-        <button className="icon-button" onClick={onClose} aria-label="关闭 AI 助手">
+        <button type="button" className="icon-button" onClick={onClose} aria-label="关闭 AI 助手">
           <X size={18} />
         </button>
       </header>
@@ -249,6 +254,7 @@ export function Assistant({
             <p>{summary}</p>
             <small>本机检查全任务；模型最多处理所选 30 个文件，名单不会自动发送。</small>
             <button
+              type="button"
               className="text-button"
               disabled={busy}
               onClick={() => {
@@ -269,6 +275,7 @@ export function Assistant({
       </section>
       <div className="assistant-mode">
         <button
+          type="button"
           className={mode === 'local' ? 'active' : ''}
           disabled={busy}
           onClick={() => setMode('local')}
@@ -276,6 +283,7 @@ export function Assistant({
           内置规则
         </button>
         <button
+          type="button"
           className={mode === 'model' ? 'active' : ''}
           disabled={busy || !settings?.enabled || !settings.keyReady}
           onClick={() => setMode('model')}
@@ -372,7 +380,7 @@ export function Assistant({
         !settings?.enabled && (
           <div className="assistant-config-note">
             模型服务尚未启用
-            <button className="text-button" disabled={!isAdmin} onClick={onConfigure}>
+            <button type="button" className="text-button" disabled={!isAdmin} onClick={onConfigure}>
               {isAdmin ? '去配置' : '请联系管理员'}
               <ArrowRight size={13} />
             </button>
@@ -399,6 +407,7 @@ export function Assistant({
             <div className="assistant-suggestions">
               {['帮我统一文件名', '看看收集进度', '我的文件安全吗？'].map((q) => (
                 <button
+                  type="button"
                   disabled={busy}
                   onClick={() => {
                     if (mode === 'model') {
@@ -423,6 +432,7 @@ export function Assistant({
                 <p>{m.text}</p>
                 {m.actionIds && (
                   <button
+                    type="button"
                     className="chat-action"
                     disabled={busy || !filesForAction(m.actionIds, workspace.files).length}
                     onClick={() => onRename(filesForAction(m.actionIds!, workspace.files))}
@@ -433,7 +443,11 @@ export function Assistant({
                   </button>
                 )}
                 {m.proposal && (
-                  <button className="chat-action" onClick={() => onProposal(m.proposal!)}>
+                  <button
+                    type="button"
+                    className="chat-action"
+                    onClick={() => onProposal(m.proposal!)}
+                  >
                     <WandSparkles size={14} />
                     预览整理建议
                     <ArrowRight size={14} />
@@ -447,7 +461,11 @@ export function Assistant({
           <div className="assistant-thinking" role="status">
             <Sparkles size={14} />
             <span>模型正在整理建议…</span>
-            <button className="text-button" onClick={() => controller.current?.abort()}>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => controller.current?.abort()}
+            >
               取消
             </button>
           </div>
@@ -480,7 +498,6 @@ export function Assistant({
         >
           <input
             ref={inputRef}
-            autoFocus
             value={input}
             disabled={busy}
             onChange={(e) => setInput(e.target.value)}
@@ -489,6 +506,7 @@ export function Assistant({
             maxLength={1000}
           />
           <button
+            type="submit"
             disabled={!input.trim() || busy || (mode === 'model' && !consent)}
             aria-label="发送消息"
           >

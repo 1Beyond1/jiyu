@@ -63,7 +63,7 @@ export function ParticipantLedger({
           <strong>{c.expectedSubmitters?.length ? missing : '—'}</strong>
           <span>{c.expectedSubmitters?.length ? '人待提交' : '尚未设置应交名单'}</span>
         </div>
-        <button className="button" disabled={!rows.length} onClick={exportList}>
+        <button type="button" className="button" disabled={!rows.length} onClick={exportList}>
           导出完整台账
         </button>
       </div>
@@ -82,6 +82,7 @@ export function ParticipantLedger({
           ['duplicate', '内容重复'],
         ].map(([id, label]) => (
           <button
+            type="button"
             key={id}
             className={filter === id ? 'active' : ''}
             onClick={() => {
@@ -136,6 +137,7 @@ export function ParticipantLedger({
                   </td>
                   <td>
                     <button
+                      type="button"
                       className="text-button"
                       disabled={!p.fileIds.length}
                       onClick={() => onSelect(p.fileIds, p.identity)}

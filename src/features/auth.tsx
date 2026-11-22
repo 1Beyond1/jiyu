@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ArrowRight, LockKeyhole, RefreshCw } from 'lucide-react'
 import { Brand } from '../components/ui'
@@ -20,7 +20,7 @@ export function useAccount() {
 export function AdminGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [error, setError] = useState('')
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const data = await api<Session>('/api/auth/status')
       setCsrf(data.csrf || '')
@@ -29,7 +29,7 @@ export function AdminGate({ children }: { children: ReactNode }) {
     } catch (e) {
       setError((e as Error).message || '无法连接集屿服务')
     }
-  }
+  }, [])
   useEffect(() => {
     void refresh()
     const expired = () => {
@@ -38,7 +38,7 @@ export function AdminGate({ children }: { children: ReactNode }) {
     }
     window.addEventListener('jiyu:session-expired', expired)
     return () => window.removeEventListener('jiyu:session-expired', expired)
-  }, [])
+  }, [refresh])
   if (session?.authenticated)
     return <UserContext.Provider value={session.user}>{children}</UserContext.Provider>
   if (error)
@@ -48,7 +48,7 @@ export function AdminGate({ children }: { children: ReactNode }) {
         <section className="auth-card">
           <h1>暂时连接不上工作台</h1>
           <p>{error}</p>
-          <button className="button primary" onClick={() => void refresh()}>
+          <button type="button" className="button primary" onClick={() => void refresh()}>
             <RefreshCw size={16} />
             重新连接
           </button>
@@ -175,7 +175,6 @@ function AuthForm({
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete={setup ? 'new-password' : 'current-password'}
-                autoFocus
               />
               {setup && <small>至少 12 个字符，初始管理员登录名为 admin。</small>}
             </label>
@@ -198,7 +197,7 @@ function AuthForm({
                 {error}
               </p>
             )}
-            <button className="button primary submit-button">
+            <button type="submit" className="button primary submit-button">
               {busy ? '请稍候…' : setup ? '创建管理员' : '进入工作台'}
               <ArrowRight size={16} />
             </button>

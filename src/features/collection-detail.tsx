@@ -82,7 +82,7 @@ export function CollectionDetail({
         : '结束这项收集？'
   return (
     <>
-      <button className="text-button collection-back" onClick={onBack}>
+      <button type="button" className="text-button collection-back" onClick={onBack}>
         <ArrowLeft size={15} />
         全部收集
       </button>
@@ -101,15 +101,15 @@ export function CollectionDetail({
         {canEdit && (
           <div className="button-row">
             {onAI && (
-              <button className="button" onClick={() => onAI(files)}>
+              <button type="button" className="button" onClick={() => onAI(files)}>
                 检查这项收集
               </button>
             )}
-            <button className="button" onClick={onEdit}>
+            <button type="button" className="button" onClick={onEdit}>
               <Pencil size={15} />
               编辑规则
             </button>
-            <button className="button primary" onClick={onShare}>
+            <button type="button" className="button primary" onClick={onShare}>
               <Link size={15} />
               分享收集
             </button>
@@ -124,8 +124,8 @@ export function CollectionDetail({
           </summary>
           {c.draftOrigin.resolutions
             .filter((a) => !a.skipped)
-            .map((r, i) => (
-              <p key={i}>
+            .map((r) => (
+              <p key={`${r.question}-${r.materialId || ''}-${r.answer || ''}`}>
                 {r.question}：{r.answer}
               </p>
             ))}
@@ -183,6 +183,7 @@ export function CollectionDetail({
           <div className="button-row">
             {actions.map((a) => (
               <button
+                type="button"
                 key={a.status}
                 className="text-button"
                 disabled={a.status === 'active' && expired}
@@ -200,6 +201,7 @@ export function CollectionDetail({
         <div className="tabs">
           {!!c.materials?.length && (
             <button
+              type="button"
               className={tab === 'materials' ? 'active' : ''}
               onClick={() => {
                 setTab('materials')
@@ -210,6 +212,7 @@ export function CollectionDetail({
             </button>
           )}
           <button
+            type="button"
             className={tab === 'files' ? 'active' : ''}
             onClick={() => {
               setTab('files')
@@ -218,12 +221,16 @@ export function CollectionDetail({
           >
             收到的文件（{files.length}）
           </button>
-          <button className={tab === 'people' ? 'active' : ''} onClick={() => setTab('people')}>
+          <button
+            type="button"
+            className={tab === 'people' ? 'active' : ''}
+            onClick={() => setTab('people')}
+          >
             {c.materials?.length ? '提交记录' : '提交人 / 未交名单'}
           </button>
         </div>
         {canEdit && (
-          <button className="text-button" onClick={() => setSaveTemplate(true)}>
+          <button type="button" className="text-button" onClick={() => setSaveTemplate(true)}>
             保存为模板
           </button>
         )}
@@ -288,10 +295,11 @@ export function CollectionDetail({
                 : '结束后，原收集链接将停止接收提交。已收到的记录会保留，你也可以在截止日期内重新开放。'}
           </p>
           <footer className="modal-footer">
-            <button className="button" onClick={() => setConfirm(null)}>
+            <button type="button" className="button" onClick={() => setConfirm(null)}>
               取消
             </button>
             <button
+              type="button"
               className="button primary"
               onClick={() => {
                 onStatus(confirm)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AISettings, CollectionDraft, DraftConfirmation, MaterialRequirement } from '../types'
 import { api } from '../lib/api'
 import { safeRandomUUID } from '../lib/browser-crypto'
@@ -27,7 +27,7 @@ export function CollectionDraftEditor({
     [confirmed, setConfirmed] = useState(false)
   const generation = useRef(0),
     controller = useRef<AbortController | null>(null)
-  async function loadSettings() {
+  const loadSettings = useCallback(async () => {
     setConsent(false)
     setError('')
     try {
@@ -35,14 +35,14 @@ export function CollectionDraftEditor({
     } catch (e) {
       setError((e as Error).message)
     }
-  }
+  }, [])
   useEffect(() => {
     if (open) void loadSettings()
     return () => {
       generation.current++
       controller.current?.abort()
     }
-  }, [open])
+  }, [open, loadSettings])
   function discard() {
     generation.current++
     controller.current?.abort()

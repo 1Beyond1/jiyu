@@ -39,7 +39,7 @@ export function SettingsPage({
           <h1>你的工作台，刚刚好。</h1>
           <p>{isAdmin ? '管理成员、模型服务与数据备份。' : '查看你的账号信息，导出工作台记录。'}</p>
         </div>
-        <button className="button" onClick={onLogout}>
+        <button type="button" className="button" onClick={onLogout}>
           <LogOut size={15} />
           退出登录
         </button>
@@ -64,7 +64,7 @@ export function SettingsPage({
                   maxLength={20}
                 />
               </label>
-              <button className="button primary">
+              <button type="submit" className="button primary">
                 <Check size={15} />
                 保存设置
               </button>
@@ -89,6 +89,7 @@ export function SettingsPage({
             </div>
           </dl>
           <button
+            type="button"
             className="button"
             onClick={() => {
               setPasswordOpen(true)
@@ -114,6 +115,7 @@ export function SettingsPage({
           </p>
           <div className="button-row">
             <button
+              type="button"
               className="button"
               onClick={() =>
                 downloadText(
@@ -128,6 +130,7 @@ export function SettingsPage({
             </button>
             {canEdit && (
               <button
+                type="button"
                 className="button"
                 onClick={() => {
                   setFullExportConfirmed(false)
@@ -286,7 +289,7 @@ export function SettingsPage({
                 关闭
               </button>
               {!saved && (
-                <button className="button primary" disabled={busy}>
+                <button type="submit" className="button primary" disabled={busy}>
                   {busy ? '正在保存…' : '保存新密码'}
                 </button>
               )}

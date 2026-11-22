@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { mkdir, readdir, readFile, lstat, rm, realpath } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Store } from './store.ts'
@@ -39,7 +40,7 @@ export async function registerBackups(app: FastifyInstance, store: Store, backup
       }),
     )
   const directories = async (): Promise<BackupInfo[]> => {
-    let entries
+    let entries: Dirent[]
     try {
       entries = await readdir(backupRoot, { withFileTypes: true })
     } catch (e) {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { FileSearch, ScanText } from 'lucide-react'
 import { api } from '../lib/api'
 import type { CollectedFile, DocumentInfo, FileContent } from '../types'
@@ -16,24 +16,24 @@ export function FilePreview({ file }: { file: CollectedFile }) {
   const [content, setContent] = useState<FileContent | null>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       setContent(await api<FileContent>(`/api/files/${file.id}/content`))
       setError('')
     } catch (e) {
       setError((e as Error).message)
     }
-  }
+  }, [file.id])
   useEffect(() => {
     void load()
-  }, [file.id])
+  }, [load])
   const processing =
     content?.document?.status === 'queued' || content?.document?.status === 'processing'
   useEffect(() => {
     if (!processing) return
     const timer = setInterval(() => void load(), 2000)
     return () => clearInterval(timer)
-  }, [processing])
+  }, [processing, load])
   return (
     <section className="file-preview" aria-label="文件预览">
       {!content ? (
@@ -69,6 +69,7 @@ export function FilePreview({ file }: { file: CollectedFile }) {
             </span>
             {canEdit && (
               <button
+                type="button"
                 className="text-button"
                 disabled={busy || processing}
                 onClick={async () => {
@@ -111,19 +112,19 @@ export function ContentPanel({ files }: { files: CollectedFile[] }) {
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState('')
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const data = await api<{ documents: DocumentInfo[] }>('/api/content/status')
       setDocuments(data.documents)
     } catch (e) {
       setError((e as Error).message)
     }
-  }
+  }, [])
   useEffect(() => {
     void load()
     const timer = setInterval(() => void load(), 5000)
     return () => clearInterval(timer)
-  }, [])
+  }, [load])
   const active = new Set(files.map((f) => f.id)),
     visible = documents.filter((d) => active.has(d.file_id))
   const ready = visible.filter((d) => d.status === 'ready'),
@@ -168,6 +169,7 @@ export function ContentPanel({ files }: { files: CollectedFile[] }) {
       </p>
       {canEdit && (
         <button
+          type="button"
           className="button"
           disabled={busy || !candidates.length}
           onClick={async () => {

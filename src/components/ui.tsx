@@ -58,6 +58,12 @@ export function Modal({
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          onClose()
+        }
+      }}
     >
       <div className="modal-inner">
         <header className="modal-heading">
@@ -65,7 +71,7 @@ export function Modal({
             <h2 id={id}>{title}</h2>
             {subtitle && <p>{subtitle}</p>}
           </div>
-          <button className="icon-button" onClick={onClose} aria-label="关闭弹窗">
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭弹窗">
             <X size={19} />
           </button>
         </header>

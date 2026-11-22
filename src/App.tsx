@@ -167,6 +167,7 @@ function WorkspaceApp() {
     return () => window.removeEventListener('hashchange', handler)
   }, [])
   useEffect(() => {
+    if (loading) return
     const section = page === 'settings' ? hash.split('/')[2] : ''
     const targetId =
       section === 'diagnostics'
@@ -205,14 +206,14 @@ function WorkspaceApp() {
       setIsMobile(media.matches)
       setMenuOpen(false)
     }
-    const escape = (e: KeyboardEvent) => {
+    const onEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setMenuOpen(false)
     }
     media.addEventListener('change', resize)
-    window.addEventListener('keydown', escape)
+    window.addEventListener('keydown', onEscape)
     return () => {
       media.removeEventListener('change', resize)
-      window.removeEventListener('keydown', escape)
+      window.removeEventListener('keydown', onEscape)
     }
   }, [])
   useEffect(() => {
@@ -229,10 +230,10 @@ function WorkspaceApp() {
     },
     [],
   )
-  useEffect(
-    () => setOperationError(''),
-    [createOpen, editing, renaming, share, trashing, aiProposal],
-  )
+  useEffect(() => {
+    void [createOpen, editing, renaming, share, trashing, aiProposal]
+    setOperationError('')
+  }, [createOpen, editing, renaming, share, trashing, aiProposal])
   function notify(text: string, failed = false) {
     setToastError(failed)
     setToast(text)
@@ -359,21 +360,22 @@ function WorkspaceApp() {
     <div className={`app-shell ${canEdit ? '' : 'read-only-workspace'}`} aria-busy={busy}>
       {menuOpen && (
         <button
+          type="button"
           className="sidebar-backdrop"
           onClick={() => setMenuOpen(false)}
           aria-label="收起导航"
         />
       )}
       <aside inert={isMobile && !menuOpen} className={`sidebar ${menuOpen ? 'open' : ''}`}>
-        <a
+        <button
+          type="button"
           className="brand-link"
-          href="#/overview"
           onClick={() => navigate('overview')}
           aria-label="集屿首页"
         >
           <Brand />
-        </a>
-        <button className="workspace-switch" onClick={() => navigate('settings')}>
+        </button>
+        <button type="button" className="workspace-switch" onClick={() => navigate('settings')}>
           <span className="workspace-avatar">{workspace.displayName.slice(0, 1)}</span>
           <span>
             我的工作空间<small>个人工作台</small>
@@ -384,6 +386,7 @@ function WorkspaceApp() {
         <nav aria-label="主导航">
           {navigation.map((n) => (
             <button
+              type="button"
               className={page === n.id ? 'active' : ''}
               key={n.id}
               onClick={() => {
@@ -401,13 +404,18 @@ function WorkspaceApp() {
         </nav>
         <p className="nav-caption second">管理</p>
         <nav aria-label="文件恢复">
-          <button className={page === 'trash' ? 'active' : ''} onClick={() => navigate('trash')}>
+          <button
+            type="button"
+            className={page === 'trash' ? 'active' : ''}
+            onClick={() => navigate('trash')}
+          >
             <Trash2 size={18} strokeWidth={1.7} />
             <span>回收站</span>
           </button>
         </nav>
         <nav aria-label="工作空间管理">
           <button
+            type="button"
             className={page === 'storage' ? 'active' : ''}
             onClick={() => navigate('storage')}
           >
@@ -415,6 +423,7 @@ function WorkspaceApp() {
             <span>存储空间</span>
           </button>
           <button
+            type="button"
             className={page === 'settings' ? 'active' : ''}
             onClick={() => navigate('settings')}
           >
@@ -438,18 +447,18 @@ function WorkspaceApp() {
             <div className="progress">
               <span style={{ width: `${usedPercent}%` }} />
             </div>
-            <button onClick={() => navigate('storage')}>
+            <button type="button" onClick={() => navigate('storage')}>
               管理存储空间
               <ArrowUpRight size={13} />
             </button>
             <small>含回收站 · 收集配额</small>
           </div>
-          <button className="sidebar-help" onClick={() => setHelp(true)}>
+          <button type="button" className="sidebar-help" onClick={() => setHelp(true)}>
             <CircleHelp size={16} />
             <span>使用指南</span>
             <ArrowUpRight size={13} />
           </button>
-          <button className="account" onClick={() => navigate('settings')}>
+          <button type="button" className="account" onClick={() => navigate('settings')}>
             <span className="account-avatar">
               {(user?.displayName || workspace.displayName).slice(0, 1)}
             </span>
@@ -471,6 +480,7 @@ function WorkspaceApp() {
         <header className="topbar">
           <div className="breadcrumb">
             <button
+              type="button"
               className="icon-button mobile-menu"
               onClick={() => setMenuOpen(true)}
               aria-label="展开导航"
@@ -509,6 +519,7 @@ function WorkspaceApp() {
             </form>
             {canEdit && !aiOpen && (
               <button
+                type="button"
                 className="mobile-ai-entry button"
                 onClick={() => openAssistant()}
                 aria-label="打开集屿 AI 助手"
@@ -519,6 +530,7 @@ function WorkspaceApp() {
             )}
             <div className="notification-container" ref={notificationRef}>
               <button
+                type="button"
                 className={`icon-button notification-button ${notifications ? 'on' : ''}`}
                 aria-label="查看最近动态"
                 aria-expanded={notifications}
@@ -557,6 +569,7 @@ function WorkspaceApp() {
                 : '尚未更新'}
             </span>
             <button
+              type="button"
               className="text-button"
               disabled={refreshing || busy}
               onClick={() => void refresh()}
@@ -573,7 +586,7 @@ function WorkspaceApp() {
           {error && (
             <div className="error-banner" role="alert">
               {error}
-              <button className="text-button" onClick={() => void refresh()}>
+              <button type="button" className="text-button" onClick={() => void refresh()}>
                 重新连接
               </button>
             </div>
@@ -587,6 +600,7 @@ function WorkspaceApp() {
             <div className="action-notice">
               <span>最近的批量整理可撤销</span>
               <button
+                type="button"
                 className="text-button"
                 onClick={async () => {
                   if (await action(`/api/files/rename/${workspace.lastRenameId}/undo`, {}))
@@ -611,7 +625,11 @@ function WorkspaceApp() {
                   <p>收集、整理、妥善存放。把时间留给更重要的事。</p>
                 </div>
                 {canEdit && (
-                  <button className="button primary" onClick={() => startCollection()}>
+                  <button
+                    type="button"
+                    className="button primary"
+                    onClick={() => startCollection()}
+                  >
                     <Plus size={17} />
                     新建收集
                   </button>
@@ -669,7 +687,7 @@ function WorkspaceApp() {
                   <p>
                     {pending}
                     <small>份</small>
-                    <button onClick={() => navigate('tools')}>
+                    <button type="button" onClick={() => navigate('tools')}>
                       去整理
                       <ArrowUpRight size={13} />
                     </button>
@@ -691,7 +709,11 @@ function WorkspaceApp() {
                   <h2>
                     进行中的收集<span className="count-badge">{active.length}</span>
                   </h2>
-                  <button className="text-button" onClick={() => navigate('collections')}>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => navigate('collections')}
+                  >
                     全部收集
                     <ArrowRight size={15} />
                   </button>
@@ -719,6 +741,7 @@ function WorkspaceApp() {
                     <span>每一份新提交，都在这里</span>
                   </div>
                   <button
+                    type="button"
                     className="text-button"
                     onClick={() => {
                       setCollectionId('')
@@ -739,7 +762,12 @@ function WorkspaceApp() {
                   <h3>有些整理，一句话就好。</h3>
                   <p>试着说「帮我统一文件名」，先看看集屿 AI 的整理建议。</p>
                 </div>
-                <button className="text-button" disabled={!canEdit} onClick={() => openAssistant()}>
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={!canEdit}
+                  onClick={() => openAssistant()}
+                >
                   和集屿 AI 聊聊
                   <ArrowUpRight size={15} />
                 </button>
@@ -783,7 +811,7 @@ function WorkspaceApp() {
             ) : (
               <>
                 <Empty title="没有找到这项收集" text="任务可能已被重置，请返回收集列表查看。" />
-                <button className="button" onClick={() => navigate('collections')}>
+                <button type="button" className="button" onClick={() => navigate('collections')}>
                   返回全部收集
                 </button>
               </>
@@ -800,12 +828,16 @@ function WorkspaceApp() {
                 </div>
                 {canEdit &&
                   (currentCollection ? (
-                    <button className="button primary" onClick={() => setShare(currentCollection)}>
+                    <button
+                      type="button"
+                      className="button primary"
+                      onClick={() => setShare(currentCollection)}
+                    >
                       <Link size={16} />
                       分享收集
                     </button>
                   ) : (
-                    <button className="button primary" onClick={openRename}>
+                    <button type="button" className="button primary" onClick={openRename}>
                       <WandSparkles size={16} />
                       批量重命名
                     </button>
@@ -814,6 +846,7 @@ function WorkspaceApp() {
               <div className="files-view-header">
                 <div className="files-tabs">
                   <button
+                    type="button"
                     className={!collectionId ? 'active' : ''}
                     onClick={() => {
                       setCollectionId('')
@@ -840,6 +873,7 @@ function WorkspaceApp() {
                 </div>
                 {currentCollection && (
                   <button
+                    type="button"
                     className="text-button"
                     onClick={() => openCollection(currentCollection.id)}
                   >
@@ -852,6 +886,7 @@ function WorkspaceApp() {
                 <div className="search-result-note">
                   搜索「{search}」
                   <button
+                    type="button"
                     className="icon-button"
                     aria-label="清除搜索"
                     onClick={() => setSearch('')}
@@ -912,7 +947,7 @@ function WorkspaceApp() {
         </main>
       </div>
       {canEdit && !aiOpen && (
-        <button className="ai-fab" onClick={() => openAssistant()}>
+        <button type="button" className="ai-fab" onClick={() => openAssistant()}>
           <Sparkles size={19} strokeWidth={1.6} />
           <span>集屿 AI</span>
           <span className="ai-fab-dot" />
@@ -1049,10 +1084,16 @@ function WorkspaceApp() {
             </p>
           )}
           <footer className="modal-footer">
-            <button className="button" disabled={busy} onClick={() => setTrashing(null)}>
+            <button
+              type="button"
+              className="button"
+              disabled={busy}
+              onClick={() => setTrashing(null)}
+            >
               取消
             </button>
             <button
+              type="button"
               className="button primary"
               disabled={busy}
               onClick={async () => {
@@ -1095,7 +1136,7 @@ function WorkspaceApp() {
             在存储空间连接本机或云端，收集规则中选择目标；云端同步状态可单独查看。本机保留完整副本。设置页可管理成员、模型与自动备份。
           </div>
           <footer className="modal-footer">
-            <button className="button primary" onClick={() => setHelp(false)}>
+            <button type="button" className="button primary" onClick={() => setHelp(false)}>
               开始使用
               <ArrowRight size={15} />
             </button>

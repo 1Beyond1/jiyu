@@ -72,6 +72,7 @@ export function CollectionForm({
       .catch(() => setStorageError('暂时无法读取云端连接，可继续选择本机，或关闭后重试。'))
   }, [])
   useEffect(() => {
+    void step
     stepHeading.current?.focus()
     stepHeading.current?.scrollIntoView({ block: 'nearest' })
   }, [step])

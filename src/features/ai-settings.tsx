@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Check, FlaskConical, RefreshCw, Sparkles } from 'lucide-react'
 import type { AIRun, AISettings } from '../types'
 import { api } from '../lib/api'
@@ -13,7 +13,7 @@ export function AISettingsPanel() {
     [busy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false),
     [remove, setRemove] = useState(false)
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const [settings, runs] = await Promise.all([
         api<AISettings>('/api/ai/settings'),
@@ -26,10 +26,10 @@ export function AISettingsPanel() {
     } catch (e) {
       setError((e as Error).message)
     }
-  }
+  }, [])
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
   function update(changes: Partial<AISettings>) {
     setSettings((old) => (old ? { ...old, ...changes } : old))
     setDirty(true)
@@ -60,7 +60,7 @@ export function AISettingsPanel() {
         <>
           <p>{error || '正在读取模型设置…'}</p>
           {error && (
-            <button className="button" onClick={() => void load()}>
+            <button type="button" className="button" onClick={() => void load()}>
               <RefreshCw size={15} />
               重新读取
             </button>
@@ -270,10 +270,16 @@ export function AISettingsPanel() {
           {remove && (
             <div className="rotate-confirm">
               <p>移除凭证会同时停用 AI；文件与历史命名操作保留。</p>
-              <button className="button" disabled={busy} onClick={() => setRemove(false)}>
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                onClick={() => setRemove(false)}
+              >
                 取消
               </button>
               <button
+                type="button"
                 className="button"
                 disabled={busy}
                 onClick={async () => {

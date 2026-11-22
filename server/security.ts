@@ -1,5 +1,6 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto'
 import { promisify } from 'node:util'
+import { hasUnsafeFilenameChars } from '../src/lib/text-safety.ts'
 
 const scrypt = promisify(scryptCallback)
 export const token = () => randomBytes(32).toString('base64url')
@@ -46,7 +47,7 @@ export function object(value: unknown): Record<string, unknown> {
 
 export function safeName(value: unknown) {
   const name = text(value, '文件名', 200)
-  if (/[<>:"/\\|?*\x00-\x1f\x7f]/.test(name) || name === '.' || name === '..' || /[. ]$/.test(name))
+  if (hasUnsafeFilenameChars(name) || name === '.' || name === '..' || /[. ]$/.test(name))
     throw new HttpError(400, '文件名包含不支持的字符')
   return name
 }

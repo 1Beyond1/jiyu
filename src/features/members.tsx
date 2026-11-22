@@ -29,6 +29,7 @@ export function MembersPanel() {
           <p>管理员管理设置和成员，编辑者收集整理，只读成员查看与下载。</p>
         </div>
         <button
+          type="button"
           className="button"
           onClick={() => {
             setEditing({ username: '', displayName: '', role: 'editor', disabled: false })
@@ -60,6 +61,7 @@ export function MembersPanel() {
               </div>
               {canManage ? (
                 <button
+                  type="button"
                   className="text-button"
                   onClick={() => {
                     setEditing(user)
@@ -178,7 +180,9 @@ export function MembersPanel() {
                 <button type="button" className="button" onClick={() => setEditing(null)}>
                   取消
                 </button>
-                <button className="button primary">{busy ? '正在保存…' : '保存成员'}</button>
+                <button type="submit" className="button primary">
+                  {busy ? '正在保存…' : '保存成员'}
+                </button>
               </footer>
             </fieldset>
           </form>

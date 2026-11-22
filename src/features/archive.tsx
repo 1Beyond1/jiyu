@@ -20,18 +20,20 @@ export function ArchiveModal({ files, onClose }: { files: CollectedFile[]; onClo
     },
     [],
   )
+  const planId = plan?.id
+  const planStatus = plan?.status
   useEffect(() => {
-    if (!started || !plan || !['ready', 'streaming'].includes(plan.status)) return
+    if (!started || !planId || !planStatus || !['ready', 'streaming'].includes(planStatus)) return
     let stopped = false,
       timer: ReturnType<typeof setTimeout>,
       attempts = 0
     const poll = async () => {
       try {
         const status = await api<{ status: ArchiveStatus; error?: string }>(
-          `/api/archives/${plan.id}`,
+          `/api/archives/${planId}`,
         )
         if (stopped) return
-        setPlan((old) => (old?.id === plan.id ? { ...old, ...status } : old))
+        setPlan((old) => (old?.id === planId ? { ...old, ...status } : old))
         if (status.status === 'ready' && ++attempts >= 8) {
           setError('浏览器尚未开始接收，请重新生成预览后重试。')
           setStarted(false)
@@ -51,7 +53,7 @@ export function ArchiveModal({ files, onClose }: { files: CollectedFile[]; onClo
       stopped = true
       clearTimeout(timer)
     }
-  }, [started, plan?.id, plan?.status])
+  }, [started, planId, planStatus])
   async function discard() {
     const old = plan
     setPlan(null)
@@ -154,11 +156,12 @@ export function ArchiveModal({ files, onClose }: { files: CollectedFile[]; onClo
       )}
       {transferring && <p className="field-hint">关闭此窗口不会停止已开始的下载。</p>}
       <footer className="modal-footer">
-        <button className="button" onClick={onClose}>
+        <button type="button" className="button" onClick={onClose}>
           关闭
         </button>
         {transferring ? (
           <button
+            type="button"
             className="button"
             disabled={busy}
             onClick={async () => {
@@ -193,7 +196,12 @@ export function ArchiveModal({ files, onClose }: { files: CollectedFile[]; onClo
             开始下载 ZIP
           </a>
         ) : (
-          <button className="button primary" disabled={busy} onClick={() => void prepare()}>
+          <button
+            type="button"
+            className="button primary"
+            disabled={busy}
+            onClick={() => void prepare()}
+          >
             {plan || error ? <RefreshCw size={15} /> : <FolderArchive size={15} />}
             {busy ? '正在生成预览…' : plan || error ? '重新生成预览' : '生成归档预览'}
           </button>

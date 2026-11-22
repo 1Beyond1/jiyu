@@ -161,7 +161,7 @@ export function SampleTourCard({
           {error}
         </p>
       )}
-      <button className="button primary" disabled={busy} onClick={() => void start()}>
+      <button type="button" className="button primary" disabled={busy} onClick={() => void start()}>
         {busy ? '正在生成示例…' : '生成示例任务'}
         <ArrowRight size={16} />
       </button>
@@ -201,6 +201,7 @@ export function SampleTourBar({
         {s.n === 2 ? (
           <>
             <button
+              type="button"
               className="button"
               onClick={() => downloadText('补充后的报名表.txt', sample.revisedForm)}
             >
@@ -208,6 +209,7 @@ export function SampleTourBar({
               补充后的报名表
             </button>
             <button
+              type="button"
               className="button"
               onClick={() => downloadText('补充后的作品说明.txt', sample.revisedStatement)}
             >
@@ -221,6 +223,7 @@ export function SampleTourBar({
           </>
         ) : (
           <button
+            type="button"
             className="button primary"
             onClick={() => {
               onOpen(c.id)
@@ -238,6 +241,7 @@ export function SampleTourBar({
           </button>
         )}
         <button
+          type="button"
           className="text-button"
           onClick={() => {
             saveSampleTour('')

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowRight, Check, Info, WandSparkles } from 'lucide-react'
 import { FileIcon, Modal } from '../components/ui'
+import { hasUnsafeFilenameChars } from '../lib/text-safety'
 import type { CollectedFile, Collection } from '../types'
 
 export function getRenames(files: CollectedFile[], collections: Collection[], pattern: string) {
@@ -54,10 +55,10 @@ export function RenameModal({
   }
   const invalid =
     !pattern.trim() ||
-    /[<>:"/\\|?*\x00-\x1f]/.test(pattern) ||
+    hasUnsafeFilenameChars(pattern, false) ||
     /[{}]/.test(pattern.replace(/\{(任务|提交人|序号|原名|日期)\}/g, '')) ||
     changes.some(
-      (c) => c.name.length > 200 || !c.name.trim() || /[<>:"/\\|?*\x00-\x1f]/.test(c.name),
+      (c) => c.name.length > 200 || !c.name.trim() || hasUnsafeFilenameChars(c.name, false),
     )
   const duplicate = changes.some((c) => {
     const file = selectedById.get(c.id)
@@ -72,16 +73,11 @@ export function RenameModal({
     >
       <label className="field">
         命名规则
-        <input
-          autoFocus
-          value={pattern}
-          onChange={(e) => setPattern(e.target.value)}
-          aria-label="命名规则"
-        />
+        <input value={pattern} onChange={(e) => setPattern(e.target.value)} aria-label="命名规则" />
       </label>
       <div className="token-list">
         {['{任务}', '{提交人}', '{序号}', '{原名}', '{日期}'].map((token) => (
-          <button key={token} onClick={() => setPattern(pattern + token)}>
+          <button type="button" key={token} onClick={() => setPattern(pattern + token)}>
             {token}
           </button>
         ))}
@@ -127,10 +123,11 @@ export function RenameModal({
         </p>
       )}
       <footer className="modal-footer">
-        <button className="button" disabled={busy} onClick={onClose}>
+        <button type="button" className="button" disabled={busy} onClick={onClose}>
           取消
         </button>
         <button
+          type="button"
           className="button primary"
           disabled={invalid || duplicate || !files.length || busy}
           onClick={() => onApply(changes)}

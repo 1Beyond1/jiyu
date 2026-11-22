@@ -14,6 +14,7 @@ import type {
 } from '../src/types.ts'
 import type { Store } from './store.ts'
 import { digest, HttpError, object } from './security.ts'
+import { sanitizeFilenameChars } from '../src/lib/text-safety.ts'
 
 const ttl = 10 * 60 * 1000,
   maxBytes = 10 * 1024 ** 3
@@ -28,9 +29,7 @@ function shorten(value: string, bytes: number) {
 }
 function component(value: string, bytes: number) {
   let name =
-    value
-      .normalize('NFC')
-      .replace(/[<>:"/\\|?*\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g, '_')
+    sanitizeFilenameChars(value.normalize('NFC'), '_', { stripBidi: true })
       .trim()
       .replace(/^\.+|[. ]+$/g, '') || '未命名'
   name = shorten(name, bytes).replace(/[. ]+$/g, '') || '未命名'

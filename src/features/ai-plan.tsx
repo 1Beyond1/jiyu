@@ -72,10 +72,10 @@ export function AIPlan({
         </p>
       )}
       <footer className="modal-footer">
-        <button className="button" disabled={busy} onClick={onClose}>
+        <button type="button" className="button" disabled={busy} onClick={onClose}>
           暂不应用
         </button>
-        <button className="button primary" disabled={busy} onClick={onApply}>
+        <button type="button" className="button primary" disabled={busy} onClick={onApply}>
           <Check size={15} />
           {busy ? '正在保存…' : `确认整理 ${count} 个文件`}
         </button>

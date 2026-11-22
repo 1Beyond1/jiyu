@@ -29,7 +29,7 @@ export function UploadList({
 }) {
   if (!files.length) return null
   return (
-    <div className="upload-file-list" aria-label="文件上传状态">
+    <section className="upload-file-list" aria-label="文件上传状态">
       {files.map((f, i) => {
         const item = feedback?.files[i],
           state = item?.state || 'queued'
@@ -39,7 +39,7 @@ export function UploadList({
             ? 100
             : 0
         return (
-          <div className={`upload-file ${state}`} key={`${f.name}-${i}`}>
+          <div className={`upload-file ${state}`} key={`${f.name}-${f.size}-${f.lastModified}`}>
             <FileIcon name={f.name} />
             <div className="upload-file-body">
               <strong>{f.name}</strong>
@@ -82,6 +82,6 @@ export function UploadList({
           重试会先核对已传分片，再继续整批提交。更换姓名、字段或文件清单会开始新批次。
         </p>
       )}
-    </div>
+    </section>
   )
 }

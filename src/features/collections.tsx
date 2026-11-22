@@ -35,7 +35,7 @@ export function CollectionCard({
           {collectionStateNames[state]}
         </span>
       </div>
-      <button className="card-title" onClick={() => onOpen(c.id)}>
+      <button type="button" className="card-title" onClick={() => onOpen(c.id)}>
         {c.title}
         <ArrowUpRight size={16} />
       </button>
@@ -65,7 +65,12 @@ export function CollectionCard({
           {c.deadline.slice(5).replace('-', '月')}日截止
         </span>
         {canEdit && (
-          <button className="share-button" onClick={() => onShare(c)} aria-label={`分享${c.title}`}>
+          <button
+            type="button"
+            className="share-button"
+            onClick={() => onShare(c)}
+            aria-label={`分享${c.title}`}
+          >
             <Link size={14} />
             <span>分享收集</span>
           </button>
@@ -100,7 +105,7 @@ export function Collections({
           <p>一个链接收齐文件，进展尽在掌握。</p>
         </div>
         {canEdit && (
-          <button className="button primary" onClick={onCreate}>
+          <button type="button" className="button primary" onClick={onCreate}>
             <Plus size={17} />
             新建收集
           </button>
@@ -115,6 +120,7 @@ export function Collections({
           ['expired', '已截止'],
         ].map(([value, label]) => (
           <button
+            type="button"
             className={tab === value ? 'active' : ''}
             key={value}
             onClick={() => setTab(value)}
@@ -138,7 +144,7 @@ export function Collections({
             />
           ))}
           {canEdit && (
-            <button className="create-card" onClick={onCreate}>
+            <button type="button" className="create-card" onClick={onCreate}>
               <span>
                 <Plus size={24} />
               </span>
@@ -191,6 +197,7 @@ export function ShareCollection({
         <div className="copy-field">
           <input value={url} readOnly aria-label="收集链接" />
           <button
+            type="button"
             className="icon-button"
             aria-label="复制链接"
             onClick={async () => {
@@ -249,10 +256,11 @@ export function ShareCollection({
       {rotate ? (
         <div className="rotate-confirm">
           <p>重新生成后，之前分享的链接会立即失效。</p>
-          <button className="button" disabled={busy} onClick={() => setRotate(false)}>
+          <button type="button" className="button" disabled={busy} onClick={() => setRotate(false)}>
             取消
           </button>
           <button
+            type="button"
             className="button"
             disabled={busy}
             onClick={() => {
@@ -265,12 +273,12 @@ export function ShareCollection({
           </button>
         </div>
       ) : (
-        <button className="text-button" onClick={() => setRotate(true)}>
+        <button type="button" className="text-button" onClick={() => setRotate(true)}>
           更换收集链接
         </button>
       )}
       <footer className="modal-footer">
-        <button className="button" onClick={onClose}>
+        <button type="button" className="button" onClick={onClose}>
           完成
         </button>
         <a href={url} target="_blank" rel="noreferrer" className="button primary">

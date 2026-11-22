@@ -14,6 +14,7 @@ import { StandardStorage, BaiduStorage } from './storage-adapters.ts'
 import type { StorageCredentials } from './storage-adapters.ts'
 import { DriveStorage } from './drive-storage.ts'
 import { exchangeToken, registerDriveOAuth } from './drive-oauth.ts'
+import { hasControlChar, hasUnsafeStorageRootChars } from '../src/lib/text-safety.ts'
 
 type Provider = StorageProfile['id']
 interface SavedProfile extends Omit<StorageProfile, 'hasCredentials'> {
@@ -38,7 +39,7 @@ function rootInput(value: unknown) {
   if (
     root.includes('\\') ||
     root.split('/').some((s) => s === '.' || s === '..') ||
-    /[\x00-\x1f<>?|#%]/.test(root)
+    hasUnsafeStorageRootChars(root)
   )
     throw new HttpError(400, '目标目录包含无效路径字符')
   return '/' + root.split('/').filter(Boolean).join('/')
@@ -332,7 +333,7 @@ export function registerStorage(
     for (const key of keys) {
       const value = supplied[key]
       if (typeof value === 'string' && value.trim()) {
-        if (/[\x00-\x1f\x7f]/.test(value)) throw new HttpError(400, '连接凭证不能包含控制字符')
+        if (hasControlChar(value)) throw new HttpError(400, '连接凭证不能包含控制字符')
         ;(next as Record<string, unknown>)[key] = text(value, '连接凭证', 8192)
       } else if (!changedAccount)
         (next as Record<string, unknown>)[key] = (prior as Record<string, unknown>)[key]

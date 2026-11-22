@@ -13,6 +13,10 @@ export function useMaterialState(
   const binding = materialSnapshotKey(c, files) + JSON.stringify(c.materials)
   const latestBinding = useRef(binding)
   latestBinding.current = binding
+  const collectionRef = useRef(c)
+  collectionRef.current = c
+  const filesRef = useRef(files)
+  filesRef.current = files
   const sync = useRef(onSync)
   sync.current = onSync
   const generation = useRef(0),
@@ -25,7 +29,10 @@ export function useMaterialState(
   const [reading, setReading] = useState(false),
     [error, setError] = useState(''),
     [retry, setRetry] = useState(0)
+  const collectionId = c.id
+  const materialRevision = c.materialRevision || ''
   useEffect(() => {
+    void [refreshKey, retry]
     const ticket = ++generation.current,
       controller = new AbortController()
     setReading(true)
@@ -37,12 +44,12 @@ export function useMaterialState(
     void (async () => {
       try {
         const report = await api<MaterialStateReport>(
-          `/api/collections/${encodeURIComponent(c.id)}/materials?revision=${encodeURIComponent(c.materialRevision || '')}`,
+          `/api/collections/${encodeURIComponent(collectionId)}/materials?revision=${encodeURIComponent(materialRevision)}`,
           'GET',
           undefined,
           controller.signal,
         )
-        const rows = await readMaterialRows(report, c, files)
+        const rows = await readMaterialRows(report, collectionRef.current, filesRef.current)
         if (current()) {
           setResult({ binding, report, rows })
           syncedBinding.current = ''
@@ -64,7 +71,7 @@ export function useMaterialState(
     }
     // Binding includes rule token, roster, requirements and every active file's version.
     // Refresh time triggers revalidation even when a workspace read has identical records.
-  }, [binding, refreshKey, retry, c.id, c.materialRevision])
+  }, [binding, refreshKey, retry, collectionId, materialRevision])
   const visible = result?.binding === binding ? result : null
   return {
     report: visible?.report || null,

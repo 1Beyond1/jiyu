@@ -163,13 +163,7 @@ export function SaveTemplate({
         ) : (
           <label className="field">
             模板名称
-            <input
-              required
-              maxLength={40}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoFocus
-            />
+            <input required maxLength={40} value={name} onChange={(e) => setName(e.target.value)} />
           </label>
         )}
         <div className="form-note">
@@ -185,7 +179,7 @@ export function SaveTemplate({
             {saved ? '完成' : '取消'}
           </button>
           {!saved && (
-            <button className="button primary" disabled={busy}>
+            <button type="submit" className="button primary" disabled={busy}>
               {busy ? '保存中…' : '保存模板'}
             </button>
           )}

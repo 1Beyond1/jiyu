@@ -29,6 +29,7 @@ export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
     [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   useEffect(() => {
+    void retry
     let alive = true
     const load = async () => {
       try {
@@ -58,7 +59,7 @@ export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
           <h1>{error ? '暂时无法打开这项收集' : '正在打开收集…'}</h1>
           <p>{error || '正在读取最新的收集规则。'}</p>
           {error && (
-            <button className="button" onClick={() => setRetry((n) => n + 1)}>
+            <button type="button" className="button" onClick={() => setRetry((n) => n + 1)}>
               重新打开
             </button>
           )}
@@ -70,7 +71,7 @@ export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
       {error && (
         <div className="submission-refresh-error" role="alert">
           收集信息暂未更新：{error}。已选文件和上传进度已保留。
-          <button className="text-button" onClick={() => setRetry((n) => n + 1)}>
+          <button type="button" className="text-button" onClick={() => setRetry((n) => n + 1)}>
             重试读取
           </button>
         </div>
@@ -287,6 +288,7 @@ function Submission({
               <div className="form-note">
                 上次提交未取得回执，可直接确认结果，无需重新选择文件。
                 <button
+                  type="button"
                   className="button"
                   disabled={confirming}
                   onClick={async () => {

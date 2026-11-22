@@ -1,11 +1,10 @@
 import type { Collection } from '../types.ts'
+import { sanitizeFilenameChars } from './text-safety.ts'
 
 export const fileNameKey = (name: string) =>
   name.normalize('NFKC').trim().toLocaleLowerCase('en-US')
 const segment = (value: string) =>
-  value
-    .normalize('NFKC')
-    .replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '-')
+  sanitizeFilenameChars(value.normalize('NFKC'), '-')
     .replace(/[. ]+$/g, '')
     .trim()
     .slice(0, 45) || '未填写'

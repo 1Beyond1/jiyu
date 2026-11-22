@@ -8,6 +8,7 @@ import * as yauzl from 'yauzl'
 import type { Store } from './store.ts'
 import type { CollectedFile, DocumentInfo, FileContent } from '../src/types.ts'
 import { HttpError, object, text } from './security.ts'
+import { stripNonWhitespaceControlChars } from '../src/lib/text-safety.ts'
 
 const execute = promisify(execFile)
 const MAX_TEXT = 64000
@@ -300,7 +301,7 @@ export function registerContent(
         .run(f.id)
       try {
         const result = await extractor(f, join(store.dataDir, 'objects', key), controller.signal)
-        const body = result.text.replace(/[\x00-\x08\x0b\x0e-\x1f]/g, '').slice(0, MAX_TEXT)
+        const body = stripNonWhitespaceControlChars(result.text).slice(0, MAX_TEXT)
         store.transaction(() => {
           store.db.prepare('DELETE FROM content_search WHERE file_id=?').run(f.id)
           store.db.prepare('INSERT INTO content_search(file_id,body) VALUES (?,?)').run(f.id, body)

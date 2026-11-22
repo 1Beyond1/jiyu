@@ -17,6 +17,7 @@ import { tokenUsage } from './ai-usage.ts'
 import { publicGatewayDnsEnabled, resolvePublicGateway } from './ai-public-dns.ts'
 import { failureDiagnostics } from './ai-failure-diagnostics.ts'
 import type { AIFailureDiagnostics } from './ai-failure-diagnostics.ts'
+import { hasAsciiWhitespaceOrControl, hasUnsafeTagChars } from '../src/lib/text-safety.ts'
 
 interface SavedSettings {
   enabled: boolean
@@ -236,7 +237,7 @@ function managedState(): { settings: SavedSettings | null; warning?: string } {
     }
   }
   const key = rawKey.trim()
-  if (!key || key.length > 4096 || /[\x00-\x20\x7f]/.test(key))
+  if (!key || key.length > 4096 || hasAsciiWhitespaceOrControl(key))
     return {
       settings: null,
       warning: '环境变量 JIYU_AI_KEY 格式无效，已降级为未启用；请检查部署配置或手动填写模型设置。',
@@ -368,7 +369,7 @@ export function registerAI(
     const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
     if (new URL(baseUrl).origin !== new URL(old.baseUrl).origin && !apiKey)
       throw new HttpError(400, '更换服务商后请重新填写 API Key，不会把旧凭证发送给新地址')
-    if (apiKey && (apiKey.length > 4096 || /[\x00-\x20\x7f]/.test(apiKey)))
+    if (apiKey && (apiKey.length > 4096 || hasAsciiWhitespaceOrControl(apiKey)))
       throw new HttpError(400, 'API Key 格式无效')
     const managed = managedState().settings
     const useManaged =
@@ -686,7 +687,7 @@ export function registerAI(
                 typeof tag !== 'string' ||
                 !tag.trim() ||
                 tag.length > 20 ||
-                /[\x00-\x1f<>]/.test(tag) ||
+                hasUnsafeTagChars(tag) ||
                 tag.includes(apiKey),
             )
           )

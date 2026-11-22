@@ -88,15 +88,15 @@ test('容器原生 Tesseract 从真实 PNG 识别文字', { skip: !installed(ocr
       pixels = Buffer.alloc((width + 1) * height, 255)
     for (let y = 0; y < height; y++) pixels[y * (width + 1)] = 0
     ;[...'HELLO HELLO'].forEach((letter, index) => {
-      glyphs[letter]?.forEach((row, y) =>
-        [...row].forEach((bit, x) => {
+      glyphs[letter]?.forEach((row, y) => {
+        ;[...row].forEach((bit, x) => {
           if (bit === '1')
             for (let dy = 0; dy < scale; dy++)
               for (let dx = 0; dx < scale; dx++)
                 pixels[(30 + y * scale + dy) * (width + 1) + 1 + 10 + index * 55 + x * scale + dx] =
                   0
-        }),
-      )
+        })
+      })
     })
     const chunk = (type: string, data: Buffer) => {
       const kind = Buffer.from(type),

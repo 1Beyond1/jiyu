@@ -92,6 +92,7 @@ export function MaterialAIPanel({
     }
   }, [])
   useEffect(() => {
+    void [selectionKey, fileKey, c.materialRevision, scopeVersion]
     generation.current++
     controller.current?.abort()
     setBusy(false)
@@ -242,6 +243,7 @@ export function MaterialAIPanel({
         </p>
       )}
       <button
+        type="button"
         className="button"
         disabled={disabled || busy || !selected.length || selected.length > 10}
         onClick={() => void prepare()}
@@ -317,6 +319,7 @@ export function MaterialAIPanel({
             单独同意发送以上精确正文摘录
           </label>
           <button
+            type="button"
             className="button primary"
             disabled={
               disabled ||
@@ -335,6 +338,7 @@ export function MaterialAIPanel({
       )}
       {busy && (
         <button
+          type="button"
           className="text-button"
           onClick={() => {
             generation.current++
@@ -377,8 +381,11 @@ export function MaterialAIPanel({
                   <p>可能归属：{plan.preview.materials.find((m) => m.id === f.materialId)?.name}</p>
                 )}
                 <p className="field-hint">读取范围：{source.reason}</p>
-                {f.evidence.map((e, i) => (
-                  <div className="material-ai-evidence" key={i}>
+                {f.evidence.map((e) => (
+                  <div
+                    className="material-ai-evidence"
+                    key={`${e.fileId}-${e.start}-${e.end}-${e.quote}`}
+                  >
                     <small>
                       {source.name} · 第 {e.start + 1}–{e.end} 字
                     </small>
@@ -394,7 +401,12 @@ export function MaterialAIPanel({
                   </div>
                 ))}
                 {file && (
-                  <button className="button" disabled={busy} onClick={() => onDetail(file)}>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={busy}
+                    onClick={() => onDetail(file)}
+                  >
                     查看原文件 {source.name}
                   </button>
                 )}
@@ -424,6 +436,7 @@ export function MaterialAIPanel({
                   我已核对这份文件的原文依据，接下来人工决定
                 </label>
                 <button
+                  type="button"
                   className="button"
                   disabled={
                     disabled ||

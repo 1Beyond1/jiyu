@@ -1097,6 +1097,11 @@ svg {
   display: block;
   width: max-content;
   margin-left: 10px;
+  text-align: left;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
 }
 .brand {
   display: flex;
