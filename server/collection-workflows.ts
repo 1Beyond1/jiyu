@@ -101,6 +101,7 @@ export function collectionRules(
         [
           'owner',
           'collection',
+          'material',
           'date',
           'sequence',
           'original',
@@ -259,6 +260,7 @@ export function commitSubmission(
       c.received + i + 1,
       receipt.createdAt,
       occupied,
+      f.materialId,
     )
   })
   const data: SubmissionRecord = { owner, fields: context.fields, identity: person, receipt }

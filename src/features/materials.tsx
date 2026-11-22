@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { MessageSquareText } from 'lucide-react'
+import { ArrowRight, Download, Eye, FolderArchive, MessageSquareText } from 'lucide-react'
 import type { Collection, CollectedFile, MaterialOperation } from '../types'
 import { materialStateLabels, materialStateVersion } from '../lib/materials'
 import { safeRandomUUID } from '../lib/browser-crypto'
 import { downloadText, formatSize } from '../lib/workspace'
+import { ArchiveModal } from './archive'
 import { useAccount } from './auth'
+import { FilePreview } from './content'
 import { MaterialAIPanel } from './material-ai'
 import { ReminderModal } from './reminder-modal'
 import { useMaterialState } from './use-material-state'
@@ -63,6 +65,8 @@ export function MaterialWorkbench({
     [error, setError] = useState(''),
     [notice, setNotice] = useState('')
   const [aiReview, setAIReview] = useState<MaterialOperation['aiReview']>()
+  const [previewFileId, setPreviewFileId] = useState('')
+  const [archiveOpen, setArchiveOpen] = useState(false)
   const [reminder, setReminder] = useState<{ mode: 'group' | 'direct'; personId?: string } | null>(
     null,
   )
@@ -128,6 +132,17 @@ export function MaterialWorkbench({
     openPerson(first?.identity || '')
   }
   const person = rows.find((p) => p.identity === personId)
+  const previewFile =
+    person?.files.find((f) => f.id === previewFileId) ||
+    person?.files.find((f) => fileState(f) !== 'accepted') ||
+    person?.files[0] ||
+    null
+  const otherPendingPeople = (() => {
+    const idx = rows.findIndex((p) => p.identity === personId)
+    const ordered = idx >= 0 ? [...rows.slice(idx + 1), ...rows.slice(0, idx)] : rows
+    return ordered.filter((p) => p.identity !== personId && p.status === 'pending')
+  })()
+  const nextPendingPerson = otherPendingPeople[0] || null
   const draft = drafts[personId] || { materialId: '', decision: '' as const, note: '' }
   const setDraft = (value: Partial<Draft>) => {
     setDrafts((old) => ({ ...old, [personId]: { ...draft, ...value } }))
@@ -163,10 +178,11 @@ export function MaterialWorkbench({
         (filter === 'duplicate' && p.duplicateCount > 0) ||
         (filter === 'needs_changes' && p.status === 'needs_changes')),
   )
-  function openPerson(identity: string) {
+  function openPerson(identity: string, preferredFileId = '') {
     if (busy || (identity && !state.ready)) return
     setAIReview(undefined)
     setPersonId(identity)
+    setPreviewFileId(preferredFileId)
     setSelection({ rulesRevision: c.materialRevision || '', files: [] })
     setError('')
     setNotice('')
@@ -182,7 +198,7 @@ export function MaterialWorkbench({
     setError('')
     setNotice('')
   }
-  async function apply(kind: 'classify' | 'review') {
+  async function apply(kind: 'classify' | 'review', advanceNext = false) {
     if (busy || !state.ready || !canEdit || !chosen.length || staleSelection) return
     if (kind === 'review' && !draft.decision) {
       setError('请先选择人工核对结论。')
@@ -211,6 +227,7 @@ export function MaterialWorkbench({
             : {}),
         },
       }
+    const nextTarget = advanceNext ? nextPendingPerson : null
     setBusy(true)
     setError('')
     setNotice('')
@@ -220,9 +237,23 @@ export function MaterialWorkbench({
       if (kind === 'review')
         setDrafts((old) => ({ ...old, [personId]: { materialId: '', decision: '', note: '' } }))
       state.retry()
-      setNotice(
-        kind === 'classify' ? '材料归属已保存；变化的文件需重新核对。' : '人工核对结果已保存。',
-      )
+      if (advanceNext && nextTarget) {
+        setAIReview(undefined)
+        setPersonId(nextTarget.identity)
+        setPreviewFileId('')
+        pending.current = null
+        setNotice(
+          `人工核对结果已保存，已跳转至下一位待核对：${nextTarget.identity}${nextTarget.owner && nextTarget.owner !== nextTarget.identity ? `（${nextTarget.owner}）` : ''}。`,
+        )
+      } else {
+        setNotice(
+          kind === 'classify'
+            ? '材料归属已保存；变化的文件需重新核对。'
+            : advanceNext
+              ? '人工核对结果已保存，当前已无更多待核对参与人。'
+              : '人工核对结果已保存。',
+        )
+      }
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -389,6 +420,16 @@ export function MaterialWorkbench({
           </select>
         </label>
         <div className="button-row">
+          <button
+            type="button"
+            className="button"
+            disabled={busy || !files.length || files.length > 500}
+            title="按材料项分目录打包，可勾选仅打包人工核对通过文件"
+            onClick={() => setArchiveOpen(true)}
+          >
+            <FolderArchive size={15} />
+            定向打包
+          </button>
           {canEdit && (
             <button
               type="button"
@@ -568,255 +609,401 @@ export function MaterialWorkbench({
               <h3>
                 {person.identity} · {person.owner || '尚未提交'}
               </h3>
-              <p>这位参与人的材料与人工处理记录。</p>
+              <p>左侧内联预览图片 / PDF / 文本与 DOCX，右侧归属与人工核对表单，支持连续流转。</p>
             </div>
-            <button
-              type="button"
-              className="text-button"
-              disabled={busy}
-              onClick={() => openPerson('')}
-            >
-              收起详情
-            </button>
-          </div>
-          <div className="material-person-next">
-            <strong>{personAction(person.status)}</strong>
-            <p>
-              {person.status === 'needs_changes'
-                ? '下方保留具体补充原因。本人替换后，新文件会重新等待核对。'
-                : person.status === 'missing'
-                  ? `尚缺：${
-                      person.slots
-                        .filter((s) => s.requirement.required && !s.files.length)
-                        .map((s) => s.requirement.name)
-                        .join('、') || '存在重复内容，请查看逐项记录'
-                    }。可分享原链接，请本人补齐。`
-                  : person.status === 'unclassified'
-                    ? '先选择文件并确认材料归属，再进行人工核对。'
-                    : person.reviewComplete
-                      ? '当前材料已人工核对通过。文件或规则变化后，旧结论不会自动沿用。'
-                      : '先查看或下载文件，再勾选要处理的文件，明确选择核对结论。'}
-            </p>
-            {canEdit && !person.reviewComplete && (
-              <div className="button-row">
+            <div className="button-row">
+              {nextPendingPerson && (
                 <button
                   type="button"
                   className="button"
-                  onClick={() => setReminder({ mode: 'direct', personId: person.identity })}
-                >
-                  <MessageSquareText size={15} />
-                  生成单人催交话术
-                </button>
-                {!person.receivedComplete && (
-                  <button type="button" className="button" onClick={onShare}>
-                    分享链接，提醒本人补交
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-          {[
-            ...person.slots.map((s) => ({
-              id: s.requirement.id,
-              title: `${s.requirement.name} · ${s.requirement.required ? '必需' : '选填'}`,
-              description: s.requirement.description,
-              files: s.files,
-            })),
-            ...(person.unclassified.length
-              ? [
-                  {
-                    id: 'unknown',
-                    title: '未分类 / 原材料项已移除',
-                    description: '请先明确归属，不能直接标记核对通过。',
-                    files: person.unclassified,
-                  },
-                ]
-              : []),
-          ].map((group) => (
-            <div className="material-detail-group" key={group.id}>
-              <h4>{group.title}</h4>
-              <p>{group.description}</p>
-              {!group.files.length ? (
-                <p className="material-missing">
-                  {group.id !== 'unknown' && c.materials!.find((m) => m.id === group.id)?.required
-                    ? '尚缺此项材料'
-                    : '选填项尚未提交'}
-                </p>
-              ) : (
-                group.files.map((f) => (
-                  <article className="material-file" key={f.id}>
-                    <div className="material-file-heading">
-                      {canEdit && (
-                        <input
-                          type="checkbox"
-                          aria-label={`选择核对${f.name}`}
-                          disabled={busy || !state.ready}
-                          checked={selection.files.some((s) => s.id === f.id)}
-                          onChange={(e) =>
-                            selectFiles(
-                              e.target.checked
-                                ? [...chosen, f]
-                                : chosen.filter((v) => v.id !== f.id),
-                            )
-                          }
-                        />
-                      )}
-                      <strong>{f.name}</strong>
-                      <span className={`mstate ${fileState(f)}`}>
-                        {materialStateLabels[fileState(f)]}
-                      </span>
-                    </div>
-                    <small>
-                      {formatSize(f.size)} · 文件版本 {f.materialVersion || 0}
-                    </small>
-                    {f.materialReview && (
-                      <p>
-                        {fileState(f) === 'stale' ? '旧核对说明（已过期）：' : '核对说明：'}
-                        {f.materialReview.note || '未填写说明'}
-                        <small>
-                          {f.materialReview.reviewerName} ·{' '}
-                          {new Date(f.materialReview.reviewedAt).toLocaleString('zh-CN', {
-                            hour12: false,
-                          })}
-                        </small>
-                      </p>
-                    )}
-                    <div className="button-row">
-                      <button
-                        type="button"
-                        className="button"
-                        disabled={busy}
-                        onClick={() => onDetail(f)}
-                      >
-                        查看{f.name}内容
-                      </button>
-                      <a className="button" href={`/api/files/${f.id}/download`}>
-                        下载{f.name}
-                      </a>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          ))}
-          {canEdit && !!person.files.length && (
-            <section className="material-actions" aria-label="处理所选材料">
-              {aiReview && (
-                <p className="form-note">
-                  已带入预核对建议，请编辑归属或核对说明后，明确点击保存。AI 未批准任何材料。
-                </p>
-              )}
-              <div className="section-heading">
-                <h4>处理所选 {selection.files.length} 份文件</h4>
-                <button
-                  type="button"
-                  className="text-button"
                   disabled={busy || !state.ready}
-                  onClick={() => selectFiles(person.files.slice(0, 50))}
+                  onClick={() => openPerson(nextPendingPerson.identity)}
                 >
-                  选择此人前 50 份
+                  跳至下一位待核对（剩余 {otherPendingPeople.length} 位）
+                  <ArrowRight size={14} />
                 </button>
-              </div>
-              {staleSelection && (
-                <p className="error-text" role="alert">
-                  材料规则、文件分类或核对版本已变化，请清除后重新选择。
-                </p>
               )}
               <button
                 type="button"
                 className="text-button"
                 disabled={busy}
-                onClick={() => selectFiles([])}
+                onClick={() => openPerson('')}
               >
-                清除选择
+                收起详情
               </button>
-              <fieldset
-                disabled={
-                  busy || !state.ready || !chosen.length || staleSelection || chosen.length > 50
-                }
-              >
-                <label className="field">
-                  所选文件归到哪项材料
-                  <select
-                    value={draft.materialId}
-                    onChange={(e) => setDraft({ materialId: e.target.value })}
-                  >
-                    <option value="">未分类</option>
-                    {c.materials!.map((m) => (
-                      <option value={m.id} key={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button type="button" className="button" onClick={() => void apply('classify')}>
-                  保存所选归属
-                </button>
-                <label className="field">
-                  人工核对结论
-                  <select
-                    value={draft.decision}
-                    onChange={(e) => setDraft({ decision: e.target.value as Draft['decision'] })}
-                  >
-                    <option value="">请选择核对结论</option>
-                    <option value="accepted">核对通过</option>
-                    <option value="needs_changes">需补充或纠正</option>
-                  </select>
-                </label>
-                <p className="field-hint">
-                  这个浏览器会暂存未保存的说明。重新进入时，请重选当前材料和核对结论。
+            </div>
+          </div>
+
+          <div className="material-review-split">
+            <div className="material-review-preview">
+              {person.files.length ? (
+                <>
+                  <div className="material-preview-tabs" role="tablist" aria-label="切换预览文件">
+                    {person.files.map((f) => {
+                      const active = previewFile?.id === f.id
+                      const matName =
+                        c.materials!.find((m) => m.id === f.materialId)?.name || '未分类'
+                      return (
+                        <button
+                          key={f.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          className={`material-preview-tab ${active ? 'active' : ''}`}
+                          onClick={() => setPreviewFileId(f.id)}
+                        >
+                          <span>{f.name}</span>
+                          <small>
+                            {matName} · {materialStateLabels[fileState(f)]}
+                          </small>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {previewFile && (
+                    <div className="material-preview-stage">
+                      <header className="material-preview-bar">
+                        <div>
+                          <strong>{previewFile.name}</strong>
+                          <small>
+                            {formatSize(previewFile.size)} ·{' '}
+                            {c.materials!.find((m) => m.id === previewFile.materialId)?.name ||
+                              '未分类'}{' '}
+                            · {materialStateLabels[fileState(previewFile)]}
+                          </small>
+                        </div>
+                        <div className="button-row">
+                          {canEdit && (
+                            <button
+                              type="button"
+                              className="button"
+                              disabled={busy || !state.ready}
+                              onClick={() => {
+                                const already = selection.files.some((s) => s.id === previewFile.id)
+                                selectFiles(
+                                  already
+                                    ? chosen.filter((v) => v.id !== previewFile.id)
+                                    : [...chosen, previewFile],
+                                )
+                              }}
+                            >
+                              {selection.files.some((s) => s.id === previewFile.id)
+                                ? '取消勾选此文件'
+                                : '勾选此文件核对'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="text-button"
+                            disabled={busy}
+                            onClick={() => onDetail(previewFile)}
+                          >
+                            文件详情
+                          </button>
+                          <a className="button" href={`/api/files/${previewFile.id}/download`}>
+                            <Download size={14} />
+                            下载
+                          </a>
+                        </div>
+                      </header>
+                      <FilePreview key={previewFile.id} file={previewFile} inline />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="material-preview-empty">
+                  <Eye size={28} strokeWidth={1.5} />
+                  <h4>暂未收到这位参与人的文件</h4>
+                  <p>
+                    尚缺必需材料：
+                    {person.slots
+                      .filter((s) => s.requirement.required && !s.files.length)
+                      .map((s) => s.requirement.name)
+                      .join('、') || '请检查材料要求'}
+                  </p>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => setReminder({ mode: 'direct', personId: person.identity })}
+                    >
+                      <MessageSquareText size={15} />
+                      生成单人催交话术
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="material-review-form">
+              <div className="material-person-next">
+                <strong>{personAction(person.status)}</strong>
+                <p>
+                  {person.status === 'needs_changes'
+                    ? '下方保留具体补充原因。本人替换后，新文件会重新等待核对。'
+                    : person.status === 'missing'
+                      ? `尚缺：${
+                          person.slots
+                            .filter((s) => s.requirement.required && !s.files.length)
+                            .map((s) => s.requirement.name)
+                            .join('、') || '存在重复内容，请查看逐项记录'
+                        }。可分享原链接或复制私聊催交话术。`
+                      : person.status === 'unclassified'
+                        ? '先选择文件并确认材料归属，再进行人工核对。'
+                        : person.reviewComplete
+                          ? '当前材料已人工核对通过。文件或规则变化后，旧结论不会自动沿用。'
+                          : '左侧直接预览内容，右侧勾选文件并给出核对结论，可一键保存并跳转下一位。'}
                 </p>
-                <label className="field">
-                  核对说明
-                  <textarea
-                    rows={3}
-                    maxLength={300}
-                    value={draft.note}
-                    onChange={(e) => setDraft({ note: e.target.value })}
-                    placeholder="需补充时说明具体要改什么；这段说明可由本人回执查看"
+                {canEdit && !person.reviewComplete && (
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => setReminder({ mode: 'direct', personId: person.identity })}
+                    >
+                      <MessageSquareText size={15} />
+                      生成单人催交话术
+                    </button>
+                    {!person.receivedComplete && (
+                      <button type="button" className="button" onClick={onShare}>
+                        分享链接，提醒本人补交
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+              {[
+                ...person.slots.map((s) => ({
+                  id: s.requirement.id,
+                  title: `${s.requirement.name} · ${s.requirement.required ? '必需' : '选填'}`,
+                  description: s.requirement.description,
+                  files: s.files,
+                })),
+                ...(person.unclassified.length
+                  ? [
+                      {
+                        id: 'unknown',
+                        title: '未分类 / 原材料项已移除',
+                        description: '请先明确归属，不能直接标记核对通过。',
+                        files: person.unclassified,
+                      },
+                    ]
+                  : []),
+              ].map((group) => (
+                <div className="material-detail-group" key={group.id}>
+                  <h4>{group.title}</h4>
+                  <p>{group.description}</p>
+                  {!group.files.length ? (
+                    <p className="material-missing">
+                      {group.id !== 'unknown' &&
+                      c.materials!.find((m) => m.id === group.id)?.required
+                        ? '尚缺此项材料'
+                        : '选填项尚未提交'}
+                    </p>
+                  ) : (
+                    group.files.map((f) => (
+                      <article
+                        className={`material-file ${previewFile?.id === f.id ? 'previewing' : ''}`}
+                        key={f.id}
+                      >
+                        <div className="material-file-heading">
+                          {canEdit && (
+                            <input
+                              type="checkbox"
+                              aria-label={`选择核对${f.name}`}
+                              disabled={busy || !state.ready}
+                              checked={selection.files.some((s) => s.id === f.id)}
+                              onChange={(e) =>
+                                selectFiles(
+                                  e.target.checked
+                                    ? [...chosen, f]
+                                    : chosen.filter((v) => v.id !== f.id),
+                                )
+                              }
+                            />
+                          )}
+                          <strong>{f.name}</strong>
+                          <span className={`mstate ${fileState(f)}`}>
+                            {materialStateLabels[fileState(f)]}
+                          </span>
+                        </div>
+                        <small>
+                          {formatSize(f.size)} · 文件版本 {f.materialVersion || 0}
+                        </small>
+                        {f.materialReview && (
+                          <p>
+                            {fileState(f) === 'stale' ? '旧核对说明（已过期）：' : '核对说明：'}
+                            {f.materialReview.note || '未填写说明'}
+                            <small>
+                              {f.materialReview.reviewerName} ·{' '}
+                              {new Date(f.materialReview.reviewedAt).toLocaleString('zh-CN', {
+                                hour12: false,
+                              })}
+                            </small>
+                          </p>
+                        )}
+                        <div className="button-row">
+                          <button
+                            type="button"
+                            className={`button ${previewFile?.id === f.id ? 'chosen' : ''}`}
+                            disabled={busy}
+                            onClick={() => setPreviewFileId(f.id)}
+                          >
+                            <Eye size={14} />
+                            {previewFile?.id === f.id ? '正在左侧预览' : '左侧预览'}
+                          </button>
+                          <a className="button" href={`/api/files/${f.id}/download`}>
+                            下载
+                          </a>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              ))}
+              {canEdit && !!person.files.length && (
+                <section className="material-actions" aria-label="处理所选材料">
+                  {aiReview && (
+                    <p className="form-note">
+                      已带入预核对建议，请编辑归属或核对说明后，明确点击保存。AI 未批准任何材料。
+                    </p>
+                  )}
+                  <div className="section-heading">
+                    <h4>处理所选 {selection.files.length} 份文件</h4>
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={busy || !state.ready}
+                      onClick={() => selectFiles(person.files.slice(0, 50))}
+                    >
+                      选择此人前 50 份
+                    </button>
+                  </div>
+                  {staleSelection && (
+                    <p className="error-text" role="alert">
+                      材料规则、文件分类或核对版本已变化，请清除后重新选择。
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={busy}
+                    onClick={() => selectFiles([])}
+                  >
+                    清除选择
+                  </button>
+                  <fieldset
+                    disabled={
+                      busy || !state.ready || !chosen.length || staleSelection || chosen.length > 50
+                    }
+                  >
+                    <label className="field">
+                      所选文件归到哪项材料
+                      <select
+                        value={draft.materialId}
+                        onChange={(e) => setDraft({ materialId: e.target.value })}
+                      >
+                        <option value="">未分类</option>
+                        {c.materials!.map((m) => (
+                          <option value={m.id} key={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button type="button" className="button" onClick={() => void apply('classify')}>
+                      保存所选归属
+                    </button>
+                    <label className="field">
+                      人工核对结论
+                      <select
+                        value={draft.decision}
+                        onChange={(e) =>
+                          setDraft({ decision: e.target.value as Draft['decision'] })
+                        }
+                      >
+                        <option value="">请选择核对结论</option>
+                        <option value="accepted">核对通过</option>
+                        <option value="needs_changes">需补充或纠正</option>
+                      </select>
+                    </label>
+                    <p className="field-hint">
+                      这个浏览器会暂存未保存的说明。重新进入时，请重选当前材料和核对结论。
+                    </p>
+                    <label className="field">
+                      核对说明
+                      <textarea
+                        rows={3}
+                        maxLength={300}
+                        value={draft.note}
+                        onChange={(e) => setDraft({ note: e.target.value })}
+                        placeholder="需补充时说明具体要改什么；这段说明可由本人回执查看"
+                      />
+                    </label>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="button primary"
+                        disabled={!draft.decision}
+                        onClick={() => void apply('review', false)}
+                      >
+                        {busy ? '保存中…' : '保存人工核对'}
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        disabled={!draft.decision || !nextPendingPerson}
+                        title={
+                          nextPendingPerson
+                            ? `保存当前核对并跳转至 ${nextPendingPerson.identity}`
+                            : '当前没有下一位待核对参与人'
+                        }
+                        onClick={() => void apply('review', true)}
+                      >
+                        {busy
+                          ? '保存中…'
+                          : nextPendingPerson
+                            ? `保存并跳转下一位待核对（${otherPendingPeople.length}）`
+                            : '已无下一位待核对'}
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </fieldset>
+                  <MaterialAIPanel
+                    key={person.identity}
+                    collection={c}
+                    personId={person.identity}
+                    selected={staleSelection ? [] : chosen}
+                    allFiles={person.files}
+                    scopeVersion={report?.stateVersion || ''}
+                    disabled={!state.ready}
+                    onDetail={(f) => setPreviewFileId(f.id)}
+                    onPrepare={(plan, finding) => {
+                      const file = person.files.find((f) => f.id === finding.fileId)
+                      const source = plan.preview.sources.find((f) => f.id === finding.fileId)
+                      if (!state.ready || !file || !source) return
+                      setPreviewFileId(file.id)
+                      selectFiles([file])
+                      setSelection({
+                        rulesRevision: plan.preview.rulesRevision,
+                        files: [{ id: file.id, expectedVersion: source.expectedVersion }],
+                      })
+                      setDrafts((old) => ({
+                        ...old,
+                        [personId]: {
+                          materialId: finding.materialId || file.materialId || '',
+                          decision: 'needs_changes',
+                          note: finding.message.slice(0, 300),
+                        },
+                      }))
+                      setAIReview({ runId: plan.runId, fileId: file.id, acknowledged: true })
+                      setNotice('建议已带入人工处理，请核对后手动保存。')
+                    }}
                   />
-                </label>
-                <button
-                  type="button"
-                  className="button primary"
-                  disabled={!draft.decision}
-                  onClick={() => void apply('review')}
-                >
-                  {busy ? '保存中…' : '保存人工核对'}
-                </button>
-              </fieldset>
-              <MaterialAIPanel
-                key={person.identity}
-                collection={c}
-                personId={person.identity}
-                selected={staleSelection ? [] : chosen}
-                allFiles={person.files}
-                scopeVersion={report?.stateVersion || ''}
-                disabled={!state.ready}
-                onDetail={onDetail}
-                onPrepare={(plan, finding) => {
-                  const file = person.files.find((f) => f.id === finding.fileId)
-                  const source = plan.preview.sources.find((f) => f.id === finding.fileId)
-                  if (!state.ready || !file || !source) return
-                  selectFiles([file])
-                  setSelection({
-                    rulesRevision: plan.preview.rulesRevision,
-                    files: [{ id: file.id, expectedVersion: source.expectedVersion }],
-                  })
-                  setDrafts((old) => ({
-                    ...old,
-                    [personId]: {
-                      materialId: finding.materialId || file.materialId || '',
-                      decision: 'needs_changes',
-                      note: finding.message.slice(0, 300),
-                    },
-                  }))
-                  setAIReview({ runId: plan.runId, fileId: file.id, acknowledged: true })
-                  setNotice('建议已带入人工处理，请核对后手动保存。')
-                }}
-              />
-            </section>
-          )}
+                </section>
+              )}
+            </div>
+          </div>
         </section>
       )}
       {error && (
@@ -844,6 +1031,15 @@ export function MaterialWorkbench({
       <p className="field-hint">
         导出由服务器按当前规则和文件状态生成，包含缺项及未通过结果；它不是全部合格的证明。
       </p>
+      {archiveOpen && (
+        <ArchiveModal
+          files={files}
+          collections={[c]}
+          defaultLayout="material-owner"
+          defaultAcceptedOnly
+          onClose={() => setArchiveOpen(false)}
+        />
+      )}
       {reminder && (
         <ReminderModal
           collection={c}

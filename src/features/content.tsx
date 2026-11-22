@@ -11,7 +11,7 @@ const labels: Record<DocumentInfo['status'], string> = {
   failed: '识别未完成',
   unsupported: '此类型暂不支持',
 }
-export function FilePreview({ file }: { file: CollectedFile }) {
+export function FilePreview({ file, inline = false }: { file: CollectedFile; inline?: boolean }) {
   const { canEdit } = useAccount()
   const [content, setContent] = useState<FileContent | null>(null),
     [error, setError] = useState(''),
@@ -25,6 +25,8 @@ export function FilePreview({ file }: { file: CollectedFile }) {
     }
   }, [file.id])
   useEffect(() => {
+    setContent(null)
+    setError('')
     void load()
   }, [load])
   const processing =
@@ -34,8 +36,10 @@ export function FilePreview({ file }: { file: CollectedFile }) {
     const timer = setInterval(() => void load(), 2000)
     return () => clearInterval(timer)
   }, [processing, load])
+  const displayChars = content?.document?.chars ?? content?.chars ?? content?.text?.length ?? 0
+  const displayTruncated = Boolean(content?.document?.truncated || content?.truncated)
   return (
-    <section className="file-preview" aria-label="文件预览">
+    <section className={`file-preview ${inline ? 'inline' : ''}`} aria-label="文件预览">
       {!content ? (
         <p className="field-hint">{error || '正在读取预览…'}</p>
       ) : (
@@ -50,13 +54,16 @@ export function FilePreview({ file }: { file: CollectedFile }) {
             />
           )}
           {content.preview === 'none' && (
-            <p className="field-hint">此文件暂不支持直接预览，可以下载查看或识别正文。</p>
+            <p className="field-hint">
+              {content.previewError || '此文件暂不支持直接预览，可以下载查看或识别正文。'}
+            </p>
           )}
           {content.text && (
             <details className="extracted-text" open={content.preview === 'text'}>
               <summary>
-                识别内容 · {content.document?.chars.toLocaleString()} 字符
-                {content.document?.truncated ? ' · 已截取' : ''}
+                {content.instant && !content.document?.chars ? '即时预览' : '识别内容'} ·{' '}
+                {displayChars.toLocaleString()} 字符
+                {displayTruncated ? ' · 已截取' : ''}
               </summary>
               <pre>{content.text}</pre>
             </details>
@@ -65,7 +72,9 @@ export function FilePreview({ file }: { file: CollectedFile }) {
             <span>
               {content.document
                 ? `${labels[content.document.status]}${content.document.kind ? ` · ${content.document.kind}` : ''}`
-                : '尚未识别正文'}
+                : content.instant
+                  ? '已即时轻量预览（尚未写入全文检索索引）'
+                  : '尚未识别正文'}
             </span>
             {canEdit && (
               <button

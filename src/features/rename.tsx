@@ -9,11 +9,16 @@ export function getRenames(files: CollectedFile[], collections: Collection[], pa
     const dot = file.name.lastIndexOf('.')
     const extension = dot > 0 ? file.name.slice(dot) : ''
     const base = dot > 0 ? file.name.slice(0, dot) : file.name
-    const title = collections.find((c) => c.id === file.collectionId)?.title || '未分类'
+    const collection = collections.find((c) => c.id === file.collectionId)
+    const title = collection?.title || '未分类'
+    const materialName =
+      (file.materialId && collection?.materials?.find((m) => m.id === file.materialId)?.name) ||
+      '未分类'
     const name =
       pattern
         .replaceAll('{任务}', title)
         .replaceAll('{提交人}', file.owner)
+        .replaceAll('{材料项}', materialName)
         .replaceAll('{序号}', String(index + 1).padStart(2, '0'))
         .replaceAll('{原名}', base)
         .replaceAll('{日期}', file.createdAt.slice(0, 10).replaceAll('-', ''))
@@ -56,7 +61,7 @@ export function RenameModal({
   const invalid =
     !pattern.trim() ||
     hasUnsafeFilenameChars(pattern, false) ||
-    /[{}]/.test(pattern.replace(/\{(任务|提交人|序号|原名|日期)\}/g, '')) ||
+    /[{}]/.test(pattern.replace(/\{(任务|提交人|材料项|序号|原名|日期)\}/g, '')) ||
     changes.some(
       (c) => c.name.length > 200 || !c.name.trim() || hasUnsafeFilenameChars(c.name, false),
     )
@@ -76,7 +81,7 @@ export function RenameModal({
         <input value={pattern} onChange={(e) => setPattern(e.target.value)} aria-label="命名规则" />
       </label>
       <div className="token-list">
-        {['{任务}', '{提交人}', '{序号}', '{原名}', '{日期}'].map((token) => (
+        {['{任务}', '{提交人}', '{材料项}', '{序号}', '{原名}', '{日期}'].map((token) => (
           <button type="button" key={token} onClick={() => setPattern(pattern + token)}>
             {token}
           </button>

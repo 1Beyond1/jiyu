@@ -6254,3 +6254,135 @@ h3,
     width: 100%;
   }
 }
+
+/* Stage 3 B2: Split-pane continuous review & inline preview */
+@media (min-width: 1180px) {
+  .material-workbench.with-person {
+    display: block;
+  }
+  .material-workbench.with-person > .material-person-detail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    margin-top: 24px;
+    box-shadow: 0 18px 40px -24px rgba(42, 33, 28, 0.25);
+  }
+}
+.material-review-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(350px, 0.9fr);
+  gap: 20px;
+  align-items: start;
+  margin-top: 16px;
+}
+.material-review-preview {
+  position: sticky;
+  top: 76px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.material-preview-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.material-preview-tab {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  max-width: 240px;
+}
+.material-preview-tab span {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.material-preview-tab small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.material-preview-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.material-preview-stage {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--surface);
+  display: grid;
+  gap: 12px;
+}
+.material-preview-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.material-preview-bar strong {
+  display: block;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.material-preview-bar small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.material-preview-empty {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 40px 24px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--secondary);
+}
+.material-review-form {
+  min-width: 0;
+}
+.material-file.previewing {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.file-preview.inline {
+  margin: 0;
+}
+.file-preview.inline iframe {
+  height: 560px;
+}
+.file-preview.inline img {
+  max-height: 560px;
+}
+.file-preview.inline .extracted-text pre {
+  max-height: 460px;
+}
+.archive-accepted-filter {
+  margin-block: 10px 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+@media (max-width: 1024px) {
+  .material-review-split {
+    grid-template-columns: 1fr;
+  }
+  .material-review-preview {
+    position: static;
+  }
+  .file-preview.inline iframe {
+    height: 400px;
+  }
+}

@@ -380,6 +380,10 @@ export interface FileContent {
   preview: 'image' | 'pdf' | 'text' | 'none'
   mime?: string
   text?: string
+  instant?: boolean
+  chars?: number
+  truncated?: boolean
+  previewError?: string
   document?: DocumentInfo
 }
 export interface StorageProfile {
@@ -420,7 +424,13 @@ export interface TransferInfo {
   remote_path?: string
 }
 
-export type ArchiveLayout = 'flat' | 'collection' | 'owner' | 'collection-owner'
+export type ArchiveLayout =
+  | 'flat'
+  | 'collection'
+  | 'owner'
+  | 'collection-owner'
+  | 'material-owner'
+  | 'owner-material'
 export type ArchiveStatus = 'ready' | 'streaming' | 'completed' | 'failed' | 'cancelled'
 export interface ArchiveEntry {
   id: string
@@ -437,6 +447,9 @@ export interface ArchivePlan {
   expiresAt: string
   status: ArchiveStatus
   error?: string
+  acceptedOnly?: boolean
+  rulesRevision?: string
+  excludedCount?: number
 }
 
 export interface AISettings {

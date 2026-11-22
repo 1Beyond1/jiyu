@@ -8,6 +8,7 @@ import { crc32 } from 'node:zlib'
 import { fromBuffer } from 'yauzl'
 import { createApp } from './app.ts'
 import { archiveEntries } from './archive.ts'
+import { materialFileVersion } from '../src/lib/materials.ts'
 import type { CollectedFile, Collection, ArchiveLayout, ArchivePlan } from '../src/types.ts'
 
 function collection(id = randomUUID()): Collection {
@@ -398,6 +399,165 @@ test('真实 HTTP 中断可释放归档并发名额，损坏内容不会报告�
     )
   } finally {
     for (const response of connections) response.destroy()
+    await f.close()
+  }
+})
+
+test('按材料项分目录（material-owner / owner-material）与仅打包人工核对通过（绑定 rulesRevision）', async () => {
+  const f = await fixture()
+  try {
+    const rev = 'rev-material-v1'
+    const c: Collection = {
+      ...collection(),
+      title: '材料归档任务',
+      materials: [
+        { id: 'mat_form', name: '报名表', required: true, description: '' },
+        { id: 'mat_doc', name: '作品说明', required: true, description: '' },
+      ],
+      materialRevision: rev,
+    }
+    f.store.saveCollection(c)
+
+    const acceptedA = await f.add(c.id, 'form.pdf', '张三', Buffer.from('已通过报名表'))
+    acceptedA.record.materialId = 'mat_form'
+    acceptedA.record.materialVersion = 1
+    acceptedA.record.materialReview = {
+      decision: 'accepted',
+      note: '合格',
+      rulesRevision: rev,
+      fileVersion: materialFileVersion(acceptedA.record),
+      operationId: randomUUID(),
+      reviewerId: 'primary',
+      reviewerName: '管理员',
+      reviewedAt: new Date().toISOString(),
+    }
+    f.store.saveFile(acceptedA.record)
+
+    const acceptedB = await f.add(c.id, 'doc.pdf', '李四', Buffer.from('已通过作品说明'))
+    acceptedB.record.materialId = 'mat_doc'
+    acceptedB.record.materialVersion = 1
+    acceptedB.record.materialReview = {
+      decision: 'accepted',
+      note: '',
+      rulesRevision: rev,
+      fileVersion: materialFileVersion(acceptedB.record),
+      operationId: randomUUID(),
+      reviewerId: 'primary',
+      reviewerName: '管理员',
+      reviewedAt: new Date().toISOString(),
+    }
+    f.store.saveFile(acceptedB.record)
+
+    const pendingC = await f.add(c.id, 'pending.pdf', '王五', Buffer.from('待核对'))
+    pendingC.record.materialId = 'mat_form'
+    pendingC.record.materialVersion = 1
+    f.store.saveFile(pendingC.record)
+
+    const rejectedD = await f.add(c.id, 'rejected.pdf', '赵六', Buffer.from('已退回'))
+    rejectedD.record.materialId = 'mat_doc'
+    rejectedD.record.materialVersion = 1
+    rejectedD.record.materialReview = {
+      decision: 'needs_changes',
+      note: '缺少签名',
+      rulesRevision: rev,
+      fileVersion: materialFileVersion(rejectedD.record),
+      operationId: randomUUID(),
+      reviewerId: 'primary',
+      reviewerName: '管理员',
+      reviewedAt: new Date().toISOString(),
+    }
+    f.store.saveFile(rejectedD.record)
+
+    const unclassifiedE = await f.add(c.id, 'misc.pdf', '周七', Buffer.from('未分类'))
+
+    const allIds = [
+      acceptedA.record.id,
+      acceptedB.record.id,
+      pendingC.record.id,
+      rejectedD.record.id,
+      unclassifiedE.record.id,
+    ]
+
+    // 1. 验证 material/owner 与 owner/material 目录路径生成（含未分类回退）
+    const matOwnerPaths = archiveEntries(
+      [acceptedA.record, acceptedB.record, unclassifiedE.record],
+      [c],
+      'material-owner',
+    ).map((e) => e.path)
+    assert.deepEqual(matOwnerPaths, [
+      '报名表/张三/form.pdf',
+      '作品说明/李四/doc.pdf',
+      '未分类/周七/misc.pdf',
+    ])
+
+    const ownerMatPaths = archiveEntries(
+      [acceptedA.record, acceptedB.record, unclassifiedE.record],
+      [c],
+      'owner-material',
+    ).map((e) => e.path)
+    assert.deepEqual(ownerMatPaths, [
+      '张三/报名表/form.pdf',
+      '李四/作品说明/doc.pdf',
+      '周七/未分类/misc.pdf',
+    ])
+
+    // 2. acceptedOnly 缺少或错配 rulesRevision 时严格拒绝
+    assert.equal(
+      (
+        await f.request('POST', '/api/archives', {
+          ids: allIds,
+          layout: 'material/owner',
+          acceptedOnly: true,
+        })
+      ).statusCode,
+      400,
+    )
+    assert.equal(
+      (
+        await f.request('POST', '/api/archives', {
+          ids: allIds,
+          layout: 'material/owner',
+          acceptedOnly: true,
+          rulesRevision: 'stale-rev',
+        })
+      ).statusCode,
+      409,
+    )
+
+    // 3. 正确 rulesRevision 下仅保留 2 份人工核对通过文件并生成有效 ZIP
+    const planRes = await f.request('POST', '/api/archives', {
+      ids: allIds,
+      layout: 'material/owner',
+      acceptedOnly: true,
+      rulesRevision: rev,
+    })
+    assert.equal(planRes.statusCode, 200, planRes.body)
+    const plan = planRes.json() as ArchivePlan
+    assert.equal(plan.layout, 'material-owner')
+    assert.equal(plan.acceptedOnly, true)
+    assert.equal(plan.excludedCount, 3)
+    assert.deepEqual(
+      plan.entries.map((e) => e.path),
+      ['报名表/张三/form.pdf', '作品说明/李四/doc.pdf'],
+    )
+    const dl = await f.request('GET', `/api/archives/${plan.id}/download`)
+    assert.equal(dl.statusCode, 200)
+    const unzipped = await unzip(dl.rawPayload)
+    assert.deepEqual([...unzipped.keys()], ['报名表/张三/form.pdf', '作品说明/李四/doc.pdf'])
+
+    // 4. 计划创建后、下载前若材料规则版本发生变更，下载必须返回 409 拒绝
+    const plan2Res = await f.request('POST', '/api/archives', {
+      ids: allIds,
+      layout: 'owner/material',
+      acceptedOnly: true,
+      rulesRevision: rev,
+    })
+    assert.equal(plan2Res.statusCode, 200)
+    const plan2 = plan2Res.json() as ArchivePlan
+    f.store.saveCollection({ ...c, materialRevision: 'rev-material-v2' })
+    const blockedDl = await f.request('GET', `/api/archives/${plan2.id}/download`)
+    assert.equal(blockedDl.statusCode, 409)
+  } finally {
     await f.close()
   }
 })

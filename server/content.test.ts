@@ -174,6 +174,59 @@ test('本机正文索引、中文检索、DOCX 解包、范围预览与权限边
       new AbortController().signal,
     )
     assert.equal(doc.text.trim(), '项目 & 集屿\n第二段。')
+
+    // 小体积 UTF-8 文本与 DOCX 无需提前后台建索引即可即时轻量预览，并保留 2 MiB 与防 XXE 上限
+    const unindexedTxt = await add('即时文本.md', Buffer.from('# 标题\n无需索引即可预览'))
+    const txtRes = await app.inject({
+      method: 'GET',
+      url: `/api/files/${unindexedTxt.id}/content`,
+      headers,
+    })
+    assert.equal(txtRes.statusCode, 200)
+    assert.equal(txtRes.json().preview, 'text')
+    assert.equal(txtRes.json().instant, true)
+    assert.match(txtRes.json().text, /无需索引即可预览/)
+
+    const docxChunks: Buffer[] = []
+    const zip2 = new ZipFile()
+    zip2.addBuffer(
+      Buffer.from('<w:document><w:p><w:r><w:t>即时 DOCX 预览内容</w:t></w:r></w:p></w:document>'),
+      'word/document.xml',
+    )
+    zip2.end()
+    for await (const chunk of zip2.outputStream) docxChunks.push(chunk as Buffer)
+    const unindexedDocx = await add('即时文档.docx', Buffer.concat(docxChunks))
+    const docxRes = await app.inject({
+      method: 'GET',
+      url: `/api/files/${unindexedDocx.id}/content`,
+      headers,
+    })
+    assert.equal(docxRes.statusCode, 200)
+    assert.equal(docxRes.json().preview, 'text')
+    assert.equal(docxRes.json().instant, true)
+    assert.match(docxRes.json().text, /即时 DOCX 预览内容/)
+
+    // 包含实体声明（XXE）的 DOCX 必须被安全拒绝，不报 500 也不返回正文
+    const xxeChunks: Buffer[] = []
+    const xxeZip = new ZipFile()
+    xxeZip.addBuffer(
+      Buffer.from(
+        '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><w:document><w:p><w:t>&xxe;</w:t></w:p></w:document>',
+      ),
+      'word/document.xml',
+    )
+    xxeZip.end()
+    for await (const chunk of xxeZip.outputStream) xxeChunks.push(chunk as Buffer)
+    const xxeDocx = await add('恶意文档.docx', Buffer.concat(xxeChunks))
+    const xxeRes = await app.inject({
+      method: 'GET',
+      url: `/api/files/${xxeDocx.id}/content`,
+      headers,
+    })
+    assert.equal(xxeRes.statusCode, 200)
+    assert.equal(xxeRes.json().preview, 'none')
+    assert.equal(xxeRes.json().text, undefined)
+    assert.match(xxeRes.json().previewError, /实体声明/)
   } finally {
     await app.close()
     if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true })

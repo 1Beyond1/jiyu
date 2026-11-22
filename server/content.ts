@@ -400,20 +400,70 @@ export function registerContent(
       key = store.fileKey(id)
     if (!file || file.deletedAt || !key) throw new HttpError(404, '文件不存在或已在回收站')
     const path = join(store.dataDir, 'objects', key),
-      kind = detectPreview(await header(path))
-    return { file, path, kind }
+      head = await header(path),
+      kind = detectPreview(head)
+    return { file, path, head, kind }
   }
   app.get('/api/files/:id/content', async (req) => {
     const id = String(object(req.params).id),
-      { file, kind } = await getFile(id)
+      { file, path, head, kind } = await getFile(id)
     const document = store.db
       .prepare('SELECT * FROM documents WHERE file_id=?')
       .get(id) as unknown as DocumentInfo | undefined
-    const text = contentExcerpt(store, id, MAX_TEXT)
+    const indexedText = contentExcerpt(store, id, MAX_TEXT)
+    if (indexedText) {
+      return {
+        ...kind,
+        ...(file.size > 32 * 1024 ** 2 ? { preview: 'none' } : {}),
+        text: indexedText,
+        ...(kind.preview === 'none' ? { preview: 'text' } : {}),
+        chars: document?.chars ?? indexedText.length,
+        truncated: Boolean(document?.truncated),
+        document,
+      }
+    }
+    // 小体积 UTF-8 文本与 DOCX 支持即时轻量预览（保留 2 MiB 与防 XXE 上限，不触发重量 OCR）
+    if (kind.preview === 'none' && file.size <= 2 * 1024 ** 2) {
+      const ext = extname(file.name).toLowerCase()
+      if (ext === '.docx' && head[0] === 0x50 && head[1] === 0x4b) {
+        try {
+          const raw = await docxText(path, AbortSignal.timeout(5000))
+          const cleaned = stripNonWhitespaceControlChars(raw)
+          const previewText = cleaned.slice(0, MAX_TEXT)
+          return {
+            preview: 'text',
+            text: previewText,
+            instant: true,
+            chars: previewText.length,
+            truncated: cleaned.length > MAX_TEXT,
+            document,
+          }
+        } catch (error) {
+          return {
+            ...kind,
+            previewError:
+              error instanceof HttpError ? error.message : 'DOCX 无法即时预览，请下载查看',
+            document,
+          }
+        }
+      }
+      if (['.txt', '.md', '.csv', '.json', '.log'].includes(ext) && !head.includes(0)) {
+        const raw = (await readFile(path)).toString('utf8')
+        const cleaned = stripNonWhitespaceControlChars(raw)
+        const previewText = cleaned.slice(0, MAX_TEXT)
+        return {
+          preview: 'text',
+          text: previewText,
+          instant: true,
+          chars: previewText.length,
+          truncated: cleaned.length > MAX_TEXT,
+          document,
+        }
+      }
+    }
     return {
       ...kind,
       ...(file.size > 32 * 1024 ** 2 ? { preview: 'none' } : {}),
-      ...(text ? { text, ...(kind.preview === 'none' ? { preview: 'text' } : {}) } : {}),
       document,
     }
   })

@@ -26,6 +26,7 @@ export function CollectionRules({
   const labels: Record<string, string> = {
     owner: '姓名',
     collection: '任务名称',
+    ...(value.materials?.length || naming.parts.includes('material') ? { material: '材料项' } : {}),
     date: '提交日期',
     sequence: '累计序号',
     original: '原文件名',
@@ -305,12 +306,14 @@ function NamingPreview({
     ]),
   )
   const name = submissionFileName(
-    { title, naming: value.naming },
+    { title, naming: value.naming, materials: value.materials },
     file || '作业.pdf',
     owner,
     examples,
     received + 1,
     new Date().toISOString(),
+    new Set(),
+    value.materials?.[0]?.id,
   )
   return (
     <section className="naming-live" aria-label="实时命名预览">

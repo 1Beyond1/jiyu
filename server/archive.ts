@@ -15,10 +15,20 @@ import type {
 import type { Store } from './store.ts'
 import { digest, HttpError, object } from './security.ts'
 import { sanitizeFilenameChars } from '../src/lib/text-safety.ts'
+import { materialReviewState } from '../src/lib/materials.ts'
 
 const ttl = 10 * 60 * 1000,
   maxBytes = 10 * 1024 ** 3
-const layouts: ArchiveLayout[] = ['flat', 'collection', 'owner', 'collection-owner']
+const layoutAliases: Record<string, ArchiveLayout> = {
+  flat: 'flat',
+  collection: 'collection',
+  owner: 'owner',
+  'collection-owner': 'collection-owner',
+  'material-owner': 'material-owner',
+  'material/owner': 'material-owner',
+  'owner-material': 'owner-material',
+  'owner/material': 'owner-material',
+}
 function shorten(value: string, bytes: number) {
   let result = ''
   for (const character of value) {
@@ -66,14 +76,26 @@ export function archiveEntries(
     return [parent, directories.get(key)!].filter(Boolean).join('/')
   }
   return files.map((file) => {
+    const col = collections.find((c) => c.id === file.collectionId)
+    const mat = file.materialId ? col?.materials?.find((m) => m.id === file.materialId) : undefined
     let parent = ''
     if (layout === 'collection' || layout === 'collection-owner')
+      parent = folder('', file.collectionId, col?.title || '未分类')
+    if (layout === 'material-owner') {
       parent = folder(
         '',
-        file.collectionId,
-        collections.find((c) => c.id === file.collectionId)?.title || '未分类',
+        mat ? `${file.collectionId}:${mat.id}` : 'unclassified',
+        mat?.name || '未分类',
       )
-    if (layout === 'owner' || layout === 'collection-owner')
+      parent = folder(parent, file.owner, file.owner || '未填写提交人')
+    } else if (layout === 'owner-material') {
+      parent = folder('', file.owner, file.owner || '未填写提交人')
+      parent = folder(
+        parent,
+        mat ? `${file.collectionId}:${mat.id}` : 'unclassified',
+        mat?.name || '未分类',
+      )
+    } else if (layout === 'owner' || layout === 'collection-owner')
       parent = folder(parent, file.owner, file.owner || '未填写提交人')
     const extension = component(posix.extname(file.name).slice(1), 20)
     const name = posix.extname(file.name)
@@ -92,6 +114,7 @@ interface StoredPlan extends ArchivePlan {
   session: string
   files: { file: CollectedFile; key: string }[]
   expires: number
+  collectionId?: string
   stop?: () => void
 }
 export function registerArchives(app: FastifyInstance, store: Store) {
@@ -116,7 +139,13 @@ export function registerArchives(app: FastifyInstance, store: Store) {
     { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } },
     async (req) => {
       prune()
-      const { ids, layout } = object(req.body)
+      const body = object(req.body)
+      const { ids } = body
+      const resolvedLayout =
+        typeof body.layout === 'string' ? layoutAliases[body.layout] : undefined
+      const acceptedOnly = body.acceptedOnly === true
+      if (body.acceptedOnly !== undefined && typeof body.acceptedOnly !== 'boolean')
+        throw new HttpError(400, '审核筛选参数无效')
       if (
         !Array.isArray(ids) ||
         !ids.length ||
@@ -125,8 +154,7 @@ export function registerArchives(app: FastifyInstance, store: Store) {
         new Set(ids).size !== ids.length
       )
         throw new HttpError(400, '每次请选择 1–500 个文件')
-      if (!layouts.includes(layout as ArchiveLayout))
-        throw new HttpError(400, '请选择有效的归档方式')
+      if (!resolvedLayout) throw new HttpError(400, '请选择有效的归档方式')
       const all = new Map(
         store
           .files()
@@ -136,8 +164,31 @@ export function registerArchives(app: FastifyInstance, store: Store) {
       const files = ids.map((id) => all.get(id))
       if (files.some((file) => !file))
         throw new HttpError(404, '部分文件不存在或已移入回收站，请刷新重试')
-      const chosen = files as CollectedFile[],
-        totalBytes = chosen.reduce((sum, f) => sum + f.size, 0)
+      let chosen = files as CollectedFile[]
+      let excludedCount = 0
+      let boundCollectionId: string | undefined
+      let boundRulesRevision: string | undefined
+      if (acceptedOnly) {
+        const collectionIds = new Set(chosen.map((f) => f.collectionId))
+        if (collectionIds.size !== 1)
+          throw new HttpError(400, '仅打包人工核对通过文件须在单个材料任务内操作')
+        boundCollectionId = [...collectionIds][0]
+        const targetCollection = store.collection(boundCollectionId)
+        if (!targetCollection?.materials?.length || !targetCollection.materialRevision)
+          throw new HttpError(400, '该收集任务未配置材料清单，无法按人工核对通过筛选')
+        const suppliedRevision =
+          typeof body.rulesRevision === 'string' ? body.rulesRevision.trim() : ''
+        if (!suppliedRevision) throw new HttpError(400, '按人工核对通过打包必须提供材料规则版本')
+        if (suppliedRevision !== targetCollection.materialRevision)
+          throw new HttpError(409, '材料规则已变更，请刷新后再生成打包计划')
+        boundRulesRevision = targetCollection.materialRevision
+        const beforeCount = chosen.length
+        chosen = chosen.filter((f) => materialReviewState(targetCollection, f) === 'accepted')
+        excludedCount = beforeCount - chosen.length
+        if (!chosen.length)
+          throw new HttpError(400, '所选文件中没有当前规则版本下人工核对通过的文件')
+      }
+      const totalBytes = chosen.reduce((sum, f) => sum + f.size, 0)
       if (!Number.isSafeInteger(totalBytes) || totalBytes > maxBytes)
         throw new HttpError(413, '单个归档最多包含 10 GiB 内容，请分批下载')
       if (plans.size >= 20) throw new HttpError(429, '短期打包计划过多，请关闭旧预览或稍后重试')
@@ -149,11 +200,14 @@ export function registerArchives(app: FastifyInstance, store: Store) {
       const result: ArchivePlan = {
         id: randomUUID(),
         fileName: `集屿归档_${stamp}.zip`,
-        layout: layout as ArchiveLayout,
+        layout: resolvedLayout,
         totalBytes,
-        entries: archiveEntries(chosen, store.collections(), layout as ArchiveLayout),
+        entries: archiveEntries(chosen, store.collections(), resolvedLayout),
         expiresAt: new Date(Date.now() + ttl).toISOString(),
         status: 'ready',
+        ...(acceptedOnly
+          ? { acceptedOnly: true, rulesRevision: boundRulesRevision, excludedCount }
+          : {}),
       }
       const snapshots = chosen.map((file) => {
         const key = store.fileKey(file.id)
@@ -168,6 +222,7 @@ export function registerArchives(app: FastifyInstance, store: Store) {
       })
       plans.set(result.id, {
         ...result,
+        collectionId: boundCollectionId,
         files: snapshots,
         session: session(req),
         expires: Date.now() + ttl,
@@ -240,6 +295,18 @@ export function registerArchives(app: FastifyInstance, store: Store) {
             })
           )
             throw new HttpError(409, '文件已变化，请重新生成预览后下载')
+          if (plan.acceptedOnly) {
+            const col = plan.collectionId ? store.collection(plan.collectionId) : undefined
+            if (!col || !plan.rulesRevision || col.materialRevision !== plan.rulesRevision)
+              throw new HttpError(409, '材料规则已变化，请重新生成预览后下载')
+            if (
+              plan.files.some(({ file }) => {
+                const now = all.get(file.id)
+                return !now || materialReviewState(col, now) !== 'accepted'
+              })
+            )
+              throw new HttpError(409, '部分文件的人工核对状态已变化，请重新生成预览后下载')
+          }
         }
         current()
         for (const { file, key } of plan.files) {

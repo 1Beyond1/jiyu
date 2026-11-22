@@ -473,7 +473,13 @@ export function FileTable({
           )}
         </footer>
       )}
-      {archiveFiles && <ArchiveModal files={archiveFiles} onClose={() => setArchiveFiles(null)} />}
+      {archiveFiles && (
+        <ArchiveModal
+          files={archiveFiles}
+          collections={collections}
+          onClose={() => setArchiveFiles(null)}
+        />
+      )}
     </div>
   )
 }

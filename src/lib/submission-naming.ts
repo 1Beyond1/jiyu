@@ -11,22 +11,26 @@ const segment = (value: string) =>
 
 // The example and server use the same rules; actual names are decided at commit.
 export function submissionFileName(
-  c: Pick<Collection, 'title' | 'naming'>,
+  c: Pick<Collection, 'title' | 'naming' | 'materials'>,
   name: string,
   owner: string,
   fields: Record<string, string>,
   sequence: number,
   at: string,
   occupied = new Set<string>(),
+  materialId?: string,
 ) {
   if (!c.naming?.parts.length) return name
   const dot = name.lastIndexOf('.'),
     ext = dot > 0 ? name.slice(dot) : '',
     original = dot > 0 ? name.slice(0, dot) : name
+  const materialName =
+    (materialId && c.materials?.find((m) => m.id === materialId)?.name) || '未分类'
   const values: Record<string, string> = {
     ...fields,
     owner,
     collection: c.title,
+    material: materialName,
     date: new Date(at).toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' }).replaceAll('-', ''),
     sequence: String(sequence).padStart(3, '0'),
     original,

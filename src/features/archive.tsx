@@ -2,11 +2,41 @@ import { useEffect, useRef, useState } from 'react'
 import { Download, FolderArchive, RefreshCw, X } from 'lucide-react'
 import { Modal } from '../components/ui'
 import { api } from '../lib/api'
+import { materialReviewState } from '../lib/materials'
 import { formatSize } from '../lib/workspace'
-import type { ArchiveLayout, ArchivePlan, ArchiveStatus, CollectedFile } from '../types'
+import type { ArchiveLayout, ArchivePlan, ArchiveStatus, CollectedFile, Collection } from '../types'
 
-export function ArchiveModal({ files, onClose }: { files: CollectedFile[]; onClose: () => void }) {
-  const [layout, setLayout] = useState<ArchiveLayout>('collection-owner'),
+export function ArchiveModal({
+  files,
+  collections = [],
+  defaultLayout,
+  defaultAcceptedOnly = false,
+  onClose,
+}: {
+  files: CollectedFile[]
+  collections?: Collection[]
+  defaultLayout?: ArchiveLayout
+  defaultAcceptedOnly?: boolean
+  onClose: () => void
+}) {
+  const collectionIds = [...new Set(files.map((f) => f.collectionId))]
+  const singleCollection =
+    collectionIds.length === 1 ? collections.find((c) => c.id === collectionIds[0]) : undefined
+  const hasMaterials =
+    Boolean(singleCollection?.materials?.length) ||
+    files.some((f) => Boolean(f.materialId)) ||
+    collections.some((c) => Boolean(c.materials?.length))
+  const canFilterAccepted = Boolean(
+    singleCollection?.materials?.length && singleCollection.materialRevision,
+  )
+  const acceptedCount = canFilterAccepted
+    ? files.filter((f) => materialReviewState(singleCollection!, f) === 'accepted').length
+    : 0
+
+  const [layout, setLayout] = useState<ArchiveLayout>(
+      defaultLayout || (canFilterAccepted ? 'material-owner' : 'collection-owner'),
+    ),
+    [acceptedOnly, setAcceptedOnly] = useState(canFilterAccepted && defaultAcceptedOnly),
     [plan, setPlan] = useState<ArchivePlan | null>(null)
   const [busy, setBusy] = useState(false),
     [started, setStarted] = useState(false),
@@ -66,7 +96,13 @@ export function ArchiveModal({ files, onClose }: { files: CollectedFile[]; onClo
     await discard()
     try {
       setPlan(
-        await api<ArchivePlan>('/api/archives', 'POST', { ids: files.map((f) => f.id), layout }),
+        await api<ArchivePlan>('/api/archives', 'POST', {
+          ids: files.map((f) => f.id),
+          layout,
+          ...(acceptedOnly && canFilterAccepted
+            ? { acceptedOnly: true, rulesRevision: singleCollection!.materialRevision }
+            : {}),
+        }),
       )
     } catch (e) {
       setError((e as Error).message)
@@ -97,22 +133,48 @@ export function ArchiveModal({ files, onClose }: { files: CollectedFile[]; onClo
             setLayout(e.target.value as ArchiveLayout)
           }}
         >
+          {hasMaterials && <option value="material-owner">按材料项 / 提交人</option>}
+          {hasMaterials && <option value="owner-material">按提交人 / 材料项</option>}
           <option value="collection-owner">按任务 / 提交人</option>
           <option value="collection">按收集任务</option>
           <option value="owner">按提交人</option>
           <option value="flat">全部放在同一层</option>
         </select>
         <small>
-          {layout.includes('owner')
-            ? '相同的提交人名称归入同一文件夹。'
-            : '选择适合这次交付的目录层级。'}
+          {layout === 'material-owner' || layout === 'owner-material'
+            ? '按材料清单项与提交人自动归目录，未归属文件归入「未分类」。'
+            : layout.includes('owner')
+              ? '相同的提交人名称归入同一文件夹。'
+              : '选择适合这次交付的目录层级。'}
         </small>
       </label>
+      {canFilterAccepted && (
+        <label className="check-field archive-accepted-filter">
+          <input
+            type="checkbox"
+            checked={acceptedOnly}
+            disabled={busy || transferring}
+            onChange={(e) => {
+              void discard()
+              setAcceptedOnly(e.target.checked)
+            }}
+          />
+          <span>
+            仅打包人工核对通过（accepted）的文件（当前规则版本下 {acceptedCount} / {files.length}{' '}
+            份符合，下载前自动再次核验规则版本）
+          </span>
+        </label>
+      )}
       {plan && (
         <>
           <div className="archive-preview-heading">
             <h3>ZIP 内的文件路径</h3>
-            <span>共 {plan.entries.length} 个</span>
+            <span>
+              共 {plan.entries.length} 个
+              {plan.acceptedOnly && plan.excludedCount
+                ? ` · 已过滤 ${plan.excludedCount} 个未通过/待核对文件`
+                : ''}
+            </span>
           </div>
           <div className="archive-preview">
             <div className="archive-preview-labels">

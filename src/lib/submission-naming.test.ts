@@ -44,3 +44,45 @@ test('命名示例与实际提交共用去重、空字段、保留名和长度�
   )
   assert.ok(submissionFileName(c, '原文.txt', '长'.repeat(200), {}, 1, '2026-10-22').length < 200)
 })
+
+test('自动命名与规则校验支持材料项占位符，未分类时优雅回退', () => {
+  const rules = collectionRules({
+    materials: [{ id: 'mat_form', name: '报名表', required: true, description: '' }],
+    naming: { parts: ['material', 'owner', 'original'], separator: '_' },
+  })
+  assert.deepEqual(rules.naming?.parts, ['material', 'owner', 'original'])
+  assert.equal(
+    submissionFileName(
+      {
+        title: '征集',
+        materials: [{ id: 'mat_form', name: '报名表', required: true, description: '' }],
+        naming: { parts: ['material', 'owner'], separator: '_' },
+      },
+      'scan.pdf',
+      '张三',
+      {},
+      1,
+      '2026-11-22T00:00:00Z',
+      new Set(),
+      'mat_form',
+    ),
+    '报名表_张三.pdf',
+  )
+  assert.equal(
+    submissionFileName(
+      {
+        title: '征集',
+        materials: [{ id: 'mat_form', name: '报名表', required: true, description: '' }],
+        naming: { parts: ['material', 'owner'], separator: '-' },
+      },
+      'scan.pdf',
+      '张三',
+      {},
+      1,
+      '2026-11-22T00:00:00Z',
+      new Set(),
+      undefined,
+    ),
+    '未分类-张三.pdf',
+  )
+})
