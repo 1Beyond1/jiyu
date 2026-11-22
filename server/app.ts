@@ -13,6 +13,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 import { resolveRateLimits } from './config.ts'
 import type { Config } from './config.ts'
 import { Store } from './store.ts'
+import type { FileQueryOptions } from './store.ts'
 import {
   checkPassword,
   digest,
@@ -31,7 +32,7 @@ import {
   isExpired,
   submissionError,
 } from '../src/lib/collections.ts'
-import type { Collection, CollectedFile, TagChange } from '../src/types.ts'
+import type { Collection, CollectedFile, FileSortOption, TagChange } from '../src/types.ts'
 import { proposalHash, registerAI } from './ai.ts'
 import type { AITransport } from './ai.ts'
 import type { AIFailureDiagnostics } from './ai-failure-diagnostics.ts'
@@ -51,6 +52,74 @@ import { diagnostics } from './diagnostics.ts'
 import { materialRuleKey, registerMaterials } from './materials.ts'
 import { confirmCollectionDraft } from './collection-draft.ts'
 import { publicSubmissionError } from './public-errors.ts'
+
+function makeEtag(...parts: (string | number | undefined)[]) {
+  const hash = createHash('sha256')
+    .update(parts.map((p) => (p === undefined ? '' : String(p))).join('\0'))
+    .digest('base64url')
+    .slice(0, 24)
+  return `"${hash}"`
+}
+
+function etagMatches(header: string | string[] | undefined, etag: string) {
+  if (!header) return false
+  const raw = Array.isArray(header) ? header.join(',') : header
+  const normalize = (value: string) => value.trim().replace(/^W\//i, '')
+  const target = normalize(etag)
+  return raw
+    .split(',')
+    .map(normalize)
+    .some((candidate) => candidate === '*' || candidate === target)
+}
+
+function parseFileQuery(raw: unknown, forcedCollectionId?: string): FileQueryOptions {
+  const q = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const str = (key: string) => (typeof q[key] === 'string' ? q[key].trim() : '')
+  const collectionId = forcedCollectionId || str('collectionId') || undefined
+  if (collectionId && collectionId.length > 64) throw new HttpError(400, '收集编号无效')
+  const rawStatus = str('status') || 'all'
+  if (!['all', 'ready', 'pending'].includes(rawStatus)) throw new HttpError(400, '文件状态筛选无效')
+  const rawTrashed = str('trashed')
+  let trashed: 'false' | 'true' | 'all' = 'false'
+  if (rawTrashed === 'true' || rawTrashed === '1') trashed = 'true'
+  else if (rawTrashed === 'all') trashed = 'all'
+  else if (rawTrashed === '' || rawTrashed === 'false' || rawTrashed === '0') trashed = 'false'
+  else throw new HttpError(400, '回收站筛选参数无效')
+  const rawKind = str('kind') || 'all'
+  if (!['all', 'image'].includes(rawKind)) throw new HttpError(400, '文件类型筛选无效')
+  const search = str('q')
+  if (search.length > 120) throw new HttpError(400, '搜索关键词过长')
+  const rawPage = str('page')
+  const page = rawPage ? Number(rawPage) : 1
+  if (!Number.isInteger(page) || page < 1 || page > 10000) throw new HttpError(400, '页码无效')
+  const rawPageSize = str('pageSize')
+  const pageSize = rawPageSize ? Number(rawPageSize) : 50
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 200)
+    throw new HttpError(400, '每页数量需在 1–200 之间')
+  const rawSort = str('sort') || 'created_desc'
+  const sortAlias: Record<string, FileSortOption> = {
+    desc: 'created_desc',
+    asc: 'created_asc',
+    created_desc: 'created_desc',
+    created_asc: 'created_asc',
+    name_asc: 'name_asc',
+    name_desc: 'name_desc',
+    size_desc: 'size_desc',
+    size_asc: 'size_asc',
+  }
+  const sort = sortAlias[rawSort]
+  if (!sort) throw new HttpError(400, '排序参数无效')
+  return {
+    collectionId,
+    status: rawStatus as FileQueryOptions['status'],
+    trashed,
+    kind: rawKind as FileQueryOptions['kind'],
+    q: search || undefined,
+    page,
+    pageSize,
+    sort,
+  }
+}
 
 function collectionInput(value: unknown, current?: Collection): Collection {
   const body = object(value)
@@ -380,13 +449,41 @@ export async function createApp(
     })
     return setSession(reply, auth.id)
   })
-  app.get('/api/workspace', async (req) => {
+  app.get('/api/workspace', async (req, reply) => {
+    const role = session(req)?.role || 'viewer'
+    const etag = makeEtag(
+      'workspace',
+      store.changeStamp(),
+      role,
+      config.quotaBytes,
+      config.requestBytes,
+    )
+    reply.header('ETag', etag).header('Cache-Control', 'no-cache').header('Vary', 'Cookie')
+    if (etagMatches(req.headers['if-none-match'], etag)) return reply.code(304).send()
     const workspace = store.workspace(config.quotaBytes, config.requestBytes)
-    if (session(req)?.role === 'viewer') {
+    if (role === 'viewer') {
       workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c)
       workspace.lastRenameId = undefined
     }
     return workspace
+  })
+  app.get('/api/files', async (req, reply) => {
+    const role = session(req)?.role || 'viewer'
+    const query = parseFileQuery(req.query)
+    const etag = makeEtag('files', store.changeStamp(), role, JSON.stringify(query))
+    reply.header('ETag', etag).header('Cache-Control', 'no-cache').header('Vary', 'Cookie')
+    if (etagMatches(req.headers['if-none-match'], etag)) return reply.code(304).send()
+    return store.queryFiles(query)
+  })
+  app.get('/api/collections/:id/files', async (req, reply) => {
+    const id = String(object(req.params).id)
+    getCollection(id)
+    const role = session(req)?.role || 'viewer'
+    const query = parseFileQuery(req.query, id)
+    const etag = makeEtag('collection-files', store.changeStamp(), role, JSON.stringify(query))
+    reply.header('ETag', etag).header('Cache-Control', 'no-cache').header('Vary', 'Cookie')
+    if (etagMatches(req.headers['if-none-match'], etag)) return reply.code(304).send()
+    return store.queryFiles(query)
   })
   app.patch('/api/settings', async (req) => {
     const displayName = text(object(req.body).displayName, '显示名称', 20)
@@ -466,7 +563,11 @@ export async function createApp(
       ...c
     } = publicCollection(String(object(req.params).token))
     return {
-      collection: { ...c, requestLimitMB: config.requestBytes / 1024 ** 2 },
+      collection: {
+        ...c,
+        activeFiles: store.activeFileCount(c.id),
+        requestLimitMB: config.requestBytes / 1024 ** 2,
+      },
       ownerName: store.get('displayName') || '管理员',
     }
   })

@@ -17,6 +17,7 @@ export interface Collection {
   description: string
   category: 'design' | 'document' | 'photo'
   received: number
+  activeFiles?: number
   target: number
   deadline: string
   storage: StorageId
@@ -270,6 +271,22 @@ export interface CollectedFile {
   materialVersion?: number
   materialReview?: MaterialReview
   materialAction?: MaterialAction
+}
+
+export type FileSortOption =
+  | 'created_desc'
+  | 'created_asc'
+  | 'name_asc'
+  | 'name_desc'
+  | 'size_desc'
+  | 'size_asc'
+
+export interface PaginatedFiles {
+  items: CollectedFile[]
+  total: number
+  page: number
+  pageSize: number
+  hasMore: boolean
 }
 
 export interface Activity {

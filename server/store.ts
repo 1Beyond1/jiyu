@@ -1,9 +1,30 @@
 import { DatabaseSync } from 'node:sqlite'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { token } from './security.ts'
-import type { Workspace, Collection, CollectedFile } from '../src/types.ts'
+import { fileExtension } from '../src/lib/collections.ts'
+import type {
+  Workspace,
+  Collection,
+  CollectedFile,
+  FileSortOption,
+  PaginatedFiles,
+} from '../src/types.ts'
 import { cloudStorageIds } from '../src/types.ts'
+
+export interface FileQueryOptions {
+  collectionId?: string
+  status?: 'all' | 'ready' | 'pending'
+  trashed?: 'false' | 'true' | 'all'
+  kind?: 'all' | 'image'
+  q?: string
+  page: number
+  pageSize: number
+  sort: FileSortOption
+}
+
+const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'svg', 'webp', 'gif'])
 
 // Removed providers fall back to the immutable local copy; keep stored history intact.
 function normalizeStorage<T extends { storage: string }>(record: T): T {
@@ -16,6 +37,7 @@ export class Store {
   db: DatabaseSync
   lock: DatabaseSync
   dataDir: string
+  readonly instanceId = randomUUID()
   constructor(dataDir: string) {
     this.dataDir = dataDir
     mkdirSync(dataDir, { recursive: true, mode: 0o700 })
@@ -199,6 +221,98 @@ export class Store {
     return Number(
       (this.db.prepare('SELECT COUNT(*) AS total FROM files').get() as { total: number }).total,
     )
+  }
+  activeFileCount(collectionId: string) {
+    return Number(
+      (
+        this.db
+          .prepare(
+            "SELECT COUNT(*) AS total FROM files WHERE collection_id=? AND json_extract(data, '$.deletedAt') IS NULL",
+          )
+          .get(collectionId) as { total: number }
+      ).total,
+    )
+  }
+  changeStamp() {
+    const row = this.db.prepare('SELECT total_changes() AS changes').get() as { changes: number }
+    return `${this.instanceId}:${row.changes}`
+  }
+  queryFiles(options: FileQueryOptions): PaginatedFiles {
+    const where: string[] = []
+    const params: (string | number)[] = []
+    if (options.collectionId) {
+      where.push('f.collection_id=?')
+      params.push(options.collectionId)
+    }
+    const trashed = options.trashed || 'false'
+    if (trashed === 'false') where.push("json_extract(f.data, '$.deletedAt') IS NULL")
+    else if (trashed === 'true') where.push("json_extract(f.data, '$.deletedAt') IS NOT NULL")
+    if (options.status && options.status !== 'all') {
+      where.push("json_extract(f.data, '$.status')=?")
+      params.push(options.status)
+    }
+    const sql = `SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY f.rowid DESC`
+    let list = (
+      this.db.prepare(sql).all(...params) as {
+        data: string
+        state: string | null
+        remote_path: string | null
+      }[]
+    ).map((r) => this.hydrateFile(r))
+    if (options.kind === 'image')
+      list = list.filter((f) => IMAGE_EXTENSIONS.has(fileExtension(f.name)))
+    const term = (options.q || '').trim()
+    if (term) {
+      const lower = term.toLowerCase()
+      const contentHits = new Set<string>()
+      if (term.length >= 2) {
+        const rows = (
+          term.length >= 3
+            ? this.db
+                .prepare(
+                  'SELECT file_id FROM content_search WHERE content_search MATCH ? LIMIT 500',
+                )
+                .all(`"${term.replaceAll('"', '""')}"`)
+            : this.db
+                .prepare(
+                  'SELECT file_id FROM content_search WHERE instr(lower(body),lower(?))>0 LIMIT 500',
+                )
+                .all(term)
+        ) as { file_id: string }[]
+        for (const r of rows) contentHits.add(r.file_id)
+      }
+      list = list.filter(
+        (f) =>
+          `${f.name} ${f.owner} ${(f.tags || []).join(' ')}`.toLowerCase().includes(lower) ||
+          contentHits.has(f.id),
+      )
+    }
+    list.sort((a, b) => {
+      switch (options.sort) {
+        case 'created_asc':
+          return Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id)
+        case 'name_asc':
+          return a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id)
+        case 'name_desc':
+          return b.name.localeCompare(a.name, 'zh-CN') || b.id.localeCompare(a.id)
+        case 'size_asc':
+          return a.size - b.size || a.id.localeCompare(b.id)
+        case 'size_desc':
+          return b.size - a.size || b.id.localeCompare(a.id)
+        default:
+          return Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id)
+      }
+    })
+    const total = list.length
+    const start = (options.page - 1) * options.pageSize
+    const items = list.slice(start, start + options.pageSize)
+    return {
+      items,
+      total,
+      page: options.page,
+      pageSize: options.pageSize,
+      hasMore: start + items.length < total,
+    }
   }
   saveFile(file: CollectedFile) {
     this.db.prepare('UPDATE files SET data=? WHERE id=?').run(JSON.stringify(file), file.id)
