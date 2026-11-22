@@ -567,7 +567,9 @@ export function registerStorage(
         )
         .run(new Date().toISOString(), row.file_id)
       try {
-        const path = join(store.dataDir, 'objects', store.fileKey(file.id)!),
+        const key = store.fileKey(file.id)
+        if (!key) throw new HttpError(409, '本机原件已不存在')
+        const path = join(store.dataDir, 'objects', key),
           hash = createHash('sha256')
         let bytes = 0
         for await (const chunk of createReadStream(path)) {
@@ -587,17 +589,22 @@ export function registerStorage(
         if (current.revision !== row.revision)
           throw new HttpError(409, '传输期间连接配置已变更，请核对云端结果后重试')
         store.transaction(() => {
+          clearRetryState(file.id)
+          const latest = store.file(file.id)
+          if (!latest) return
           store.db
             .prepare(
               "UPDATE remote_transfers SET state='ready',remote_path=?,updated_at=?,error=NULL WHERE file_id=?",
             )
             .run(result.path, new Date().toISOString(), file.id)
-          clearRetryState(file.id)
-          const latest = store.file(file.id)!
           store.saveFile({ ...latest, remotePath: result.path, remoteStatus: 'ready' })
           store.activity('一份收集文件已完成云端同步，本机副本保留')
         })
       } catch (error) {
+        if (!store.file(row.file_id)) {
+          clearRetryState(row.file_id)
+          continue
+        }
         const message =
           error instanceof HttpError
             ? error.message

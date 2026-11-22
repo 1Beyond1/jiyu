@@ -4,6 +4,7 @@ import { mkdir, copyFile, readFile, writeFile, stat, rm } from 'node:fs/promises
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { createHash } from 'node:crypto'
 import { Store } from './store.ts'
+import { token } from './security.ts'
 
 async function checksum(path: string) {
   const hash = createHash('sha256')
@@ -197,7 +198,10 @@ export async function restoreBackup(source: string, destination: string) {
   const restored = new Store(destination)
   try {
     restored.db.exec('DELETE FROM sessions; DELETE FROM uploads; DELETE FROM storage_oauth;')
-    restored.activity('从已校验的备份恢复数据，旧登录会话与未完成上传、授权流程已撤销')
+    restored.set('public.accessSecret', token())
+    restored.activity(
+      '从已校验的备份恢复数据，旧登录会话、提取码解锁凭证与未完成上传、授权流程已撤销',
+    )
   } finally {
     restored.close()
   }
@@ -214,6 +218,7 @@ export async function pruneTrash(dataDir: string, backupDir: string) {
     store.transaction(() => {
       for (const file of files) {
         store.db.prepare('DELETE FROM content_search WHERE file_id=?').run(file.id)
+        store.db.prepare('DELETE FROM settings WHERE key=?').run(`storage.retry.${file.id}`)
         store.db.prepare('DELETE FROM files WHERE id=?').run(file.id)
       }
       store.activity(`离线清理了回收站中的 ${files.length} 个文件，已先完成完整备份`)

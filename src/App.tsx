@@ -937,7 +937,11 @@ function WorkspaceApp() {
                         confirm: 'PERMANENT_DELETE',
                       })
                       if (!next) return false
-                      notify(`已永久清理 ${ids.length} 个回收站文件`)
+                      notify(
+                        'warning' in next && typeof next.warning === 'string' && next.warning
+                          ? next.warning
+                          : `已永久清理 ${ids.length} 个回收站文件`,
+                      )
                       return true
                     }
                   : undefined

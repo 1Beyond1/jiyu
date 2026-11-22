@@ -196,6 +196,7 @@ export async function createApp(
     storageHTTP?: RemoteHTTP
     storageRetry?: StorageRetryPolicy
     materialToolMode?: boolean
+    unlinkObject?: (path: string) => Promise<void>
   } = {},
 ) {
   const store = new Store(config.dataDir)
@@ -1130,34 +1131,68 @@ export async function createApp(
     if (archives.hasReferencedFiles(idSet))
       throw new HttpError(409, '部分文件正被活跃打包任务引用，请等待打包结束或取消后再清理')
     const auth = session(req)!
-    let keys: string[] = []
-    let freedBytes = 0
+    let targets: { file: CollectedFile; key: string }[] = []
     store.transaction(() => {
       const fresh = list.map((f) => {
         const current = store.file(f.id)
         if (!current || !current.deletedAt)
           throw new HttpError(409, '部分文件状态已变化或已恢复，请刷新后重试')
+        const transfer = store.db
+          .prepare('SELECT state FROM remote_transfers WHERE file_id=?')
+          .get(f.id) as { state: string } | undefined
+        if (transfer?.state === 'transferring')
+          throw new HttpError(409, '部分文件正在执行云端同步，请等待同步结束后再永久清理')
+        const doc = store.db.prepare('SELECT status FROM documents WHERE file_id=?').get(f.id) as
+          | { status: string }
+          | undefined
+        if (doc?.status === 'processing')
+          throw new HttpError(409, '部分文件正在执行正文识别/OCR，请等待识别完成后再永久清理')
         const key = store.fileKey(f.id)
         if (!key || !/^[a-f0-9-]{36}$/.test(key)) throw new HttpError(409, '文件存储记录无效')
         return { file: current, key }
       })
-      keys = fresh.map((item) => item.key)
-      freedBytes = fresh.reduce((sum, item) => sum + item.file.size, 0)
+      targets = fresh
       for (const { file } of fresh) {
         store.db.prepare('DELETE FROM content_search WHERE file_id=?').run(file.id)
+        store.db.prepare('DELETE FROM settings WHERE key=?').run(`storage.retry.${file.id}`)
         store.db.prepare('DELETE FROM files WHERE id=?').run(file.id)
       }
       store.activity(
         `管理员「${auth.display_name}」在线永久清理了回收站中的 ${fresh.length} 个文件`,
       )
     })
-    for (const key of keys) {
-      await rm(join(config.dataDir, 'objects', key), { force: true }).catch(() => {})
+    const unlinkObject =
+      options.unlinkObject ?? ((objectPath: string) => rm(objectPath, { force: true }))
+    let freedBytes = 0
+    const failedFiles: { id: string; name: string; error: string }[] = []
+    for (const { file, key } of targets) {
+      try {
+        await unlinkObject(join(config.dataDir, 'objects', key))
+        freedBytes += file.size
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code
+        const reason = code
+          ? `磁盘文件暂被占用无法删除（${code}），服务重启后将自动清理`
+          : '磁盘文件暂时无法删除，服务重启后将自动清理'
+        failedFiles.push({ id: file.id, name: file.name, error: reason })
+        app.log.warn({ fileId: file.id, key, err }, 'purge failed to unlink object file')
+      }
+    }
+    if (failedFiles.length) {
+      store.activity(
+        `永久清理完成，但有 ${failedFiles.length} 个磁盘文件因占用未能立即删除，重启后将自动释放`,
+      )
     }
     return {
       workspace: store.workspace(config.quotaBytes, config.requestBytes),
-      purged: keys.length,
+      purged: targets.length,
       freedBytes,
+      ...(failedFiles.length
+        ? {
+            failedFiles,
+            warning: `数据库记录已清理，但 ${failedFiles.length} 个磁盘文件暂被占用未释放（实际释放 ${freedBytes} 字节），服务重启后将自动清理`,
+          }
+        : {}),
     }
   })
   const stopContent = registerContent(app, store, options.contentExtractor)

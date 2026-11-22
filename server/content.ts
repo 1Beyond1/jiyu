@@ -370,6 +370,18 @@ export function registerContent(
         const result = await extractor(f, join(store.dataDir, 'objects', key), controller.signal)
         const body = stripNonWhitespaceControlChars(result.text).slice(0, MAX_TEXT)
         store.transaction(() => {
+          const current = store.file(f.id)
+          if (!current || current.deletedAt) {
+            store.db.prepare('DELETE FROM content_search WHERE file_id=?').run(f.id)
+            if (current) {
+              store.db
+                .prepare(
+                  "UPDATE documents SET status='failed',updated_at=?,error='文件已移除' WHERE file_id=?",
+                )
+                .run(new Date().toISOString(), f.id)
+            }
+            return
+          }
           store.db.prepare('DELETE FROM content_search WHERE file_id=?').run(f.id)
           store.db.prepare('INSERT INTO content_search(file_id,body) VALUES (?,?)').run(f.id, body)
           store.db

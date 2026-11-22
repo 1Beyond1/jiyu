@@ -63,7 +63,14 @@ export function useWorkspace() {
     try {
       const result = await api<
         | Workspace
-        | { workspace: Workspace; operationId?: string; purged?: number; freedBytes?: number }
+        | {
+            workspace: Workspace
+            operationId?: string
+            purged?: number
+            freedBytes?: number
+            warning?: string
+            failedFiles?: { id: string; name: string; error: string }[]
+          }
       >(path, method, body)
       if (current === sequence.current) {
         etag.current = ''

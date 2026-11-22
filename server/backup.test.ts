@@ -6,6 +6,7 @@ import { join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Store } from './store.ts'
 import { createBackup, restoreBackup } from './backup.ts'
+import { signAccessProof, verifyAccessProof } from './security.ts'
 
 test('升级前备份保留 v0.2 schema，恢复后才迁移且不修改旧快照', async () => {
   const root = resolve('.artifacts')
@@ -68,6 +69,45 @@ test('凭证主密钥缺失或损坏不能生成可用备份或恢复', async ()
       /主密钥校验失败/,
     )
     assert.equal(existsSync(join(dir, 'restored')), false)
+  } finally {
+    if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('恢复备份后强制轮换 public.accessSecret，旧提取码解锁凭证立即失效', async () => {
+  const root = resolve('.artifacts')
+  await mkdir(root, { recursive: true })
+  const dir = await mkdtemp(join(root, 'backup-access-secret-')),
+    dataDir = join(dir, 'data'),
+    backupDir = join(dir, 'backup'),
+    restoredDir = join(dir, 'restored')
+  try {
+    let oldSecret = ''
+    const expiresAt = Date.now() + 60_000
+    const store = new Store(dataDir)
+    try {
+      oldSecret = store.publicAccessSecret()
+    } finally {
+      store.close()
+    }
+    const oldProof = signAccessProof(oldSecret, 'col-1', 'tok-1', 'v1', expiresAt)
+    assert.equal(verifyAccessProof(oldSecret, oldProof, 'col-1', 'tok-1', 'v1'), true)
+
+    await createBackup(dataDir, backupDir)
+    await restoreBackup(backupDir, restoredDir)
+
+    const restored = new Store(restoredDir)
+    try {
+      const newSecret = restored.publicAccessSecret()
+      assert.notEqual(newSecret, oldSecret, '恢复备份后必须生成新的 public.accessSecret')
+      assert.equal(
+        verifyAccessProof(newSecret, oldProof, 'col-1', 'tok-1', 'v1'),
+        false,
+        '备份前签发的提取码解锁凭证在恢复后必须立即失效',
+      )
+    } finally {
+      restored.close()
+    }
   } finally {
     if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true })
   }
