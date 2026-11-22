@@ -95,7 +95,10 @@ export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
   if (locked)
     return (
       <main className="auth-page">
-        <Brand />
+        <div className="auth-top">
+          <Brand />
+          <ThemeSwitch compact />
+        </div>
         <section className="auth-card">
           <span className="auth-symbol">
             <LockKeyhole size={24} strokeWidth={1.4} />
@@ -134,7 +137,10 @@ export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
   if (!info)
     return (
       <main className="auth-page">
-        <Brand />
+        <div className="auth-top">
+          <Brand />
+          <ThemeSwitch compact />
+        </div>
         <section className="auth-card">
           <h1>{error ? '暂时无法打开这项收集' : '正在打开收集…'}</h1>
           <p>{error || '正在读取最新的收集规则。'}</p>
