@@ -10,6 +10,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "check": "tsc -b",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
     "test": "node --experimental-strip-types --test --test-timeout=30000 src/lib/*.test.ts server/*.test.ts",
     "start": "node --experimental-strip-types server/index.ts",
     "server:dev": "node --experimental-strip-types --watch server/index.ts",
@@ -31,6 +34,7 @@
     "yazl": "3.3.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.8",
     "@types/node": "26.6.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
