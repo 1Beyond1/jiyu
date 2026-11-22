@@ -28,8 +28,12 @@ export function useWorkspace() {
     try {
       const result = await apiCached<Workspace>('/api/workspace', etag.current || undefined)
       if (current === sequence.current) {
-        if (result.etag) etag.current = result.etag
-        if (result.status === 200) setWorkspace(result.data)
+        if (result.status === 200) {
+          etag.current = result.etag
+          setWorkspace(result.data)
+        } else if (result.etag) {
+          etag.current = result.etag
+        }
         setUpdatedAt(new Date().toISOString())
         setError('')
       }

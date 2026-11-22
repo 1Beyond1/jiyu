@@ -1,4 +1,6 @@
 import type {
+  CollectedFile,
+  PaginatedFiles,
   UploadReceipt,
   SubmissionMetadata,
   UploadFeedback,
@@ -50,15 +52,15 @@ export async function apiCached<T>(
     credentials: 'same-origin',
     headers: etag ? { 'If-None-Match': etag } : undefined,
   })
-  const nextEtag = response.headers.get('ETag') || etag || ''
-  if (response.status === 304) return { status: 304, etag: nextEtag }
+  const headerEtag = response.headers.get('ETag') || ''
+  if (response.status === 304) return { status: 304, etag: headerEtag || etag || '' }
   const data = await response.json().catch(() => ({ error: '服务返回了无效响应' }))
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/api/auth/'))
       window.dispatchEvent(new Event('jiyu:session-expired'))
     throw new Error(data.error || '操作失败，请稍后重试')
   }
-  return { status: 200, etag: nextEtag, data: data as T }
+  return { status: 200, etag: headerEtag, data: data as T }
 }
 
 export interface EtagCacheEntry<T> {
@@ -92,6 +94,10 @@ export class EtagCache<T> {
     }
   }
 
+  delete(key: string): void {
+    this.entries.delete(key)
+  }
+
   clear(): void {
     this.entries.clear()
   }
@@ -110,15 +116,49 @@ export class EtagCache<T> {
     }
     if (res.status === 200) {
       if (res.etag) this.set(endpoint, res.etag, res.data)
+      else this.delete(endpoint)
       return { status: 200, etag: res.etag, data: res.data }
     }
     const fresh = await fetcher(endpoint, undefined, signal)
     if (fresh.status === 200) {
       if (fresh.etag) this.set(endpoint, fresh.etag, fresh.data)
+      else this.delete(endpoint)
       return { status: 200, etag: fresh.etag, data: fresh.data }
     }
     throw new Error('服务返回了无效缓存状态')
   }
+}
+
+export async function fetchAllPaginatedFiles(
+  basePath: string,
+  baseParams: URLSearchParams,
+  maxItems: number,
+  signal?: AbortSignal,
+  fetcher: (path: string, signal?: AbortSignal) => Promise<PaginatedFiles> = (path, sig) =>
+    api<PaginatedFiles>(path, 'GET', undefined, sig),
+): Promise<{ items: CollectedFile[]; total: number; truncated: boolean }> {
+  const limit = Math.max(1, maxItems)
+  const chunkSize = Math.min(200, limit)
+  const collected: CollectedFile[] = []
+  const seen = new Set<string>()
+  let page = 1
+  let total = 0
+  while (collected.length < limit) {
+    const params = new URLSearchParams(baseParams)
+    params.set('page', String(page))
+    params.set('pageSize', String(chunkSize))
+    const data = await fetcher(`${basePath}?${params}`, signal)
+    total = data.total
+    for (const item of data.items) {
+      if (seen.has(item.id)) continue
+      seen.add(item.id)
+      collected.push(item)
+      if (collected.length >= limit) break
+    }
+    if (!data.items.length || !data.hasMore || page * data.pageSize >= data.total) break
+    page++
+  }
+  return { items: collected, total, truncated: total > collected.length }
 }
 
 export function uploadMultipart(

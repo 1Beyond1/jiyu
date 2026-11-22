@@ -16,25 +16,42 @@ export function FilePreview({ file, inline = false }: { file: CollectedFile; inl
   const [content, setContent] = useState<FileContent | null>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
-  const load = useCallback(async () => {
-    try {
-      setContent(await api<FileContent>(`/api/files/${file.id}/content`))
-      setError('')
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }, [file.id])
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const data = await api<FileContent>(
+          `/api/files/${file.id}/content`,
+          'GET',
+          undefined,
+          signal,
+        )
+        if (signal?.aborted) return
+        setContent(data)
+        setError('')
+      } catch (e) {
+        if (signal?.aborted) return
+        setError((e as Error).message)
+      }
+    },
+    [file.id],
+  )
   useEffect(() => {
+    const controller = new AbortController()
     setContent(null)
     setError('')
-    void load()
+    void load(controller.signal)
+    return () => controller.abort()
   }, [load])
   const processing =
     content?.document?.status === 'queued' || content?.document?.status === 'processing'
   useEffect(() => {
     if (!processing) return
-    const timer = setInterval(() => void load(), 2000)
-    return () => clearInterval(timer)
+    const controller = new AbortController()
+    const timer = setInterval(() => void load(controller.signal), 2000)
+    return () => {
+      clearInterval(timer)
+      controller.abort()
+    }
   }, [processing, load])
   const displayChars = content?.document?.chars ?? content?.chars ?? content?.text?.length ?? 0
   const displayTruncated = Boolean(content?.document?.truncated || content?.truncated)

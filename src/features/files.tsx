@@ -24,7 +24,7 @@ import { fileExtension } from '../lib/collections'
 import { ArchiveModal } from './archive'
 import { useAccount } from './auth'
 import { FilePreview } from './content'
-import { api, EtagCache } from '../lib/api'
+import { api, EtagCache, fetchAllPaginatedFiles } from '../lib/api'
 
 const SORT_OPTIONS: { value: FileSortOption; label: string }[] = [
   { value: 'created_desc', label: '最新提交优先' },
@@ -84,10 +84,13 @@ export function FileTable({
   const [filter, setFilter] = useState('all')
   const [selected, setSelected] = useState<string[]>([])
   const [sort, setSort] = useState<FileSortOption>('created_desc')
-  const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [pageData, setPageData] = useState<PaginatedFiles | null>(null)
   const [pageLoading, setPageLoading] = useState(false)
+  const [pageError, setPageError] = useState('')
+  const [retryTick, setRetryTick] = useState(0)
+  const [exporting, setExporting] = useState(false)
+  const [actionError, setActionError] = useState('')
   const pageCache = useRef(new EtagCache<PaginatedFiles>(40))
   const [archiveFiles, setArchiveFiles] = useState<CollectedFile[] | null>(null)
   const [matches, setMatches] = useState<{ id: string; excerpt: string }[]>([]),
@@ -95,20 +98,42 @@ export function FileTable({
     [searching, setSearching] = useState(false)
   const term = (search || query).trim()
   const useServerPaging = !compact && serverPagination
-  const prevQueryKey = useRef(`${term}\0${filter}\0${sort}\0${collectionId}\0${pageSize}`)
   const queryKey = `${term}\0${filter}\0${sort}\0${collectionId}\0${pageSize}`
-  if (prevQueryKey.current !== queryKey) {
-    prevQueryKey.current = queryKey
-    if (page !== 1) setPage(1)
+  const [pageState, setPageState] = useState<{ key: string; page: number }>({
+    key: queryKey,
+    page: 1,
+  })
+  const page = pageState.key === queryKey ? pageState.page : 1
+  const setPage = (next: number | ((current: number) => number)) => {
+    setPageState((prev) => {
+      const base = prev.key === queryKey ? prev.page : 1
+      const resolved = typeof next === 'function' ? next(base) : next
+      return { key: queryKey, page: resolved }
+    })
+  }
+
+  const serverBasePath = collectionId
+    ? `/api/collections/${encodeURIComponent(collectionId)}/files`
+    : '/api/files'
+
+  function buildServerFilterParams() {
+    const params = new URLSearchParams({ sort })
+    if (filter === 'pending') params.set('status', 'pending')
+    else if (filter === 'ready') params.set('status', 'ready')
+    else if (filter === 'image') params.set('kind', 'image')
+    if (term) params.set('q', term)
+    return params
   }
 
   useEffect(() => {
     if (!useServerPaging) {
       setPageData(null)
+      setPageError('')
       return
     }
     const workspaceTick = files
     void workspaceTick
+    void retryTick
     const controller = new AbortController()
     const params = new URLSearchParams({
       page: String(page),
@@ -119,10 +144,9 @@ export function FileTable({
     else if (filter === 'ready') params.set('status', 'ready')
     else if (filter === 'image') params.set('kind', 'image')
     if (term) params.set('q', term)
-    const endpoint = collectionId
-      ? `/api/collections/${encodeURIComponent(collectionId)}/files?${params}`
-      : `/api/files?${params}`
+    const endpoint = `${serverBasePath}?${params}`
     setPageLoading(true)
+    setPageError('')
     const timer = setTimeout(
       () => {
         void pageCache.current
@@ -130,12 +154,16 @@ export function FileTable({
           .then((res) => {
             if (controller.signal.aborted) return
             setPageData(res.data)
+            setPageError('')
             const maxPage = Math.max(1, Math.ceil(res.data.total / res.data.pageSize))
-            if (page > maxPage) setPage(maxPage)
+            if (page > maxPage) setPageState({ key: queryKey, page: maxPage })
             setPageLoading(false)
           })
-          .catch(() => {
-            if (!controller.signal.aborted) setPageLoading(false)
+          .catch((err) => {
+            if (controller.signal.aborted) return
+            setPageData(null)
+            setPageError((err as Error).message || '文件列表加载失败，请重试')
+            setPageLoading(false)
           })
       },
       term ? 200 : 0,
@@ -144,7 +172,18 @@ export function FileTable({
       clearTimeout(timer)
       controller.abort()
     }
-  }, [useServerPaging, collectionId, filter, term, sort, page, pageSize, files])
+  }, [
+    useServerPaging,
+    serverBasePath,
+    queryKey,
+    filter,
+    term,
+    sort,
+    page,
+    pageSize,
+    files,
+    retryTick,
+  ])
 
   useEffect(() => {
     setMatches([])
@@ -197,37 +236,88 @@ export function FileTable({
                 ))),
     )
     .sort((a, b) => compareFiles(a, b, sort))
-  const totalCount = useServerPaging && pageData ? pageData.total : visible.length
+  const totalCount = useServerPaging
+    ? pageError
+      ? 0
+      : pageData
+        ? pageData.total
+        : visible.length
+    : visible.length
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
   const list = compact
     ? visible.slice(0, 5)
     : useServerPaging
-      ? pageData
-        ? pageData.items
-        : visible.slice((page - 1) * pageSize, page * pageSize)
+      ? pageError
+        ? []
+        : pageData
+          ? pageData.items
+          : visible.slice((page - 1) * pageSize, page * pageSize)
       : visible
   const chosenMap = new Map<string, CollectedFile>()
   for (const f of files) chosenMap.set(f.id, f)
   for (const f of list) chosenMap.set(f.id, f)
   const chosen = selected.map((id) => chosenMap.get(id)).filter((f): f is CollectedFile => !!f)
   const allChecked = list.length > 0 && list.every((f) => selected.includes(f.id))
-  function exportCsv() {
-    const rows = (chosen.length ? chosen : visible).map((f) =>
-      [
-        f.name,
-        f.owner,
-        collections.find((c) => c.id === f.collectionId)?.title || '',
-        formatSize(f.size),
-        formatDate(f.createdAt),
-      ]
-        .map(csvCell)
-        .join(','),
-    )
-    downloadText(
-      '集屿-文件清单.csv',
-      '\uFEFF文件名称,提交人,收集任务,文件大小,提交时间\n' + rows.join('\n'),
-      'text/csv;charset=utf-8',
-    )
+
+  async function resolveFilteredFiles(maxItems: number): Promise<CollectedFile[]> {
+    if (!useServerPaging) return visible.slice(0, maxItems)
+    if (
+      pageData &&
+      pageData.page === 1 &&
+      pageData.items.length >= pageData.total &&
+      pageData.items.length <= maxItems
+    ) {
+      return pageData.items
+    }
+    const result = await fetchAllPaginatedFiles(serverBasePath, buildServerFilterParams(), maxItems)
+    return result.items
+  }
+
+  async function openArchiveForFiltered() {
+    if (exporting) return
+    setActionError('')
+    setExporting(true)
+    try {
+      const targets = await resolveFilteredFiles(500)
+      if (!targets.length) {
+        setActionError('当前筛选结果为空，暂无可打包的文件。')
+        return
+      }
+      setArchiveFiles(targets)
+    } catch (err) {
+      setActionError((err as Error).message || '读取筛选结果失败，请稍后重试')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function exportCsv() {
+    if (exporting) return
+    setActionError('')
+    setExporting(true)
+    try {
+      const targetFiles = chosen.length ? chosen : await resolveFilteredFiles(2000)
+      const rows = targetFiles.map((f) =>
+        [
+          f.name,
+          f.owner,
+          collections.find((c) => c.id === f.collectionId)?.title || '',
+          formatSize(f.size),
+          formatDate(f.createdAt),
+        ]
+          .map(csvCell)
+          .join(','),
+      )
+      downloadText(
+        '集屿-文件清单.csv',
+        '\uFEFF文件名称,提交人,收集任务,文件大小,提交时间\n' + rows.join('\n'),
+        'text/csv;charset=utf-8',
+      )
+    } catch (err) {
+      setActionError((err as Error).message || '导出清单失败，请稍后重试')
+    } finally {
+      setExporting(false)
+    }
   }
   return (
     <div className="file-panel">
@@ -294,20 +384,40 @@ export function FileTable({
               <button
                 type="button"
                 className="button"
-                disabled={!visible.length || visible.length > 500}
-                onClick={() => setArchiveFiles(visible)}
+                disabled={
+                  exporting || pageLoading || Boolean(pageError) || !totalCount || totalCount > 500
+                }
+                onClick={() => void openArchiveForFiltered()}
                 title="打包当前筛选结果，最多 500 个文件"
               >
                 <Download size={15} />
-                打包筛选结果
+                {exporting ? '准备中…' : '打包筛选结果'}
               </button>
             )}
-            <button type="button" className="button" onClick={exportCsv}>
+            <button
+              type="button"
+              className="button"
+              disabled={exporting || (!chosen.length && (Boolean(pageError) || !totalCount))}
+              onClick={() => void exportCsv()}
+            >
               <Download size={15} />
               导出清单
             </button>
           </div>
         </div>
+      )}
+      {!compact && pageError && (
+        <div className="error-banner" role="alert">
+          <span>文件列表加载失败：{pageError}</span>
+          <button type="button" className="button" onClick={() => setRetryTick((n) => n + 1)}>
+            重新加载
+          </button>
+        </div>
+      )}
+      {!compact && actionError && (
+        <p className="error-text" role="alert">
+          {actionError}
+        </p>
       )}
       {!!selected.length && (
         <div className="selection-bar">
@@ -485,7 +595,7 @@ export function FileTable({
           </tbody>
         </table>
       </div>
-      {!list.length && <Empty />}
+      {!list.length && !pageError && <Empty />}
       {!compact && (
         <footer className="table-footer">
           <span>
@@ -580,7 +690,7 @@ export function FileDetail({
           {file.status === 'ready' ? '已整理' : '待整理'}
         </span>
       </div>
-      <FilePreview file={file} />
+      <FilePreview key={file.id} file={file} />
       <dl className="detail-list">
         <div>
           <dt>所属收集</dt>
@@ -682,10 +792,11 @@ export function TrashPage({
   const { canEdit, isAdmin } = useAccount()
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<FileSortOption>('created_desc')
-  const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [pageData, setPageData] = useState<PaginatedFiles | null>(null)
   const [loading, setLoading] = useState(false)
+  const [pageError, setPageError] = useState('')
+  const [retryTick, setRetryTick] = useState(0)
   const [selected, setSelected] = useState<string[]>([])
   const [purgeTargets, setPurgeTargets] = useState<CollectedFile[] | null>(null)
   const [purgeChecked, setPurgeChecked] = useState(false)
@@ -694,15 +805,23 @@ export function TrashPage({
 
   const term = query.trim()
   const queryKey = `${term}\0${sort}\0${pageSize}`
-  const prevQueryKey = useRef(queryKey)
-  if (prevQueryKey.current !== queryKey) {
-    prevQueryKey.current = queryKey
-    if (page !== 1) setPage(1)
+  const [pageState, setPageState] = useState<{ key: string; page: number }>({
+    key: queryKey,
+    page: 1,
+  })
+  const page = pageState.key === queryKey ? pageState.page : 1
+  const setPage = (next: number | ((current: number) => number)) => {
+    setPageState((prev) => {
+      const base = prev.key === queryKey ? prev.page : 1
+      const resolved = typeof next === 'function' ? next(base) : next
+      return { key: queryKey, page: resolved }
+    })
   }
 
   useEffect(() => {
     const syncTick = files
     void syncTick
+    void retryTick
     const controller = new AbortController()
     const params = new URLSearchParams({
       trashed: 'true',
@@ -713,6 +832,7 @@ export function TrashPage({
     if (term) params.set('q', term)
     const endpoint = `/api/files?${params}`
     setLoading(true)
+    setPageError('')
     const timer = setTimeout(
       () => {
         void cacheRef.current
@@ -720,12 +840,16 @@ export function TrashPage({
           .then((res) => {
             if (controller.signal.aborted) return
             setPageData(res.data)
+            setPageError('')
             const maxPage = Math.max(1, Math.ceil(res.data.total / res.data.pageSize))
-            if (page > maxPage) setPage(maxPage)
+            if (page > maxPage) setPageState({ key: queryKey, page: maxPage })
             setLoading(false)
           })
-          .catch(() => {
-            if (!controller.signal.aborted) setLoading(false)
+          .catch((err) => {
+            if (controller.signal.aborted) return
+            setPageData(null)
+            setPageError((err as Error).message || '回收站列表加载失败，请重试')
+            setLoading(false)
           })
       },
       term ? 200 : 0,
@@ -734,15 +858,17 @@ export function TrashPage({
       clearTimeout(timer)
       controller.abort()
     }
-  }, [term, sort, page, pageSize, files])
+  }, [term, sort, page, pageSize, queryKey, files, retryTick])
 
   const fallbackVisible = files
     .filter((f) => `${f.name} ${f.owner}`.toLowerCase().includes(term.toLowerCase()))
     .sort((a, b) => compareFiles(a, b, sort))
-  const items = pageData
-    ? pageData.items
-    : fallbackVisible.slice((page - 1) * pageSize, page * pageSize)
-  const totalCount = pageData ? pageData.total : fallbackVisible.length
+  const items = pageError
+    ? []
+    : pageData
+      ? pageData.items
+      : fallbackVisible.slice((page - 1) * pageSize, page * pageSize)
+  const totalCount = pageError ? 0 : pageData ? pageData.total : fallbackVisible.length
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
 
   const fileMap = new Map<string, CollectedFile>()
@@ -825,6 +951,15 @@ export function TrashPage({
             </label>
           </div>
         </div>
+
+        {pageError && (
+          <div className="error-banner" role="alert">
+            <span>回收站加载失败：{pageError}</span>
+            <button type="button" className="button" onClick={() => setRetryTick((n) => n + 1)}>
+              重新加载
+            </button>
+          </div>
+        )}
 
         {!!chosen.length && (
           <div className="selection-bar">
@@ -928,12 +1063,12 @@ export function TrashPage({
               </div>
             ))}
           </div>
-        ) : (
+        ) : !pageError ? (
           <Empty
             title={term ? '没有匹配的回收站文件' : '回收站是空的'}
             text={term ? '换个关键词试试。' : '移除的文件会先放在这里，方便找回。'}
           />
-        )}
+        ) : null}
 
         <footer className="table-footer">
           <span>

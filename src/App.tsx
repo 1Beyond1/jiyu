@@ -1071,6 +1071,7 @@ function WorkspaceApp() {
       )}
       {detail && (
         <FileDetail
+          key={detail.id}
           file={workspace.files.find((f) => f.id === detail.id) || detail}
           collection={workspace.collections.find((c) => c.id === detail.collectionId)}
           onClose={() => setDetail(null)}
