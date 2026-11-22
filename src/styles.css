@@ -6278,6 +6278,8 @@ h3,
 .material-review-preview {
   position: sticky;
   top: 76px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -6356,11 +6358,25 @@ h3,
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.preview-pdf-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+.share-qr-fallback {
+  display: grid;
+  gap: 6px;
+  place-items: center;
+  text-align: center;
+  padding: 20px 14px;
+  min-height: 176px;
+}
 .file-preview.inline {
   margin: 0;
 }
 .file-preview.inline iframe {
-  height: 560px;
+  height: min(560px, calc(100vh - 280px));
+  min-height: 320px;
 }
 .file-preview.inline img {
   max-height: 560px;
@@ -6381,6 +6397,8 @@ h3,
   }
   .material-review-preview {
     position: static;
+    max-height: none;
+    overflow-y: visible;
   }
   .file-preview.inline iframe {
     height: 400px;

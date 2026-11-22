@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FileSearch, ScanText } from 'lucide-react'
+import { ExternalLink, FileSearch, ScanText } from 'lucide-react'
 import { api } from '../lib/api'
 import type { CollectedFile, DocumentInfo, FileContent } from '../types'
 import { useAccount } from './auth'
@@ -65,10 +65,23 @@ export function FilePreview({ file, inline = false }: { file: CollectedFile; inl
             <img src={`/api/files/${file.id}/preview`} alt={file.name} loading="lazy" />
           )}
           {content.preview === 'pdf' && (
-            <iframe
-              title={`${file.name} PDF 预览`}
-              src={`/api/files/${file.id}/preview#toolbar=0`}
-            />
+            <>
+              <div className="preview-pdf-actions">
+                <a
+                  className="text-button"
+                  href={`/api/files/${file.id}/preview`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink size={14} />
+                  新标签页打开 PDF
+                </a>
+              </div>
+              <iframe
+                title={`${file.name} PDF 预览`}
+                src={`/api/files/${file.id}/preview#toolbar=0`}
+              />
+            </>
           )}
           {content.preview === 'none' && (
             <p className="field-hint">

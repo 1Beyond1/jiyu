@@ -15,7 +15,7 @@ import type {
 import type { Store } from './store.ts'
 import { digest, HttpError, object } from './security.ts'
 import { sanitizeFilenameChars } from '../src/lib/text-safety.ts'
-import { materialReviewState } from '../src/lib/materials.ts'
+import { materialReviewState, normalizeParticipant } from '../src/lib/materials.ts'
 
 const ttl = 10 * 60 * 1000,
   maxBytes = 10 * 1024 ** 3
@@ -82,14 +82,18 @@ export function archiveEntries(
     if (layout === 'collection' || layout === 'collection-owner')
       parent = folder('', file.collectionId, col?.title || '未分类')
     if (layout === 'material-owner') {
+      const personRaw = (file.participant || file.owner || '').trim()
+      const personKey = normalizeParticipant(personRaw) || '未填写提交人'
       parent = folder(
         '',
         mat ? `${file.collectionId}:${mat.id}` : 'unclassified',
         mat?.name || '未分类',
       )
-      parent = folder(parent, file.owner, file.owner || '未填写提交人')
+      parent = folder(parent, personKey, personRaw || '未填写提交人')
     } else if (layout === 'owner-material') {
-      parent = folder('', file.owner, file.owner || '未填写提交人')
+      const personRaw = (file.participant || file.owner || '').trim()
+      const personKey = normalizeParticipant(personRaw) || '未填写提交人'
+      parent = folder('', personKey, personRaw || '未填写提交人')
       parent = folder(
         parent,
         mat ? `${file.collectionId}:${mat.id}` : 'unclassified',
@@ -290,6 +294,8 @@ export function registerArchives(app: FastifyInstance, store: Store) {
                 now.name !== file.name ||
                 now.size !== file.size ||
                 now.sha256 !== file.sha256 ||
+                (now.materialId || '') !== (file.materialId || '') ||
+                now.collectionId !== file.collectionId ||
                 store.fileKey(file.id) !== key
               )
             })

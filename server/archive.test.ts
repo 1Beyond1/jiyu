@@ -557,6 +557,57 @@ test('按材料项分目录（material-owner / owner-material）与仅打包人�
     f.store.saveCollection({ ...c, materialRevision: 'rev-material-v2' })
     const blockedDl = await f.request('GET', `/api/archives/${plan2.id}/download`)
     assert.equal(blockedDl.statusCode, 409)
+
+    // 5. material-owner / owner-material 规范按 participant || owner 分组（不拆大小写目录、同学名不同学号独立分组）
+    const caseA: CollectedFile = {
+      ...acceptedA.record,
+      id: 'case-1',
+      owner: 'Alice',
+      name: 'a.pdf',
+    }
+    const caseB: CollectedFile = {
+      ...acceptedA.record,
+      id: 'case-2',
+      owner: 'alice',
+      name: 'b.pdf',
+    }
+    const sameName1: CollectedFile = {
+      ...acceptedB.record,
+      id: 'same-1',
+      owner: '张伟',
+      participant: 'S2026001',
+      name: 's1.pdf',
+    }
+    const sameName2: CollectedFile = {
+      ...acceptedB.record,
+      id: 'same-2',
+      owner: '张伟',
+      participant: 'S2026002',
+      name: 's2.pdf',
+    }
+    const normalizedPaths = archiveEntries(
+      [caseA, caseB, sameName1, sameName2],
+      [c],
+      'material-owner',
+    ).map((e) => e.path)
+    assert.deepEqual(normalizedPaths, [
+      '报名表/Alice/a.pdf',
+      '报名表/Alice/b.pdf',
+      '作品说明/S2026001/s1.pdf',
+      '作品说明/S2026002/s2.pdf',
+    ])
+
+    // 6. 即使 acceptedOnly=false，计划生成后下载前若修改了文件 materialId，也必须返回 409 防落入旧目录
+    f.store.saveCollection(c)
+    const plan3Res = await f.request('POST', '/api/archives', {
+      ids: [pendingC.record.id],
+      layout: 'material/owner',
+    })
+    assert.equal(plan3Res.statusCode, 200)
+    const plan3 = plan3Res.json() as ArchivePlan
+    f.store.saveFile({ ...pendingC.record, materialId: 'mat_doc' })
+    const blockedMoved = await f.request('GET', `/api/archives/${plan3.id}/download`)
+    assert.equal(blockedMoved.statusCode, 409)
   } finally {
     await f.close()
   }

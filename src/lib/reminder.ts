@@ -1,5 +1,6 @@
 import type { Collection, MaterialParticipant, Participant } from '../types.ts'
 import { effectiveFileLimit } from './collections.ts'
+import { materialReviewState } from './materials.ts'
 
 export function maskIdentifier(value: string): string {
   const chars = [...value.trim()]
@@ -177,7 +178,7 @@ export function buildDirectReminder(options: {
     const rejectedDetails: string[] = []
     for (const slot of p.slots) {
       for (const f of slot.files) {
-        if (f.materialReview?.decision === 'needs_changes') {
+        if (materialReviewState(c, f) === 'needs_changes' && f.materialReview) {
           const note = f.materialReview.note?.trim() || '请核对材料要求后重新提交'
           rejectedDetails.push(`${slot.requirement.name}（${f.name}）：${note}`)
         }

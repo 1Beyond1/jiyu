@@ -198,6 +198,12 @@ export function MaterialWorkbench({
     setError('')
     setNotice('')
   }
+  const chosenIdSet = new Set(chosen.map((f) => f.id))
+  const remainingUnreviewedForPerson = person
+    ? person.files.filter(
+        (f) => !chosenIdSet.has(f.id) && !['accepted', 'needs_changes'].includes(fileState(f)),
+      )
+    : []
   async function apply(kind: 'classify' | 'review', advanceNext = false) {
     if (busy || !state.ready || !canEdit || !chosen.length || staleSelection) return
     if (kind === 'review' && !draft.decision) {
@@ -228,6 +234,7 @@ export function MaterialWorkbench({
         },
       }
     const nextTarget = advanceNext ? nextPendingPerson : null
+    const leftoverFiles = kind === 'review' ? remainingUnreviewedForPerson : []
     setBusy(true)
     setError('')
     setNotice('')
@@ -237,7 +244,14 @@ export function MaterialWorkbench({
       if (kind === 'review')
         setDrafts((old) => ({ ...old, [personId]: { materialId: '', decision: '', note: '' } }))
       state.retry()
-      if (advanceNext && nextTarget) {
+      if (advanceNext && leftoverFiles.length) {
+        setAIReview(undefined)
+        setPreviewFileId(leftoverFiles[0].id)
+        pending.current = null
+        setNotice(
+          `人工核对结果已保存；当前参与人仍有 ${leftoverFiles.length} 份未核对文件，已保留在本页并切换至「${leftoverFiles[0].name}」以免漏审。`,
+        )
+      } else if (advanceNext && nextTarget) {
         setAIReview(undefined)
         setPersonId(nextTarget.identity)
         setPreviewFileId('')
@@ -940,6 +954,12 @@ export function MaterialWorkbench({
                         placeholder="需补充时说明具体要改什么；这段说明可由本人回执查看"
                       />
                     </label>
+                    {!!chosen.length && !!remainingUnreviewedForPerson.length && (
+                      <p className="field-hint" role="status">
+                        当前参与人还有 {remainingUnreviewedForPerson.length}{' '}
+                        份未核对文件未勾选，保存并继续将保留在本页并切换至下一份未审文件，避免漏审。
+                      </p>
+                    )}
                     <div className="button-row">
                       <button
                         type="button"
@@ -952,19 +972,26 @@ export function MaterialWorkbench({
                       <button
                         type="button"
                         className="button"
-                        disabled={!draft.decision || !nextPendingPerson}
+                        disabled={
+                          !draft.decision ||
+                          (!nextPendingPerson && !remainingUnreviewedForPerson.length)
+                        }
                         title={
-                          nextPendingPerson
-                            ? `保存当前核对并跳转至 ${nextPendingPerson.identity}`
-                            : '当前没有下一位待核对参与人'
+                          remainingUnreviewedForPerson.length
+                            ? `当前参与人还有 ${remainingUnreviewedForPerson.length} 份未核对文件，保存后将留在当前页继续审阅`
+                            : nextPendingPerson
+                              ? `保存当前核对并跳转至 ${nextPendingPerson.identity}`
+                              : '当前没有下一位待核对参与人'
                         }
                         onClick={() => void apply('review', true)}
                       >
                         {busy
                           ? '保存中…'
-                          : nextPendingPerson
-                            ? `保存并跳转下一位待核对（${otherPendingPeople.length}）`
-                            : '已无下一位待核对'}
+                          : remainingUnreviewedForPerson.length
+                            ? `保存并审同人下一份（剩 ${remainingUnreviewedForPerson.length} 份）`
+                            : nextPendingPerson
+                              ? `保存并跳转下一位待核对（${otherPendingPeople.length}）`
+                              : '已无下一位待核对'}
                         <ArrowRight size={14} />
                       </button>
                     </div>

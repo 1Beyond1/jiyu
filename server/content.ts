@@ -560,6 +560,7 @@ export function registerContent(
     if (kind.preview === 'none' || file.size > 32 * 1024 ** 2)
       throw new HttpError(415, '此文件暂不支持在线预览，请下载查看')
     reply
+      .header('Cache-Control', 'private, max-age=300')
       .header('X-Frame-Options', 'SAMEORIGIN')
       .header(
         'Content-Security-Policy',

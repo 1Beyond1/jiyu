@@ -6,6 +6,7 @@ import {
   buildShareAnnouncement,
   maskIdentifier,
 } from './reminder.ts'
+import { materialFileVersion } from './materials.ts'
 import type { Collection, CollectedFile, MaterialParticipant, Participant } from '../types.ts'
 
 const baseCollection: Collection = {
@@ -162,8 +163,8 @@ test('buildGroupReminder 支持群公告脱敏与明文切换，准确汇总缺�
   assert.ok(unmasked.text.includes('20260002（李四）'))
 })
 
-test('buildDirectReminder 精确列出缺项、materialReview.note 退回说明与回执替换指引', () => {
-  const rejectedFile: CollectedFile = {
+test('buildDirectReminder 精确列出缺项、materialReview.note 退回说明与回执替换指引，并过滤已过期 stale 退回说明', () => {
+  const rejectedBase: CollectedFile = {
     id: 'f-2',
     name: '报名表.pdf',
     size: 2048,
@@ -173,26 +174,54 @@ test('buildDirectReminder 精确列出缺项、materialReview.note 退回说明�
     storage: 'local',
     status: 'pending',
     materialId: 'mat_form',
+  }
+  const rejectedFile: CollectedFile = {
+    ...rejectedBase,
     materialReview: {
       decision: 'needs_changes',
       note: '指导老师签字处空白，请签字后重新扫描上传',
       rulesRevision: 'rev-1',
-      fileVersion: 'v1',
+      fileVersion: materialFileVersion(rejectedBase),
       operationId: 'op-2',
       reviewerId: 'primary',
       reviewerName: '管理员',
       reviewedAt: '2026-11-22T02:00:00.000Z',
     },
   }
+  const staleRejectedBase: CollectedFile = {
+    id: 'f-stale',
+    name: '已改名旧材料.pdf',
+    size: 2048,
+    collectionId: 'col-1',
+    owner: '王五',
+    createdAt: '2026-11-22T00:00:00.000Z',
+    storage: 'local',
+    status: 'pending',
+    materialId: 'mat_form',
+    materialVersion: 2,
+  }
+  const staleRejectedFile: CollectedFile = {
+    ...staleRejectedBase,
+    materialReview: {
+      decision: 'needs_changes',
+      note: '这条旧规则或旧版本的过期退回原因绝不能出现在新催交话术中',
+      rulesRevision: 'rev-0-expired',
+      fileVersion: 'stale-version',
+      operationId: 'op-stale',
+      reviewerId: 'primary',
+      reviewerName: '管理员',
+      reviewedAt: '2026-11-21T02:00:00.000Z',
+    },
+  }
   const person: MaterialParticipant = {
     identity: '20260003',
     owner: '王五',
     expected: true,
-    files: [rejectedFile],
+    files: [rejectedFile, staleRejectedFile],
     slots: [
       {
         requirement: baseCollection.materials![0],
-        files: [rejectedFile],
+        files: [rejectedFile, staleRejectedFile],
         state: 'needs_changes',
         duplicate: false,
       },
@@ -214,6 +243,10 @@ test('buildDirectReminder 精确列出缺项、materialReview.note 退回说明�
   assert.ok(dm.includes('你好 王五（20260003）'))
   assert.ok(dm.includes('尚未提交的必需材料：作品说明'))
   assert.ok(dm.includes('报名表（报名表.pdf）：指导老师签字处空白，请签字后重新扫描上传'))
+  assert.ok(
+    !dm.includes('过期退回原因绝不能出现在新催交话术中'),
+    '已过期（stale）的旧退回说明不应带入催交话术',
+  )
   assert.ok(dm.includes('回执替换指引'))
   assert.ok(dm.includes('按说明替换本批文件'))
   assert.ok(dm.includes('提取码：AB12'))

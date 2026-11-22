@@ -132,6 +132,7 @@ test('本机正文索引、中文检索、DOCX 解包、范围预览与权限边
     assert.equal(range.body, '%PDF-')
     assert.equal(range.headers['content-type'], 'application/pdf')
     assert.equal(range.headers['x-frame-options'], 'SAMEORIGIN')
+    assert.equal(range.headers['cache-control'], 'private, max-age=300')
     assert.equal(
       (
         await app.inject({
