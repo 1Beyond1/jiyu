@@ -372,7 +372,7 @@ export async function createApp(
     })
     done()
   })
-  app.get('/api/health', async () => ({ ok: true, version: '0.4.0-dev.0' }))
+  app.get('/api/health', async () => ({ ok: true, version: '0.4.0' }))
   app.get('/api/auth/status', async (req) => {
     const auth = session(req)
     return {
