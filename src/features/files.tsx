@@ -23,7 +23,7 @@ import { fileExtension } from '../lib/collections'
 import { ArchiveModal } from './archive'
 import { useAccount } from './auth'
 import { FilePreview } from './content'
-import { api, apiCached } from '../lib/api'
+import { api, EtagCache } from '../lib/api'
 
 interface FileTableProps {
   files: CollectedFile[]
@@ -61,24 +61,27 @@ export function FileTable({
   const [pageSize, setPageSize] = useState(50)
   const [pageData, setPageData] = useState<PaginatedFiles | null>(null)
   const [pageLoading, setPageLoading] = useState(false)
-  const pageEtag = useRef('')
+  const pageCache = useRef(new EtagCache<PaginatedFiles>(40))
   const [archiveFiles, setArchiveFiles] = useState<CollectedFile[] | null>(null)
   const [matches, setMatches] = useState<{ id: string; excerpt: string }[]>([]),
     [searchError, setSearchError] = useState(''),
     [searching, setSearching] = useState(false)
   const term = (search || query).trim()
   const useServerPaging = !compact && serverPagination
-
-  useEffect(() => {
-    setPage(1)
-    pageEtag.current = ''
-  }, [term, filter, sortAsc, collectionId, pageSize])
+  const prevQueryKey = useRef(`${term}\0${filter}\0${sortAsc}\0${collectionId}\0${pageSize}`)
+  const queryKey = `${term}\0${filter}\0${sortAsc}\0${collectionId}\0${pageSize}`
+  if (prevQueryKey.current !== queryKey) {
+    prevQueryKey.current = queryKey
+    if (page !== 1) setPage(1)
+  }
 
   useEffect(() => {
     if (!useServerPaging) {
       setPageData(null)
       return
     }
+    const workspaceTick = files
+    void workspaceTick
     const controller = new AbortController()
     const params = new URLSearchParams({
       page: String(page),
@@ -91,20 +94,16 @@ export function FileTable({
     const endpoint = collectionId
       ? `/api/collections/${encodeURIComponent(collectionId)}/files?${params}`
       : `/api/files?${params}`
-    // 当本地工作台文件列表发生变化（例如新建/重命名/删改）时清空局部 ETag 以保证及时同步
-    pageEtag.current = ''
     setPageLoading(true)
     const timer = setTimeout(
       () => {
-        void apiCached<PaginatedFiles>(endpoint, pageEtag.current || undefined, controller.signal)
+        void pageCache.current
+          .fetch(endpoint, controller.signal)
           .then((res) => {
             if (controller.signal.aborted) return
-            if (res.etag) pageEtag.current = res.etag
-            if (res.status === 200) {
-              setPageData(res.data)
-              const maxPage = Math.max(1, Math.ceil(res.data.total / res.data.pageSize))
-              if (page > maxPage) setPage(maxPage)
-            }
+            setPageData(res.data)
+            const maxPage = Math.max(1, Math.ceil(res.data.total / res.data.pageSize))
+            if (page > maxPage) setPage(maxPage)
             setPageLoading(false)
           })
           .catch(() => {
@@ -122,7 +121,8 @@ export function FileTable({
   useEffect(() => {
     setMatches([])
     setSearchError('')
-    if (compact || term.length < 2) {
+    // 后端分页模式已由 /api/files?q=... 在服务端合并 FTS5 正文检索，避免重复请求 /api/content/search
+    if (compact || useServerPaging || term.length < 2) {
       setSearching(false)
       return
     }
@@ -150,7 +150,7 @@ export function FileTable({
       clearTimeout(timer)
       controller.abort()
     }
-  }, [term, compact])
+  }, [term, compact, useServerPaging])
   const visible = files
     .filter(
       (f) =>
@@ -206,13 +206,19 @@ export function FileTable({
     <div className="file-panel">
       {!compact && term && (
         <p className="search-hint">
-          {searching
-            ? '正在搜索已识别的正文…'
-            : searchError ||
-              (term.length < 2
-                ? '输入至少两个字符，同时搜索正文。'
-                : '搜索名称、提交人、分类标签和已识别正文。')}
-          {!!matches.length && ` 正文命中 ${matches.length} 个文件。`}
+          {useServerPaging
+            ? pageLoading
+              ? '正在搜索名称、提交人、分类标签和已识别正文…'
+              : term.length < 2
+                ? '输入至少两个字符，同时搜索已识别正文。'
+                : `已按名称、提交人、分类标签和已识别正文筛选，共命中 ${totalCount} 个文件。`
+            : searching
+              ? '正在搜索已识别的正文…'
+              : searchError ||
+                (term.length < 2
+                  ? '输入至少两个字符，同时搜索正文。'
+                  : '搜索名称、提交人、分类标签和已识别正文。')}
+          {!useServerPaging && !!matches.length && ` 正文命中 ${matches.length} 个文件。`}
         </p>
       )}
       {!compact && (
@@ -244,6 +250,7 @@ export function FileTable({
             </label>
             {!selected.length && (
               <button
+                type="button"
                 className="button"
                 disabled={!visible.length || visible.length > 500}
                 onClick={() => setArchiveFiles(visible)}
@@ -253,7 +260,7 @@ export function FileTable({
                 打包筛选结果
               </button>
             )}
-            <button className="button" onClick={exportCsv}>
+            <button type="button" className="button" onClick={exportCsv}>
               <Download size={15} />
               导出清单
             </button>
@@ -266,6 +273,7 @@ export function FileTable({
             已选择 <b>{selected.length}</b> 个文件
           </span>
           <button
+            type="button"
             disabled={!chosen.length || chosen.length > 500}
             onClick={() => setArchiveFiles(chosen)}
             title="每次最多 500 个文件"
@@ -275,12 +283,13 @@ export function FileTable({
           </button>
           {canEdit && (
             <>
-              <button onClick={() => onRename(chosen)}>
+              <button type="button" onClick={() => onRename(chosen)}>
                 <WandSparkles size={15} />
                 批量重命名
               </button>
               {onAI && (
                 <button
+                  type="button"
                   disabled={chosen.length > 30}
                   title="AI 每次最多处理 30 个文件"
                   onClick={() => onAI(chosen)}
@@ -290,6 +299,7 @@ export function FileTable({
                 </button>
               )}
               <button
+                type="button"
                 onClick={() => {
                   onReview(selected)
                   setSelected([])
@@ -300,6 +310,7 @@ export function FileTable({
               </button>
               {onTrash && (
                 <button
+                  type="button"
                   onClick={() => {
                     onTrash(selected)
                     setSelected([])
@@ -311,7 +322,12 @@ export function FileTable({
               )}
             </>
           )}
-          <button className="icon-button" aria-label="取消选择" onClick={() => setSelected([])}>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="取消选择"
+            onClick={() => setSelected([])}
+          >
             <X size={16} />
           </button>
         </div>
@@ -336,7 +352,7 @@ export function FileTable({
               <th>所属收集</th>
               <th>提交人</th>
               <th>
-                <button className="table-sort" onClick={() => setSortAsc(!sortAsc)}>
+                <button type="button" className="table-sort" onClick={() => setSortAsc(!sortAsc)}>
                   提交时间
                   <ArrowDown size={12} className={sortAsc ? 'rotated' : ''} />
                 </button>
@@ -363,7 +379,7 @@ export function FileTable({
                   />
                 </td>
                 <td>
-                  <button className="file-name" onClick={() => onDetail(f)}>
+                  <button type="button" className="file-name" onClick={() => onDetail(f)}>
                     <FileIcon name={f.name} />
                     <span>
                       {f.name}
@@ -386,6 +402,7 @@ export function FileTable({
                 <td className="cell-muted numeric">{formatSize(f.size)}</td>
                 <td>
                   <button
+                    type="button"
                     className="icon-button"
                     onClick={() => onDetail(f)}
                     aria-label={`查看${f.name}详情`}
@@ -551,14 +568,14 @@ export function FileDetail({
       <footer className="modal-footer file-detail-actions">
         {canEdit && (
           <>
-            <button className="icon-button" onClick={onTrash} aria-label="移入回收站">
+            <button type="button" className="icon-button" onClick={onTrash} aria-label="移入回收站">
               <Trash2 size={17} />
             </button>
-            <button className="button" onClick={onRename}>
+            <button type="button" className="button" onClick={onRename}>
               重命名
               <ArrowUpRight size={15} />
             </button>
-            <button className="button" onClick={onReview}>
+            <button type="button" className="button" onClick={onReview}>
               <Check size={15} />
               已整理
             </button>
@@ -591,6 +608,7 @@ export function TrashPage({
         </div>
         {!!files.length && (
           <button
+            type="button"
             className="button"
             disabled={!canEdit}
             onClick={() => onRestore(files.slice(0, 500).map((f) => f.id))}
@@ -611,7 +629,12 @@ export function TrashPage({
                   {f.owner} · {formatSize(f.size)} · {formatDate(f.deletedAt!)}
                 </small>
               </div>
-              <button className="button" disabled={!canEdit} onClick={() => onRestore([f.id])}>
+              <button
+                type="button"
+                className="button"
+                disabled={!canEdit}
+                onClick={() => onRestore([f.id])}
+              >
                 <RotateCcw size={14} />
                 恢复
               </button>

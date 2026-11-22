@@ -61,6 +61,66 @@ export async function apiCached<T>(
   return { status: 200, etag: nextEtag, data: data as T }
 }
 
+export interface EtagCacheEntry<T> {
+  etag: string
+  data: T
+}
+
+export class EtagCache<T> {
+  private entries = new Map<string, EtagCacheEntry<T>>()
+  private maxEntries: number
+
+  constructor(maxEntries = 40) {
+    this.maxEntries = Math.max(1, maxEntries)
+  }
+
+  get(key: string): EtagCacheEntry<T> | undefined {
+    const entry = this.entries.get(key)
+    if (!entry) return undefined
+    this.entries.delete(key)
+    this.entries.set(key, entry)
+    return entry
+  }
+
+  set(key: string, etag: string, data: T): void {
+    this.entries.delete(key)
+    this.entries.set(key, { etag, data })
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value
+      if (oldest === undefined) break
+      this.entries.delete(oldest)
+    }
+  }
+
+  clear(): void {
+    this.entries.clear()
+  }
+
+  async fetch(
+    endpoint: string,
+    signal?: AbortSignal,
+    fetcher: typeof apiCached<T> = apiCached,
+  ): Promise<{ status: 200 | 304; etag: string; data: T }> {
+    const cached = this.get(endpoint)
+    const res = await fetcher(endpoint, cached?.etag || undefined, signal)
+    if (res.status === 304 && cached) {
+      const etag = res.etag || cached.etag
+      this.set(endpoint, etag, cached.data)
+      return { status: 304, etag, data: cached.data }
+    }
+    if (res.status === 200) {
+      if (res.etag) this.set(endpoint, res.etag, res.data)
+      return { status: 200, etag: res.etag, data: res.data }
+    }
+    const fresh = await fetcher(endpoint, undefined, signal)
+    if (fresh.status === 200) {
+      if (fresh.etag) this.set(endpoint, fresh.etag, fresh.data)
+      return { status: 200, etag: fresh.etag, data: fresh.data }
+    }
+    throw new Error('服务返回了无效缓存状态')
+  }
+}
+
 export function uploadMultipart(
   uploadToken: string,
   files: File[],
