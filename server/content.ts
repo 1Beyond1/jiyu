@@ -12,6 +12,10 @@ import { stripNonWhitespaceControlChars } from '../src/lib/text-safety.ts'
 
 const execute = promisify(execFile)
 const MAX_TEXT = 64000
+const MAX_DOCX_XML_BYTES = 2 * 1024 ** 2
+const DOCX_RATIO_MIN_BYTES = 256 * 1024
+const DOCX_MAX_INFLATION_RATIO = 100
+const MAX_CONTENT_PREVIEW_CONCURRENCY = 4
 export interface Extraction {
   text: string
   kind: string
@@ -78,15 +82,68 @@ function imagePixels(b: Buffer, mime: string) {
   }
   return 0
 }
-function decodeXml(value: string) {
+export function decodeXml(value: string) {
   return value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (whole, entity: string) => {
+    const lower = entity.toLowerCase()
     const named: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
-    if (entity in named) return named[entity]
-    const n = entity.startsWith('#x')
-      ? parseInt(entity.slice(2), 16)
-      : parseInt(entity.slice(1), 10)
-    return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : whole
+    if (lower in named) return named[lower]
+    const n = lower.startsWith('#x') ? parseInt(lower.slice(2), 16) : parseInt(lower.slice(1), 10)
+    return n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : whole
   })
+}
+export function extractDocxXmlText(xml: string): string {
+  const out: string[] = []
+  let pos = 0
+  const len = xml.length
+  while (pos < len) {
+    const lt = xml.indexOf('<', pos)
+    if (lt === -1) break
+    if (xml.startsWith('<!--', lt)) {
+      const endComment = xml.indexOf('-->', lt + 4)
+      if (endComment === -1) break
+      pos = endComment + 3
+      continue
+    }
+    const gt = xml.indexOf('>', lt + 1)
+    if (gt === -1) break
+    const rawTag = xml.slice(lt + 1, gt)
+    pos = gt + 1
+    if (rawTag.startsWith('w:t') && (rawTag.length === 3 || /\s/.test(rawTag[3]))) {
+      if (rawTag.endsWith('/')) continue
+      const nextLt = xml.indexOf('<', pos)
+      if (nextLt === -1) break
+      if (xml.startsWith('</w:t', nextLt)) {
+        const closeGt = xml.indexOf('>', nextLt + 5)
+        if (closeGt !== -1 && xml.slice(nextLt + 5, closeGt).trim() === '') {
+          if (nextLt > pos) out.push(decodeXml(xml.slice(pos, nextLt)))
+          pos = closeGt + 1
+          continue
+        }
+      }
+      // 未闭合 <w:t> 直接线性推进到下一个标签，杜绝灾难性回溯
+      pos = nextLt
+    } else if (rawTag === '/w:tc') {
+      if (out.length > 0 && out[out.length - 1] === '\n') out[out.length - 1] = '\t'
+      else if (out.length > 0 && out[out.length - 1] !== '\t') out.push('\t')
+    } else if (
+      rawTag.startsWith('w:tab') &&
+      (rawTag.length === 5 || rawTag[5] === '/' || /\s/.test(rawTag[5]))
+    ) {
+      out.push('\t')
+    } else if (rawTag === '/w:tr') {
+      if (out.length > 0 && out[out.length - 1] === '\t') out[out.length - 1] = '\n'
+      else if (out.length > 0 && out[out.length - 1] !== '\n') out.push('\n')
+    } else if (
+      rawTag === '/w:p' ||
+      (rawTag.startsWith('w:br') &&
+        (rawTag.length === 4 || rawTag[4] === '/' || /\s/.test(rawTag[4]))) ||
+      (rawTag.startsWith('w:cr') &&
+        (rawTag.length === 4 || rawTag[4] === '/' || /\s/.test(rawTag[4])))
+    ) {
+      out.push('\n')
+    }
+  }
+  return out.join('')
 }
 async function docxText(path: string, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -118,8 +175,21 @@ async function docxText(path: string, signal: AbortSignal): Promise<string> {
           zip.readEntry()
           return
         }
-        if (entry.uncompressedSize > 2 * 1024 ** 2 || entry.generalPurposeBitFlag & 1) {
+        const compressedSize = Math.max(
+          1,
+          entry.compressedSize > 0
+            ? Math.min(entry.compressedSize, zip.fileSize || entry.compressedSize)
+            : zip.fileSize || 1,
+        )
+        if (entry.uncompressedSize > MAX_DOCX_XML_BYTES || entry.generalPurposeBitFlag & 1) {
           done(new HttpError(413, 'DOCX 正文过大或已加密'))
+          return
+        }
+        if (
+          entry.uncompressedSize > DOCX_RATIO_MIN_BYTES &&
+          entry.uncompressedSize / compressedSize > DOCX_MAX_INFLATION_RATIO
+        ) {
+          done(new HttpError(413, 'DOCX 压缩膨胀比异常，已拒绝解析'))
           return
         }
         zip.openReadStream(entry, (error, stream) => {
@@ -131,29 +201,26 @@ async function docxText(path: string, signal: AbortSignal): Promise<string> {
           const chunks: Buffer[] = []
           stream.on('data', (chunk: Buffer) => {
             size += chunk.length
-            if (size > 2 * 1024 ** 2) {
-              stream.destroy()
+            if (size > MAX_DOCX_XML_BYTES) {
               done(new HttpError(413, 'DOCX 正文过大'))
+              stream.destroy()
+            } else if (
+              size > DOCX_RATIO_MIN_BYTES &&
+              size / compressedSize > DOCX_MAX_INFLATION_RATIO
+            ) {
+              done(new HttpError(413, 'DOCX 压缩膨胀比异常，已拒绝解析'))
+              stream.destroy()
             } else chunks.push(chunk)
           })
           stream.on('error', () => done(new HttpError(422, 'DOCX 解压失败')))
           stream.on('end', () => {
+            if (finished) return
             const xml = Buffer.concat(chunks).toString('utf8')
             if (/<!DOCTYPE|<!ENTITY/i.test(xml)) {
               done(new HttpError(422, '不支持包含实体声明的 DOCX'))
               return
             }
-            const paragraphs = xml.split(/<\/w:p>/)
-            done(
-              undefined,
-              paragraphs
-                .map((p) =>
-                  [...p.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)]
-                    .map((m) => decodeXml(m[1]))
-                    .join(''),
-                )
-                .join('\n'),
-            )
+            done(undefined, extractDocxXmlText(xml))
           })
         })
       })
@@ -404,30 +471,57 @@ export function registerContent(
       kind = detectPreview(head)
     return { file, path, head, kind }
   }
+  let activeContentPreviews = 0
   app.get('/api/files/:id/content', async (req) => {
-    const id = String(object(req.params).id),
-      { file, path, head, kind } = await getFile(id)
-    const document = store.db
-      .prepare('SELECT * FROM documents WHERE file_id=?')
-      .get(id) as unknown as DocumentInfo | undefined
-    const indexedText = contentExcerpt(store, id, MAX_TEXT)
-    if (indexedText) {
-      return {
-        ...kind,
-        ...(file.size > 32 * 1024 ** 2 ? { preview: 'none' } : {}),
-        text: indexedText,
-        ...(kind.preview === 'none' ? { preview: 'text' } : {}),
-        chars: document?.chars ?? indexedText.length,
-        truncated: Boolean(document?.truncated),
-        document,
-      }
+    if (activeContentPreviews >= MAX_CONTENT_PREVIEW_CONCURRENCY) {
+      throw new HttpError(429, '当前预览请求较多，请稍后再试')
     }
-    // 小体积 UTF-8 文本与 DOCX 支持即时轻量预览（保留 2 MiB 与防 XXE 上限，不触发重量 OCR）
-    if (kind.preview === 'none' && file.size <= 2 * 1024 ** 2) {
-      const ext = extname(file.name).toLowerCase()
-      if (ext === '.docx' && head[0] === 0x50 && head[1] === 0x4b) {
-        try {
-          const raw = await docxText(path, AbortSignal.timeout(5000))
+    activeContentPreviews++
+    try {
+      const id = String(object(req.params).id),
+        { file, path, head, kind } = await getFile(id)
+      const document = store.db
+        .prepare('SELECT * FROM documents WHERE file_id=?')
+        .get(id) as unknown as DocumentInfo | undefined
+      const indexedText = contentExcerpt(store, id, MAX_TEXT)
+      if (indexedText) {
+        return {
+          ...kind,
+          ...(file.size > 32 * 1024 ** 2 ? { preview: 'none' } : {}),
+          text: indexedText,
+          ...(kind.preview === 'none' ? { preview: 'text' } : {}),
+          chars: document?.chars ?? indexedText.length,
+          truncated: Boolean(document?.truncated),
+          document,
+        }
+      }
+      // 小体积 UTF-8 文本与 DOCX 支持即时轻量预览（保留 2 MiB、膨胀比与防 XXE 上限，不触发重量 OCR）
+      if (kind.preview === 'none' && file.size <= 2 * 1024 ** 2) {
+        const ext = extname(file.name).toLowerCase()
+        if (ext === '.docx' && head[0] === 0x50 && head[1] === 0x4b) {
+          try {
+            const raw = await docxText(path, AbortSignal.timeout(5000))
+            const cleaned = stripNonWhitespaceControlChars(raw)
+            const previewText = cleaned.slice(0, MAX_TEXT)
+            return {
+              preview: 'text',
+              text: previewText,
+              instant: true,
+              chars: previewText.length,
+              truncated: cleaned.length > MAX_TEXT,
+              document,
+            }
+          } catch (error) {
+            return {
+              ...kind,
+              previewError:
+                error instanceof HttpError ? error.message : 'DOCX 无法即时预览，请下载查看',
+              document,
+            }
+          }
+        }
+        if (['.txt', '.md', '.csv', '.json', '.log'].includes(ext) && !head.includes(0)) {
+          const raw = (await readFile(path)).toString('utf8')
           const cleaned = stripNonWhitespaceControlChars(raw)
           const previewText = cleaned.slice(0, MAX_TEXT)
           return {
@@ -438,33 +532,15 @@ export function registerContent(
             truncated: cleaned.length > MAX_TEXT,
             document,
           }
-        } catch (error) {
-          return {
-            ...kind,
-            previewError:
-              error instanceof HttpError ? error.message : 'DOCX 无法即时预览，请下载查看',
-            document,
-          }
         }
       }
-      if (['.txt', '.md', '.csv', '.json', '.log'].includes(ext) && !head.includes(0)) {
-        const raw = (await readFile(path)).toString('utf8')
-        const cleaned = stripNonWhitespaceControlChars(raw)
-        const previewText = cleaned.slice(0, MAX_TEXT)
-        return {
-          preview: 'text',
-          text: previewText,
-          instant: true,
-          chars: previewText.length,
-          truncated: cleaned.length > MAX_TEXT,
-          document,
-        }
+      return {
+        ...kind,
+        ...(file.size > 32 * 1024 ** 2 ? { preview: 'none' } : {}),
+        document,
       }
-    }
-    return {
-      ...kind,
-      ...(file.size > 32 * 1024 ** 2 ? { preview: 'none' } : {}),
-      document,
+    } finally {
+      activeContentPreviews--
     }
   })
   app.get('/api/files/:id/preview', async (req, reply) => {
