@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { submissionFileName } from '../lib/submission-naming'
 import { safeRandomUUID } from '../lib/browser-crypto'
-import type { Collection } from '../types'
+import type { Collection, CollectionInput } from '../types'
 import { MaterialRulesEditor } from './material-rules'
 
 export function CollectionRules({
@@ -12,8 +12,8 @@ export function CollectionRules({
   title = '示例收集',
   received = 0,
 }: {
-  value: Partial<Collection>
-  onChange: (v: Partial<Collection>) => void
+  value: Partial<CollectionInput>
+  onChange: (v: Partial<CollectionInput>) => void
   locked: boolean
   section?: 'all' | 'submission' | 'naming'
   title?: string
@@ -21,7 +21,8 @@ export function CollectionRules({
 }) {
   const fields = value.fields || [],
     naming = value.naming || { parts: [], separator: '_' as const }
-  const update = (v: Partial<Collection>) => onChange({ ...value, ...v })
+  const update = (v: Partial<CollectionInput>) => onChange({ ...value, ...v })
+  const rosterCount = (value.expectedSubmitters || []).filter((v) => v.trim()).length
   const labels: Record<string, string> = {
     owner: '姓名',
     collection: '任务名称',
@@ -150,13 +151,70 @@ export function CollectionRules({
             <textarea
               rows={3}
               value={(value.expectedSubmitters || []).join('\n')}
-              onChange={(e) => update({ expectedSubmitters: e.target.value.split('\n') })}
+              onChange={(e) => {
+                const lines = e.target.value.split('\n')
+                const hasAny = lines.some((v) => v.trim())
+                update({
+                  expectedSubmitters: lines,
+                  ...(!hasAny ? { restrictToExpectedSubmitters: false } : {}),
+                })
+              }}
               placeholder="每行一个姓名或所选标识，例如学号"
             />
             <small>
-              仅工作台成员可见；按上面选择的标识对照。最多 1000 人，不限制名单外的人提交。
+              仅工作台成员可见；按上面选择的标识对照，最多 1000
+              人。默认仅用于对照统计，勾选下方开关可限制提交准入。
             </small>
           </label>
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={Boolean(value.restrictToExpectedSubmitters)}
+              disabled={!rosterCount}
+              onChange={(e) => update({ restrictToExpectedSubmitters: e.target.checked })}
+            />
+            仅允许应交名单内标识提交（名单外返回通用提示，不泄露名单内容）
+          </label>
+          <div className="access-code-rule">
+            <div className="rule-heading">
+              <h3>访问提取码（选填）</h3>
+              <small>
+                {value.hasAccessCode
+                  ? value.clearAccessCode
+                    ? '保存后将关闭提取码保护'
+                    : '已启用 · 验证提取码前不展示任务详情与材料清单'
+                  : '设置 4–8 位提取码，防止链接误传后被无关人员查看'}
+              </small>
+            </div>
+            <label className="field">
+              {value.hasAccessCode ? '更换提取码（留空保持原提取码不变）' : '设置 4–8 位提取码'}
+              <input
+                value={value.accessCode || ''}
+                disabled={Boolean(value.clearAccessCode)}
+                maxLength={8}
+                placeholder="例如：2026 或 AB12cd（4–8 位非空白字符）"
+                onChange={(e) => update({ accessCode: e.target.value })}
+              />
+              <small>
+                服务端仅保存加盐 scrypt 哈希，不保存明文；修改提取码会使旧解锁凭证失效。
+              </small>
+            </label>
+            {value.hasAccessCode && (
+              <label className="check-field">
+                <input
+                  type="checkbox"
+                  checked={Boolean(value.clearAccessCode)}
+                  onChange={(e) =>
+                    update({
+                      clearAccessCode: e.target.checked,
+                      ...(e.target.checked ? { accessCode: '' } : {}),
+                    })
+                  }
+                />
+                清除当前提取码（恢复为持链接直接访问）
+              </label>
+            )}
+          </div>
           <MaterialRulesEditor value={value} onChange={onChange} />
         </>
       )}

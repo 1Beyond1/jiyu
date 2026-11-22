@@ -123,6 +123,13 @@ export class Store {
       )
       .run(key, value)
   }
+  publicAccessSecret(): string {
+    const existing = this.get('public.accessSecret')
+    if (existing) return existing
+    const secret = token()
+    this.set('public.accessSecret', secret)
+    return secret
+  }
   transaction<T>(operation: () => T): T {
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -381,9 +388,14 @@ export class Store {
       version: 1,
       displayName: this.get('displayName') || '管理员',
       ...(requestBytes !== undefined ? { requestLimitMB: requestBytes / 1024 ** 2 } : {}),
-      collections: this.collections().map((c) =>
-        requestBytes !== undefined ? { ...c, requestLimitMB: requestBytes / 1024 ** 2 } : c,
-      ),
+      collections: this.collections().map((c) => {
+        const { accessCodeHash, accessCodeVersion: _ver, ...pub } = c
+        return {
+          ...pub,
+          hasAccessCode: Boolean(accessCodeHash),
+          ...(requestBytes !== undefined ? { requestLimitMB: requestBytes / 1024 ** 2 } : {}),
+        }
+      }),
       files: files.filter((f) => !f.deletedAt),
       trash: files.filter((f) => f.deletedAt),
       storage: { usedBytes, quotaBytes },

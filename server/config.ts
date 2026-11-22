@@ -5,6 +5,7 @@ export interface RateLimitConfig {
   multipartPerHour?: number
   uploadCreatePerHour?: number
   uploadChunkPerMinute?: number
+  unlockPerMinute?: number
 }
 
 export interface Config {
@@ -39,6 +40,8 @@ export function resolveRateLimits(overrides?: RateLimitConfig) {
     uploadChunkPerMinute:
       overrides?.uploadChunkPerMinute ??
       envPositiveInt('JIYU_RATE_LIMIT_UPLOAD_CHUNK', 180, 100000),
+    unlockPerMinute:
+      overrides?.unlockPerMinute ?? envPositiveInt('JIYU_RATE_LIMIT_UNLOCK', 6, 100000),
   }
 }
 

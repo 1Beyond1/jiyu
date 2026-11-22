@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type {
   Collection,
   CollectedFile,
@@ -58,6 +58,12 @@ export function collectionRules(
   const expectedSubmitters = expected.map((v) => text(v, '名单标识', 80))
   if (new Set(expectedSubmitters.map(normalized)).size !== expectedSubmitters.length)
     throw new HttpError(400, '应交名单存在重复标识')
+  const restrictToExpectedSubmitters =
+    body.restrictToExpectedSubmitters ?? current?.restrictToExpectedSubmitters ?? false
+  if (typeof restrictToExpectedSubmitters !== 'boolean')
+    throw new HttpError(400, '名单准入开关无效')
+  if (restrictToExpectedSubmitters && !expectedSubmitters.length)
+    throw new HttpError(400, '开启仅允许名单内提交前，请先填写应交名单')
   const mode = body.submissionMode ?? current?.submissionMode ?? 'append'
   if (mode !== 'append' && mode !== 'single') throw new HttpError(400, '重复提交规则无效')
   const allowReplacement = body.allowReplacement ?? current?.allowReplacement ?? true
@@ -108,6 +114,7 @@ export function collectionRules(
     fields,
     identityField,
     expectedSubmitters,
+    restrictToExpectedSubmitters,
     submissionMode: mode,
     allowReplacement,
     materials,
@@ -179,6 +186,11 @@ export function validateSubmission(
     throw new HttpError(400, '材料清单已变更，请刷新后重新选择归属')
   const value = identity(c, owner, context.fields)
   if (!value) throw new HttpError(400, '请填写提交人标识')
+  if (c.restrictToExpectedSubmitters) {
+    const allowed = new Set((c.expectedSubmitters || []).map(normalized))
+    if (!allowed.has(normalized(value)))
+      throw new HttpError(403, '提交信息未通过准入校验，请核对姓名或标识后重试，或联系发起人')
+  }
   if (context.replace) {
     if (c.allowReplacement === false) throw new HttpError(403, '发起人未开放替换，请联系发起人')
     const old = record(store, c.id, context.replace.receiptId, context.replace.keyHash)
@@ -259,7 +271,11 @@ export function participants(store: Store, c: Collection): Participant[] {
   return collectionParticipants(c, store.files())
 }
 
-export function registerCollectionWorkflows(app: FastifyInstance, store: Store) {
+export function registerCollectionWorkflows(
+  app: FastifyInstance,
+  store: Store,
+  requirePublicAccess: (req: FastifyRequest, c: Collection) => void = () => {},
+) {
   app.get('/api/collections/:id/participants', async (req) => {
     const c = store.collection(String(object(req.params).id))
     if (!c) throw new HttpError(404, '收集不存在')
@@ -269,6 +285,7 @@ export function registerCollectionWorkflows(app: FastifyInstance, store: Store) 
     const p = object(req.params),
       c = store.byToken(String(p.token))
     if (!c) throw new HttpError(404, '收集链接已失效')
+    requirePublicAccess(req, c)
     const key = text(req.headers['x-receipt-key'], '回执凭证', 100),
       r = record(store, c.id, String(p.receiptId), digest(key))
     return {

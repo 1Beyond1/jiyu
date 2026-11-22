@@ -57,6 +57,7 @@ export async function registerUploads(
   store: Store,
   config: Config,
   budget: UploadBudget,
+  requirePublicAccess: (req: FastifyRequest, c: Collection) => void = () => {},
 ) {
   const rateLimits = resolveRateLimits(config.rateLimits)
   const active = new Set<string>()
@@ -100,6 +101,7 @@ export async function registerUploads(
     const value = String(object(req.params).token),
       c = store.byToken(value)
     if (!c) throw new HttpError(404, '收集链接无效或已撤销')
+    requirePublicAccess(req, c)
     if (!allowClosed && (c.status !== 'active' || isExpired(c)))
       throw new HttpError(410, '这项收集已暂停、结束或截止')
     return c

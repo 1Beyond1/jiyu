@@ -50,7 +50,7 @@ export function CollectionForm({
     collection?.maxFilesPerSubmission || defaultCollectionLimits.maxFilesPerSubmission,
   )
   const [maxTotalSizeMB, setMaxTotalSizeMB] = useState(collection?.maxTotalSizeMB || 2048)
-  const [rules, setRules] = useState<Partial<Collection>>(collection || {})
+  const [rules, setRules] = useState<Partial<CollectionInput>>(collection || {})
   const [templateName, setTemplateName] = useState(''),
     [error, setError] = useState(''),
     [step, setStep] = useState(0)
@@ -156,6 +156,19 @@ export function CollectionForm({
         new Set(roster.map((v) => v.normalize('NFKC').toLowerCase())).size !== roster.length
       ) {
         setError('名单最多 1000 人，请移除重复标识。')
+        return false
+      }
+      if (rules.restrictToExpectedSubmitters && !roster.length) {
+        setError('开启「仅允许应交名单内标识提交」前，请先填写应交名单。')
+        return false
+      }
+      const rawCode = (rules.accessCode || '').trim()
+      if (
+        !rules.clearAccessCode &&
+        rawCode &&
+        (rawCode.length < 4 || rawCode.length > 8 || /\s/.test(rawCode))
+      ) {
+        setError('访问提取码需填写 4–8 位非空白字符。')
         return false
       }
     }

@@ -1,6 +1,12 @@
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'node:crypto'
+import {
+  randomBytes,
+  scrypt as scryptCallback,
+  timingSafeEqual,
+  createHash,
+  createHmac,
+} from 'node:crypto'
 import { promisify } from 'node:util'
-import { hasUnsafeFilenameChars } from '../src/lib/text-safety.ts'
+import { hasControlChar, hasUnsafeFilenameChars } from '../src/lib/text-safety.ts'
 
 const scrypt = promisify(scryptCallback)
 export const token = () => randomBytes(32).toString('base64url')
@@ -56,4 +62,46 @@ export function passwordInput(value: unknown, min = 12) {
   if (typeof value !== 'string' || value.length < min || value.length > 128 || !value.trim())
     throw new HttpError(400, `密码需填写 ${min}–128 个字符`)
   return value
+}
+
+export function accessCodeInput(value: unknown): string {
+  if (typeof value !== 'string') throw new HttpError(400, '提取码需填写 4–8 位非空白字符')
+  const trimmed = value.trim()
+  if (trimmed.length < 4 || trimmed.length > 8 || /\s/.test(trimmed) || hasControlChar(trimmed))
+    throw new HttpError(400, '提取码需填写 4–8 位非空白字符')
+  return trimmed
+}
+
+export function accessCookieName(collectionId: string): string {
+  return `jiyu_access_${digest(collectionId).slice(0, 12)}`
+}
+
+export function signAccessProof(
+  secret: string,
+  collectionId: string,
+  uploadToken: string,
+  accessCodeVersion: string,
+  expiresAt: number,
+): string {
+  const sig = createHmac('sha256', secret)
+    .update(`${collectionId}\0${uploadToken}\0${accessCodeVersion}\0${expiresAt}`)
+    .digest('base64url')
+  return `${expiresAt}.${sig}`
+}
+
+export function verifyAccessProof(
+  secret: string,
+  proof: string | undefined,
+  collectionId: string,
+  uploadToken: string,
+  accessCodeVersion: string,
+  now = Date.now(),
+): boolean {
+  if (!proof || proof.length > 160) return false
+  const dot = proof.indexOf('.')
+  if (dot <= 0) return false
+  const expiresAt = Number(proof.slice(0, dot))
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) return false
+  const expected = signAccessProof(secret, collectionId, uploadToken, accessCodeVersion, expiresAt)
+  return equalToken(proof, expected)
 }

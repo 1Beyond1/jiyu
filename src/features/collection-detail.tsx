@@ -165,7 +165,19 @@ export function CollectionDetail({
           </div>
           <div>
             <dt>允许格式</dt>
-            <dd className="collection-formats">{c.formats}</dd>
+            <dd className="collection-formats">
+              {c.formats}
+              {(c.hasAccessCode || c.restrictToExpectedSubmitters) && (
+                <small>
+                  {[
+                    c.hasAccessCode ? '已启用提取码' : '',
+                    c.restrictToExpectedSubmitters ? '仅允许名单内提交' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </small>
+              )}
+            </dd>
           </div>
         </dl>
       </section>

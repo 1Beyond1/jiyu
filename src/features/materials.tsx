@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
+import { MessageSquareText } from 'lucide-react'
 import type { Collection, CollectedFile, MaterialOperation } from '../types'
 import { materialStateLabels, materialStateVersion } from '../lib/materials'
 import { safeRandomUUID } from '../lib/browser-crypto'
 import { downloadText, formatSize } from '../lib/workspace'
 import { useAccount } from './auth'
 import { MaterialAIPanel } from './material-ai'
+import { ReminderModal } from './reminder-modal'
 import { useMaterialState } from './use-material-state'
 
 type Draft = { materialId: string; decision: '' | 'accepted' | 'needs_changes'; note: string }
@@ -61,6 +63,9 @@ export function MaterialWorkbench({
     [error, setError] = useState(''),
     [notice, setNotice] = useState('')
   const [aiReview, setAIReview] = useState<MaterialOperation['aiReview']>()
+  const [reminder, setReminder] = useState<{ mode: 'group' | 'direct'; personId?: string } | null>(
+    null,
+  )
   const pending = useRef<{
     signature: string
     kind: 'classify' | 'review'
@@ -383,14 +388,27 @@ export function MaterialWorkbench({
             <option value="accepted">人工核对通过</option>
           </select>
         </label>
-        <button
-          type="button"
-          className="button"
-          disabled={busy || exporting || !state.ready}
-          onClick={() => void exportReport()}
-        >
-          {exporting ? '导出中…' : '导出材料台账'}
-        </button>
+        <div className="button-row">
+          {canEdit && (
+            <button
+              type="button"
+              className="button"
+              disabled={busy || !state.ready}
+              onClick={() => setReminder({ mode: 'group' })}
+            >
+              <MessageSquareText size={15} />
+              一键催交话术
+            </button>
+          )}
+          <button
+            type="button"
+            className="button"
+            disabled={busy || exporting || !state.ready}
+            onClick={() => void exportReport()}
+          >
+            {exporting ? '导出中…' : '导出材料台账'}
+          </button>
+        </div>
       </div>
       <div className="material-matrix">
         <table>
@@ -579,10 +597,22 @@ export function MaterialWorkbench({
                       ? '当前材料已人工核对通过。文件或规则变化后，旧结论不会自动沿用。'
                       : '先查看或下载文件，再勾选要处理的文件，明确选择核对结论。'}
             </p>
-            {canEdit && !person.receivedComplete && (
-              <button type="button" className="button" onClick={onShare}>
-                分享链接，提醒本人补交
-              </button>
+            {canEdit && !person.reviewComplete && (
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => setReminder({ mode: 'direct', personId: person.identity })}
+                >
+                  <MessageSquareText size={15} />
+                  生成单人催交话术
+                </button>
+                {!person.receivedComplete && (
+                  <button type="button" className="button" onClick={onShare}>
+                    分享链接，提醒本人补交
+                  </button>
+                )}
+              </div>
             )}
           </div>
           {[
@@ -814,6 +844,15 @@ export function MaterialWorkbench({
       <p className="field-hint">
         导出由服务器按当前规则和文件状态生成，包含缺项及未通过结果；它不是全部合格的证明。
       </p>
+      {reminder && (
+        <ReminderModal
+          collection={c}
+          initialMode={reminder.mode}
+          initialPersonId={reminder.personId}
+          materialParticipants={rows}
+          onClose={() => setReminder(null)}
+        />
+      )}
     </section>
   )
 }

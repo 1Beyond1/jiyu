@@ -1,7 +1,10 @@
 import { useState } from 'react'
+import { MessageSquareText } from 'lucide-react'
 import type { Collection, CollectedFile } from '../types'
 import { collectionParticipants } from '../lib/participants'
 import { formatSize } from '../lib/workspace'
+import { useAccount } from './auth'
+import { ReminderModal } from './reminder-modal'
 
 export function ParticipantLedger({
   collection: c,
@@ -12,7 +15,11 @@ export function ParticipantLedger({
   files: CollectedFile[]
   onSelect: (ids: string[] | null, label?: string) => void
 }) {
+  const { canEdit } = useAccount()
   const [filter, setFilter] = useState('all')
+  const [reminder, setReminder] = useState<{ mode: 'group' | 'direct'; personId?: string } | null>(
+    null,
+  )
   const rows = collectionParticipants(c, files)
 
   const missing = rows.filter((p) => p.expected && !p.fileIds.length).length
@@ -63,9 +70,17 @@ export function ParticipantLedger({
           <strong>{c.expectedSubmitters?.length ? missing : '—'}</strong>
           <span>{c.expectedSubmitters?.length ? '人待提交' : '尚未设置应交名单'}</span>
         </div>
-        <button type="button" className="button" disabled={!rows.length} onClick={exportList}>
-          导出完整台账
-        </button>
+        <div className="button-row">
+          {canEdit && (
+            <button type="button" className="button" onClick={() => setReminder({ mode: 'group' })}>
+              <MessageSquareText size={15} />
+              一键催交话术
+            </button>
+          )}
+          <button type="button" className="button" disabled={!rows.length} onClick={exportList}>
+            导出完整台账
+          </button>
+        </div>
       </div>
       <p className="field-hint">
         按
@@ -136,14 +151,25 @@ export function ParticipantLedger({
                       : '—'}
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className="text-button"
-                      disabled={!p.fileIds.length}
-                      onClick={() => onSelect(p.fileIds, p.identity)}
-                    >
-                      查看文件
-                    </button>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="text-button"
+                        disabled={!p.fileIds.length}
+                        onClick={() => onSelect(p.fileIds, p.identity)}
+                      >
+                        查看文件
+                      </button>
+                      {canEdit && (!p.fileIds.length || p.duplicates > 0) && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => setReminder({ mode: 'direct', personId: p.identity })}
+                        >
+                          催交话术
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -156,6 +182,15 @@ export function ParticipantLedger({
             ? '编辑收集规则并填入应交名单，即可核对未交人员。'
             : '暂无符合条件的提交人。'}
         </p>
+      )}
+      {reminder && (
+        <ReminderModal
+          collection={c}
+          initialMode={reminder.mode}
+          initialPersonId={reminder.personId}
+          participants={rows}
+          onClose={() => setReminder(null)}
+        />
       )}
     </section>
   )

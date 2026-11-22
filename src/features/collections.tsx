@@ -1,10 +1,24 @@
-import { useState } from 'react'
-import { ArrowUpRight, CalendarDays, Link, Plus, Check, Copy, ExternalLink } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import {
+  ArrowUpRight,
+  CalendarDays,
+  Link,
+  Plus,
+  Check,
+  Copy,
+  Download,
+  ExternalLink,
+  LockKeyhole,
+  MessageSquareText,
+} from 'lucide-react'
 import { CollectionIcon, Empty, Modal } from '../components/ui'
 import type { Collection, CollectedFile } from '../types'
 import { materialProgress } from '../lib/materials'
 import { collectionState, collectionStateNames } from '../lib/collections'
+import { qrSvgDataUrl, renderShareCardSvg } from '../lib/qrcode'
+import { buildShareAnnouncement } from '../lib/reminder'
 import { shareAddress } from '../lib/share-address'
+import { downloadText } from '../lib/workspace'
 import { useAccount } from './auth'
 
 export function CollectionCard({
@@ -162,6 +176,14 @@ export function Collections({
 
 export { CollectionForm } from './collection-form'
 
+function readCachedPasscode(collectionId: string): string {
+  try {
+    return sessionStorage.getItem(`jiyu:passcode:${collectionId}`) || ''
+  } catch {
+    return ''
+  }
+}
+
 export function ShareCollection({
   collection,
   onClose,
@@ -175,23 +197,139 @@ export function ShareCollection({
   busy: boolean
   serverError?: string
 }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'' | 'url' | 'notice'>('')
   const [copyError, setCopyError] = useState('')
+  const [passcode, setPasscode] = useState(() => readCachedPasscode(collection.id))
+  const [downloadingCard, setDownloadingCard] = useState(false)
   const url = `${location.origin}/#/submit/${collection.uploadToken}`
   const address = shareAddress(location.origin)
   const [rotate, setRotate] = useState(false)
+  const qrDataUrl = useMemo(
+    () => qrSvgDataUrl(url, { size: 200, margin: 3, title: `${collection.title} 二维码` }),
+    [url, collection.title],
+  )
+  const announcement = useMemo(
+    () => buildShareAnnouncement({ collection, url, passcode }),
+    [collection, url, passcode],
+  )
+
+  async function copy(kind: 'url' | 'notice', value: string) {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(kind)
+      setCopyError('')
+    } catch {
+      setCopied('')
+      setCopyError('无法自动复制，请手动选中文本复制。')
+    }
+  }
+
+  async function downloadShareCard() {
+    setDownloadingCard(true)
+    setCopyError('')
+    const safeTitle = collection.title.replace(/[<>:"/\\|?*]/g, '_').slice(0, 40) || '收集'
+    const svg = renderShareCardSvg({
+      title: collection.title,
+      description: collection.description,
+      url,
+      deadline: collection.deadline,
+      formats: collection.formats,
+      passcode: passcode.trim() || undefined,
+      hasAccessCode: collection.hasAccessCode,
+      materials: collection.materials?.map((m) => `${m.name}${m.required ? '' : '（选填）'}`),
+    })
+    const svgDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+    try {
+      const img = new Image()
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error('svg-load-failed'))
+        img.src = svgDataUrl
+      })
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth || 960
+      canvas.height = img.naturalHeight || 1184
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('canvas-unavailable')
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+      if (!blob) throw new Error('png-export-failed')
+      const blobUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = `集屿分享-${safeTitle}.png`
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500)
+    } catch {
+      downloadText(`集屿分享-${safeTitle}.svg`, svg, 'image/svg+xml;charset=utf-8')
+    } finally {
+      setDownloadingCard(false)
+    }
+  }
+
   return (
-    <Modal title="好文件，一个链接就能收齐" subtitle={collection.title} onClose={onClose}>
-      <div className="share-art">
-        <div>
-          <CollectionIcon category={collection.category} />
-          <span className="share-art-link">
-            <Link size={18} />
-          </span>
+    <Modal title="好文件，一个链接就能收齐" subtitle={collection.title} onClose={onClose} wide>
+      <div className="share-qr-panel">
+        <div className="share-qr-box">
+          <img
+            src={qrDataUrl}
+            alt={`${collection.title} 收集链接二维码`}
+            width={176}
+            height={176}
+          />
+          <small>纯本地生成 SVG 二维码 · 扫码免登录提交</small>
         </div>
-        <p>提交者无需登录，即可上传文件</p>
-        <small>持有链接的人可提交，请仅分享给参与本次收集的人。</small>
+        <div className="share-qr-side">
+          <div className="share-badges">
+            <CollectionIcon category={collection.category} />
+            <div>
+              <strong>{collection.title}</strong>
+              <small>截止 {collection.deadline} 23:59（UTC+8）</small>
+            </div>
+          </div>
+          {collection.hasAccessCode && (
+            <p className="share-lock-pill">
+              <LockKeyhole size={14} />
+              已开启提取码保护
+            </p>
+          )}
+          <div className="share-quick-actions">
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => void copy('notice', announcement)}
+            >
+              {copied === 'notice' ? <Check size={15} /> : <MessageSquareText size={15} />}
+              {copied === 'notice' ? '已复制群通知' : '一键复制群通知'}
+            </button>
+            <button
+              type="button"
+              className="button"
+              disabled={downloadingCard}
+              onClick={() => void downloadShareCard()}
+            >
+              <Download size={15} />
+              {downloadingCard ? '生成中…' : '下载分享图'}
+            </button>
+          </div>
+        </div>
       </div>
+
+      {collection.hasAccessCode && (
+        <label className="field">
+          附带提取码到分享图与群通知（选填，仅在本地拼接）
+          <input
+            value={passcode}
+            maxLength={8}
+            placeholder="填写 4–8 位提取码后，一键复制群通知与分享图将自动包含提取码"
+            onChange={(e) => {
+              setPasscode(e.target.value)
+              setCopied('')
+            }}
+          />
+        </label>
+      )}
+
       <label className="field">
         收集链接
         <div className="copy-field">
@@ -200,21 +338,18 @@ export function ShareCollection({
             type="button"
             className="icon-button"
             aria-label="复制链接"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(url)
-                setCopied(true)
-                setCopyError('')
-              } catch {
-                setCopied(false)
-                setCopyError('无法自动复制，请选中上方链接手动复制。')
-              }
-            }}
+            onClick={() => void copy('url', url)}
           >
-            {copied ? <Check size={18} /> : <Copy size={18} />}
+            {copied === 'url' ? <Check size={18} /> : <Copy size={18} />}
           </button>
         </div>
       </label>
+
+      <details className="share-notice-preview">
+        <summary>预览结构化群通知文本</summary>
+        <pre>{announcement}</pre>
+      </details>
+
       <div
         className={`share-address-note ${address.kind === 'external' ? '' : 'attention'}`}
         role="note"
@@ -233,11 +368,16 @@ export function ShareCollection({
           </a>
         )}
       </div>
-      {copied && (
+      {copied === 'url' && (
         <p className="success-text" role="status">
           {address.kind === 'local'
             ? '已复制本机预览链接；请勿发给其他人用于提交。'
             : '链接已复制，请先确认参与者可以访问。'}
+        </p>
+      )}
+      {copied === 'notice' && (
+        <p className="success-text" role="status">
+          结构化群通知已复制，可直接粘贴到微信 / QQ / 飞书 / 钉钉群公告。
         </p>
       )}
       {copyError && (
@@ -255,7 +395,7 @@ export function ShareCollection({
       </div>
       {rotate ? (
         <div className="rotate-confirm">
-          <p>重新生成后，之前分享的链接会立即失效。</p>
+          <p>重新生成后，之前分享的链接和二维码会立即失效。</p>
           <button type="button" className="button" disabled={busy} onClick={() => setRotate(false)}>
             取消
           </button>
@@ -266,7 +406,7 @@ export function ShareCollection({
             onClick={() => {
               onRotate()
               setRotate(false)
-              setCopied(false)
+              setCopied('')
             }}
           >
             确认更换链接

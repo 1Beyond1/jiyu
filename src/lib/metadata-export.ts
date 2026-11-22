@@ -15,12 +15,18 @@ export function buildMetadataExport(
   const includeSensitive = options.includeSensitive === true
   const exportedAt = options.exportedAt || new Date().toISOString()
   const collections = includeSensitive
-    ? workspace.collections.map((c) => ({
+    ? workspace.collections.map(({ accessCodeHash: _hash, accessCodeVersion: _ver, ...c }) => ({
         ...c,
         ...(c.expectedSubmitters ? { expectedSubmitters: [...c.expectedSubmitters] } : {}),
       }))
     : workspace.collections.map(
-        ({ uploadToken: _token, expectedSubmitters: _roster, ...safeCollection }) => ({
+        ({
+          uploadToken: _token,
+          expectedSubmitters: _roster,
+          accessCodeHash: _hash,
+          accessCodeVersion: _ver,
+          ...safeCollection
+        }) => ({
           ...safeCollection,
         }),
       )

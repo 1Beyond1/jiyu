@@ -15,6 +15,8 @@ import type { Config } from './config.ts'
 import { Store } from './store.ts'
 import type { FileQueryOptions } from './store.ts'
 import {
+  accessCodeInput,
+  accessCookieName,
   checkPassword,
   digest,
   equalToken,
@@ -23,8 +25,10 @@ import {
   object,
   passwordInput,
   safeName,
+  signAccessProof,
   text,
   token,
+  verifyAccessProof,
 } from './security.ts'
 import {
   fileExtension,
@@ -123,7 +127,7 @@ function parseFileQuery(raw: unknown, forcedCollectionId?: string): FileQueryOpt
   }
 }
 
-function collectionInput(value: unknown, current?: Collection): Collection {
+async function collectionInput(value: unknown, current?: Collection): Promise<Collection> {
   const body = object(value)
   const integer = (key: string, max: number, fallback?: number) => {
     const n = body[key] ?? fallback
@@ -161,6 +165,17 @@ function collectionInput(value: unknown, current?: Collection): Collection {
     storage: 'local',
     received: current?.received || 0,
     status: current?.status || 'active',
+  }
+  if (body.clearAccessCode === true) {
+    delete result.accessCodeHash
+    delete result.accessCodeVersion
+  } else if (body.accessCode !== undefined && body.accessCode !== '') {
+    const code = accessCodeInput(body.accessCode)
+    result.accessCodeHash = await hashPassword(code)
+    result.accessCodeVersion = randomUUID()
+  } else if (current?.accessCodeHash) {
+    result.accessCodeHash = current.accessCodeHash
+    result.accessCodeVersion = current.accessCodeVersion || randomUUID()
   }
   if (result.materials?.length || current?.materials?.length || current?.materialRevision)
     result.materialRevision =
@@ -503,7 +518,7 @@ export async function createApp(
   )
   app.post('/api/collections', async (req) => {
     const body = object(req.body),
-      c = { ...collectionInput(body), storage: requireStorage(store, body.storage) }
+      c = { ...(await collectionInput(body)), storage: requireStorage(store, body.storage) }
     store.transaction(() => {
       const origin = confirmCollectionDraft(store, body, c)
       if (origin) c.draftOrigin = origin
@@ -522,7 +537,7 @@ export async function createApp(
       throw new HttpError(400, 'AI 草稿仅用于新建，不覆盖已有收集')
     const current = getCollection(String(object(req.params).id))
     const c = {
-      ...collectionInput(req.body, current),
+      ...(await collectionInput(req.body, current)),
       storage: requireStorage(store, object(req.body).storage ?? current.storage),
     }
     store.transaction(() => {
@@ -558,34 +573,98 @@ export async function createApp(
     if (!c) throw new HttpError(404, '收集链接无效或已撤销')
     return c
   }
-  app.get('/api/public/:token', async (req) => {
+  const isPublicUnlocked = (req: FastifyRequest, c: Collection) => {
+    if (!c.accessCodeHash) return true
+    const secret = store.publicAccessSecret()
+    const version = c.accessCodeVersion || 'v1'
+    const headerToken =
+      typeof req.headers['x-access-token'] === 'string' ? req.headers['x-access-token'] : undefined
+    if (verifyAccessProof(secret, headerToken, c.id, c.uploadToken!, version)) return true
+    const cookieToken = req.cookies[accessCookieName(c.id)]
+    return verifyAccessProof(secret, cookieToken, c.id, c.uploadToken!, version)
+  }
+  const requirePublicAccess = (req: FastifyRequest, c: Collection) => {
+    if (!isPublicUnlocked(req, c)) throw new HttpError(403, '此收集需要提取码，请先验证提取码')
+  }
+  const publicCollectionPayload = (raw: Collection) => {
     const {
       uploadToken: _secret,
       expectedSubmitters: _roster,
+      restrictToExpectedSubmitters: _restrict,
+      accessCodeHash: hash,
+      accessCodeVersion: _ver,
       draftOrigin: _draftOrigin,
       ...c
-    } = publicCollection(String(object(req.params).token))
+    } = raw
     return {
       collection: {
         ...c,
+        hasAccessCode: Boolean(hash),
         activeFiles: store.activeFileCount(c.id),
         requestLimitMB: config.requestBytes / 1024 ** 2,
       },
       ownerName: store.get('displayName') || '管理员',
     }
+  }
+  app.get('/api/public/:token', async (req) => {
+    const c = publicCollection(String(object(req.params).token))
+    if (c.accessCodeHash && !isPublicUnlocked(req, c)) return { locked: true }
+    return publicCollectionPayload(c)
   })
+  app.post(
+    '/api/public/:token/unlock',
+    {
+      config: {
+        rateLimit: {
+          max: rateLimits.unlockPerMinute,
+          timeWindow: '1 minute',
+          keyGenerator: (req) =>
+            `${req.ip}:${String((req.params as Record<string, unknown>)?.token || '')}`,
+          errorResponseBuilder: () => new HttpError(429, '提取码尝试过于频繁，请 1 分钟后重试'),
+        },
+      },
+    },
+    async (req, reply) => {
+      const c = publicCollection(String(object(req.params).token))
+      if (!c.accessCodeHash) return { unlocked: true, ...publicCollectionPayload(c) }
+      const body = object(req.body)
+      const code = typeof body.accessCode === 'string' ? body.accessCode.trim() : ''
+      if (!code || code.length > 32) throw new HttpError(400, '请输入 4–8 位提取码')
+      const valid = await checkPassword(code, c.accessCodeHash)
+      if (!valid) throw new HttpError(403, '提取码不正确，请核对后重试')
+      const expiresAt = Date.now() + 12 * 60 * 60 * 1000
+      const proof = signAccessProof(
+        store.publicAccessSecret(),
+        c.id,
+        c.uploadToken!,
+        c.accessCodeVersion || 'v1',
+        expiresAt,
+      )
+      reply.setCookie(accessCookieName(c.id), proof, {
+        path: '/api/public/',
+        httpOnly: true,
+        sameSite: 'strict',
+        secure: config.secureCookie,
+        maxAge: 12 * 60 * 60,
+      })
+      return { unlocked: true, accessToken: proof, ...publicCollectionPayload(c) }
+    },
+  )
   app.post(
     '/api/public/:token/upload',
     { config: { rateLimit: { max: rateLimits.multipartPerHour, timeWindow: '1 hour' } } },
     async (req, reply) => {
       const c = publicCollection(String(object(req.params).token))
+      requirePublicAccess(req, c)
       if (c.status !== 'active' || isExpired(c))
         throw new HttpError(410, '这项收集已暂停、结束或超过截止时间')
       if (
         c.fields?.length ||
         c.materials?.length ||
         c.naming?.parts.length ||
-        c.submissionMode === 'single'
+        c.submissionMode === 'single' ||
+        c.accessCodeHash ||
+        c.restrictToExpectedSubmitters
       )
         throw new HttpError(400, '此任务有新提交规则，请使用新版提交页')
       const requestId = text(req.headers['idempotency-key'], '提交编号', 36)
@@ -723,7 +802,9 @@ export async function createApp(
             finalCollection.fields?.length ||
             finalCollection.materials?.length ||
             finalCollection.naming?.parts.length ||
-            finalCollection.submissionMode === 'single'
+            finalCollection.submissionMode === 'single' ||
+            finalCollection.accessCodeHash ||
+            finalCollection.restrictToExpectedSubmitters
           )
             throw new HttpError(409, '提交规则已更新，请使用新版提交页')
           const finalError = submissionError(
@@ -1026,9 +1107,9 @@ export async function createApp(
     options.materialToolMode === true,
   )
   registerArchives(app, store)
-  registerCollectionWorkflows(app, store)
+  registerCollectionWorkflows(app, store, requirePublicAccess)
   registerMaterials(app, store, config, session)
-  await registerUploads(app, store, config, budget)
+  await registerUploads(app, store, config, budget, requirePublicAccess)
   registerUsers(app, store, (req) => session(req)?.id)
   const stopBackups = await registerBackups(
     app,

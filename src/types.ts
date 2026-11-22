@@ -31,6 +31,10 @@ export interface Collection {
   fields?: CollectionField[]
   identityField?: string
   expectedSubmitters?: string[]
+  restrictToExpectedSubmitters?: boolean
+  hasAccessCode?: boolean
+  accessCodeHash?: string
+  accessCodeVersion?: string
   naming?: { parts: string[]; separator: '_' | '-' }
   submissionMode?: 'append' | 'single'
   allowReplacement?: boolean
@@ -62,7 +66,11 @@ export interface DraftConfirmation {
   confirmed: boolean
   resolutions: { id: string; answer?: string; materialId?: string; skipped?: boolean }[]
 }
-export type CollectionInput = Collection & { draftConfirmation?: DraftConfirmation }
+export type CollectionInput = Collection & {
+  draftConfirmation?: DraftConfirmation
+  accessCode?: string
+  clearAccessCode?: boolean
+}
 
 export interface MaterialRequirement {
   id: string

@@ -24,8 +24,16 @@ import type {
   UploadFeedback,
 } from '../types'
 
+type PublicResponse =
+  | { locked: true }
+  | { locked?: false; collection: Collection; ownerName: string }
+
 export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
   const [info, setInfo] = useState<{ collection: Collection; ownerName: string } | null>(null),
+    [locked, setLocked] = useState(false),
+    [passcode, setPasscode] = useState(''),
+    [unlocking, setUnlocking] = useState(false),
+    [unlockError, setUnlockError] = useState(''),
     [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   useEffect(() => {
@@ -33,11 +41,15 @@ export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
     let alive = true
     const load = async () => {
       try {
-        const data = await api<{ collection: Collection; ownerName: string }>(
-          `/api/public/${encodeURIComponent(uploadToken)}`,
-        )
-        if (alive) {
-          setInfo(data)
+        const data = await api<PublicResponse>(`/api/public/${encodeURIComponent(uploadToken)}`)
+        if (!alive) return
+        if ('locked' in data && data.locked) {
+          setLocked(true)
+          setInfo(null)
+          setError('')
+        } else if ('collection' in data) {
+          setLocked(false)
+          setInfo({ collection: data.collection, ownerName: data.ownerName })
           setError('')
         }
       } catch (e) {
@@ -51,6 +63,73 @@ export function PublicSubmission({ uploadToken }: { uploadToken: string }) {
       clearInterval(timer)
     }
   }, [uploadToken, retry])
+
+  async function submitPasscode(e: React.FormEvent) {
+    e.preventDefault()
+    if (unlocking) return
+    const code = passcode.trim()
+    if (code.length < 4 || code.length > 8) {
+      setUnlockError('请输入 4–8 位提取码。')
+      return
+    }
+    setUnlocking(true)
+    setUnlockError('')
+    try {
+      const data = await api<{ unlocked: true; collection: Collection; ownerName: string }>(
+        `/api/public/${encodeURIComponent(uploadToken)}/unlock`,
+        'POST',
+        { accessCode: code },
+      )
+      setLocked(false)
+      setPasscode('')
+      setInfo({ collection: data.collection, ownerName: data.ownerName })
+      setError('')
+    } catch (err) {
+      setUnlockError((err as Error).message)
+    } finally {
+      setUnlocking(false)
+    }
+  }
+
+  if (locked)
+    return (
+      <main className="auth-page">
+        <Brand />
+        <section className="auth-card">
+          <span className="auth-symbol">
+            <LockKeyhole size={24} strokeWidth={1.4} />
+          </span>
+          <p className="eyebrow">ACCESS CODE REQUIRED</p>
+          <h1>请输入提取码</h1>
+          <p>这项收集已开启提取码保护。验证通过后即可查看收集说明、材料清单并上传文件。</p>
+          <form onSubmit={(e) => void submitPasscode(e)}>
+            <fieldset disabled={unlocking}>
+              <label className="field">
+                访问提取码
+                <input
+                  value={passcode}
+                  onChange={(e) => setPasscode(e.target.value)}
+                  required
+                  minLength={4}
+                  maxLength={8}
+                  placeholder="请输入 4–8 位提取码"
+                  autoComplete="one-time-code"
+                />
+              </label>
+              {unlockError && (
+                <p className="error-text" role="alert">
+                  {unlockError}
+                </p>
+              )}
+              <button type="submit" className="button primary submit-button">
+                {unlocking ? '验证中…' : '验证并进入提交页'}
+                <ArrowRight size={16} />
+              </button>
+            </fieldset>
+          </form>
+        </section>
+      </main>
+    )
   if (!info)
     return (
       <main className="auth-page">

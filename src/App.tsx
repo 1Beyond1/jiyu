@@ -1010,10 +1010,24 @@ function WorkspaceApp() {
             )
             if (!saved) return
             if (editing) {
+              try {
+                if (updated.clearAccessCode)
+                  sessionStorage.removeItem(`jiyu:passcode:${editing.id}`)
+                else if (updated.accessCode?.trim())
+                  sessionStorage.setItem(`jiyu:passcode:${editing.id}`, updated.accessCode.trim())
+              } catch {
+                /* Session storage is optional convenience only. */
+              }
               setEditing(null)
               notify('收集规则已更新，原链接保持有效')
             } else {
               const created = saved.collections[0]
+              try {
+                if (updated.accessCode?.trim())
+                  sessionStorage.setItem(`jiyu:passcode:${created.id}`, updated.accessCode.trim())
+              } catch {
+                /* Session storage is optional convenience only. */
+              }
               setCreateOpen(false)
               openCollection(created.id)
               setShare(created)
