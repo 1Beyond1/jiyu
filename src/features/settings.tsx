@@ -11,6 +11,7 @@ import { MembersPanel } from './members'
 import { BackupPanel } from './backup-settings'
 import { useAccount } from './auth'
 import { DiagnosticsPanel } from './diagnostics'
+import { WebhookSettingsPanel } from './webhook-settings'
 
 export function SettingsPage({
   workspace,
@@ -25,7 +26,29 @@ export function SettingsPage({
   const [name, setName] = useState(workspace.displayName),
     [passwordOpen, setPasswordOpen] = useState(false)
   const [fullExportOpen, setFullExportOpen] = useState(false),
-    [fullExportConfirmed, setFullExportConfirmed] = useState(false)
+    [fullExportConfirmed, setFullExportConfirmed] = useState(false),
+    [exportingMeta, setExportingMeta] = useState(false),
+    [exportMetaError, setExportMetaError] = useState('')
+  async function exportMetadata(includeSensitive: boolean) {
+    if (exportingMeta) return
+    setExportingMeta(true)
+    setExportMetaError('')
+    try {
+      const full = workspace.summaryMode
+        ? await api<Workspace>('/api/workspace?mode=full')
+        : workspace
+      downloadText(
+        includeSensitive ? '集屿-元数据清单-含敏感信息.json' : '集屿-元数据清单.json',
+        JSON.stringify(buildMetadataExport(full, { includeSensitive }), null, 2),
+        'application/json',
+      )
+      if (includeSensitive) setFullExportOpen(false)
+    } catch (e) {
+      setExportMetaError((e as Error).message || '导出元数据清单失败，请稍后重试')
+    } finally {
+      setExportingMeta(false)
+    }
+  }
   const [currentPassword, setCurrentPassword] = useState(''),
     [password, setPassword] = useState(''),
     [confirmation, setConfirmation] = useState(''),
@@ -111,6 +134,7 @@ export function SettingsPage({
             <DiagnosticsPanel />
             <MembersPanel />
             <AISettingsPanel />
+            <WebhookSettingsPanel />
             <BackupPanel />
           </>
         )}
@@ -119,20 +143,20 @@ export function SettingsPage({
           <p>
             默认导出会自动屏蔽活跃收集链接令牌（uploadToken）与应交名单（expectedSubmitters）。元数据清单不含文件正文，完整备份请使用上方备份功能或打包下载。
           </p>
+          {exportMetaError && (
+            <p className="error-text" role="alert">
+              {exportMetaError}
+            </p>
+          )}
           <div className="button-row">
             <button
               type="button"
               className="button"
-              onClick={() =>
-                downloadText(
-                  '集屿-元数据清单.json',
-                  JSON.stringify(buildMetadataExport(workspace), null, 2),
-                  'application/json',
-                )
-              }
+              disabled={exportingMeta}
+              onClick={() => void exportMetadata(false)}
             >
               <FileDown size={15} />
-              导出元数据清单（已脱敏）
+              {exportingMeta ? '正在准备清单…' : '导出元数据清单（已脱敏）'}
             </button>
             {canEdit && (
               <button
@@ -185,22 +209,11 @@ export function SettingsPage({
             <button
               type="button"
               className="button primary"
-              disabled={!fullExportConfirmed}
-              onClick={() => {
-                downloadText(
-                  '集屿-元数据清单-含敏感信息.json',
-                  JSON.stringify(
-                    buildMetadataExport(workspace, { includeSensitive: true }),
-                    null,
-                    2,
-                  ),
-                  'application/json',
-                )
-                setFullExportOpen(false)
-              }}
+              disabled={!fullExportConfirmed || exportingMeta}
+              onClick={() => void exportMetadata(true)}
             >
               <FileDown size={15} />
-              确认导出完整清单
+              {exportingMeta ? '正在准备清单…' : '确认导出完整清单'}
             </button>
           </footer>
         </Modal>

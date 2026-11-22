@@ -10,12 +10,14 @@ export function ParticipantLedger({
   collection: c,
   files,
   onSelect,
+  onOfflineUpload,
 }: {
   collection: Collection
   files: CollectedFile[]
   onSelect: (ids: string[] | null, label?: string) => void
+  onOfflineUpload?: (person: { owner: string; identity: string }) => void
 }) {
-  const { canEdit } = useAccount()
+  const { canEdit, isAdmin } = useAccount()
   const [filter, setFilter] = useState('all')
   const [reminder, setReminder] = useState<{ mode: 'group' | 'direct'; personId?: string } | null>(
     null,
@@ -167,6 +169,17 @@ export function ParticipantLedger({
                           onClick={() => setReminder({ mode: 'direct', personId: p.identity })}
                         >
                           催交话术
+                        </button>
+                      )}
+                      {isAdmin && onOfflineUpload && !c.archivedAt && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() =>
+                            onOfflineUpload({ owner: p.owner || '', identity: p.identity })
+                          }
+                        >
+                          替 TA 补录
                         </button>
                       )}
                     </div>

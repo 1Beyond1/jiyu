@@ -26,7 +26,10 @@ export function useWorkspace() {
     setRefreshing(true)
     const current = ++sequence.current
     try {
-      const result = await apiCached<Workspace>('/api/workspace', etag.current || undefined)
+      const result = await apiCached<Workspace>(
+        '/api/workspace?mode=summary',
+        etag.current || undefined,
+      )
       if (current === sequence.current) {
         if (result.status === 200) {
           etag.current = result.etag
@@ -61,6 +64,13 @@ export function useWorkspace() {
       document.removeEventListener('visibilitychange', focus)
     }
   }, [refresh])
+  const applyWorkspace = useCallback((next: Workspace) => {
+    sequence.current++
+    etag.current = ''
+    setWorkspace(next)
+    setUpdatedAt(new Date().toISOString())
+    setError('')
+  }, [])
   const mutate = async (path: string, body: unknown, method = 'POST') => {
     inFlight.current++
     const current = ++sequence.current
@@ -69,13 +79,14 @@ export function useWorkspace() {
         | Workspace
         | {
             workspace: Workspace
+            collection?: Workspace['collections'][number]
             operationId?: string
             purged?: number
             freedBytes?: number
             warning?: string
             failedFiles?: { id: string; name: string; error: string }[]
           }
-      >(path, method, body)
+      >(path, method, body, undefined, { 'X-Workspace-Mode': 'summary' })
       if (current === sequence.current) {
         etag.current = ''
         setWorkspace('workspace' in result ? result.workspace : result)
@@ -87,7 +98,7 @@ export function useWorkspace() {
       inFlight.current--
     }
   }
-  return { workspace, loading, error, refresh, refreshing, updatedAt, mutate }
+  return { workspace, loading, error, refresh, refreshing, updatedAt, mutate, applyWorkspace }
 }
 export function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`

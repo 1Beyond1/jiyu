@@ -48,12 +48,12 @@ async function bootApp(
   return { dir, app, store, origin, adminHeaders }
 }
 
-test('访问提取码：不升 schema 6、解锁前零泄露、防爆破限流、改码失效与清除恢复', async () => {
+test('访问提取码：解锁前零泄露、防爆破限流、改码失效与清除恢复', async () => {
   const { dir, app, store, origin, adminHeaders } = await bootApp(3)
   try {
-    // 确认 schema 版本仍为 5
+    // 确认 schema 版本已升级至 6
     const schema = store.db.prepare('PRAGMA user_version').get() as { user_version: number }
-    assert.equal(schema.user_version, 5)
+    assert.equal(schema.user_version, 6)
 
     // 校验短于 4 位或超长提取码被拒绝
     const badCode = await app.inject({

@@ -72,7 +72,8 @@ export function StartChecklist({
   useEffect(() => {
     void load()
   }, [load])
-  const hasFiles = !!workspace.files.length
+  const totalActiveFiles = workspace.stats?.activeFiles ?? workspace.files.length
+  const hasFiles = totalActiveFiles > 0
   const selectedFile = workspace.files.find((f) => f.id === selectedFileId) || workspace.files[0]
   const collectionNames = new Map(workspace.collections.map((c) => [c.id, c.title]))
   const checked =
@@ -94,7 +95,7 @@ export function StartChecklist({
     {
       title: '试交一份文件，再下载核对',
       state: hasFiles
-        ? `已接收 ${workspace.files.length} 份 · ${checked ? '你已确认下载核对' : '待下载核对'}`
+        ? `已接收 ${totalActiveFiles} 份 · ${checked ? '你已确认下载核对' : '待下载核对'}`
         : '尚未收到文件',
       done: checked,
       text: hasFiles

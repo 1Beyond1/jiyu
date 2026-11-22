@@ -68,12 +68,14 @@ export function StoragePage({
   const configured = state?.profiles.filter((p) => p.hasCredentials || p.revision) || []
   const used = space?.usedBytes ?? workspace.storage?.usedBytes ?? 0,
     quota = space?.quotaBytes ?? workspace.storage?.quotaBytes ?? 0
+  const isTransferActive = (t: TransferInfo) =>
+    t.fileActive !== undefined ? t.fileActive : workspace.files.some((f) => f.id === t.file_id)
   const retryable =
     state?.transfers
       .filter(
         (t) =>
           t.state === 'failed' &&
-          workspace.files.some((f) => f.id === t.file_id) &&
+          isTransferActive(t) &&
           state.profiles.some((p) => p.id === t.provider && p.enabled),
       )
       .map((t) => t.file_id) || []
@@ -303,7 +305,8 @@ export function StoragePage({
               <div key={t.file_id}>
                 <div>
                   <strong>
-                    {workspace.files.find((f) => f.id === t.file_id)?.name ||
+                    {t.fileName ||
+                      workspace.files.find((f) => f.id === t.file_id)?.name ||
                       workspace.trash?.find((f) => f.id === t.file_id)?.name ||
                       '文件记录'}
                   </strong>
@@ -319,7 +322,7 @@ export function StoragePage({
                 </div>
                 {isAdmin &&
                   t.state === 'failed' &&
-                  workspace.files.some((f) => f.id === t.file_id) &&
+                  isTransferActive(t) &&
                   state.profiles.some((p) => p.id === t.provider && p.enabled) && (
                     <button
                       type="button"

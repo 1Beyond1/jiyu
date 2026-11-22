@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Collection, CollectedFile, UserRole, MaterialOperation } from '../src/types.ts'
 import { assertMaterialAdvice, recordMaterialAdvice } from './material-ai.ts'
-import type { Store } from './store.ts'
+import type { Store, WorkspaceOptions } from './store.ts'
 import type { Config } from './config.ts'
+import type { WebhookService } from './webhooks.ts'
 import { digest, HttpError, object, text } from './security.ts'
 import {
   materialStateVersion,
@@ -31,6 +32,8 @@ export function registerMaterials(
   store: Store,
   config: Config,
   who: (req: FastifyRequest) => { id: string; display_name: string; role: UserRole } | undefined,
+  webhooks?: WebhookService,
+  workspaceOptions?: (req: FastifyRequest) => WorkspaceOptions,
 ) {
   app.get('/api/collections/:id/materials', async (req) => {
     const c = store.collection(String(object(req.params).id))
@@ -38,7 +41,7 @@ export function registerMaterials(
     const revision = object(req.query).revision
     if (revision !== undefined && revision !== c.materialRevision)
       throw new HttpError(409, '材料规则已改变，请刷新后重新读取')
-    const active = store.files().filter((f) => f.collectionId === c.id && !f.deletedAt)
+    const active = store.collectionFiles(c.id, false)
     const people = materialParticipants(c, active)
     return {
       collectionId: c.id,
@@ -89,7 +92,7 @@ export function registerMaterials(
     reply
       .type('text/csv; charset=utf-8')
       .header('Content-Disposition', 'attachment; filename="jiyu-materials.csv"')
-    return materialReportCsv(c, store.files())
+    return materialReportCsv(c, store.collectionFiles(c.id, false))
   })
   for (const kind of ['classify', 'review'] as const)
     app.post(`/api/materials/${kind}`, async (req) => {
@@ -134,14 +137,21 @@ export function registerMaterials(
           body.aiReview || null,
         ]),
       )
+      let appliedCount = 0
       store.transaction(() => {
-        const all = store.files(),
+        const colActive = store.collectionFiles(c.id, false),
           selected = changes.map((change) => {
-            const f = all.find((f) => f.id === change.id && f.collectionId === c.id && !f.deletedAt)
+            const f = colActive.find((f) => f.id === change.id)
             if (!f) throw new HttpError(409, '文件不存在、已移入回收站或不属于此任务，请刷新')
             return f
           })
-        const reused = all.some((f) => f.materialAction?.id === requestId)
+        const reused = Boolean(
+          store.db
+            .prepare(
+              "SELECT 1 FROM files WHERE json_extract(data, '$.materialAction.id')=? LIMIT 1",
+            )
+            .get(requestId),
+        )
         if (reused) {
           if (
             selected.every(
@@ -212,11 +222,23 @@ export function registerMaterials(
           }
           store.saveFile(next)
         })
+        appliedCount = selected.length
         store.activity(
           `${user.display_name}对「${c.title}」${selected.length} 份文件${kind === 'classify' ? '调整材料归属' : decision === 'accepted' ? '完成人工核对' : '标记需补充'}`,
         )
         recordMaterialAdvice(store, advice, kind, body, user.display_name)
       })
-      return store.workspace(config.quotaBytes, config.requestBytes)
+      if (kind === 'review' && appliedCount > 0 && webhooks) {
+        webhooks.emit({
+          event: decision === 'accepted' ? 'review.accepted' : 'review.needs_changes',
+          collectionId: c.id,
+          collectionTitle: c.title,
+          actor: user.display_name,
+          fileCount: appliedCount,
+          summary: `${user.display_name}对「${c.title}」的 ${appliedCount} 份文件${decision === 'accepted' ? '审核通过' : '标记需补充'}`,
+          ...(note ? { detail: `核对说明：${note.slice(0, 120)}` } : {}),
+        })
+      }
+      return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions?.(req))
     })
 }

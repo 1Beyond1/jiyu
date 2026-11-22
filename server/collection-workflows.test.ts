@@ -37,7 +37,7 @@ test('schema 4 升级保留旧任务与设置，模板和回执表可用', async
     store.close()
     store = new Store(dir)
     assert.equal(store.get('fixture'), '原设置')
-    assert.equal(store.db.prepare('PRAGMA user_version').get()!.user_version, 5)
+    assert.equal(store.db.prepare('PRAGMA user_version').get()!.user_version, 6)
     assert.equal(store.collection(oldTask.id)?.title, '旧任务')
     assert.equal(store.collection(oldTask.id)?.fields, undefined)
     assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM collection_templates').get()!.n, 0)

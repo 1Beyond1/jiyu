@@ -123,7 +123,7 @@ test('真实 v0.3 升级：原账号、正文、续传保留，旧快照可由�
     assert.equal(schema(backupDir), 4)
 
     service = await createApp(config, { serveFrontend: false })
-    assert.equal(schema(config.dataDir), 5)
+    assert.equal(schema(config.dataDir), 6)
     assert.equal(service.store.get('password'), passwordHash)
     const login = await service.app.inject({
       method: 'POST',

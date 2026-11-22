@@ -54,6 +54,7 @@ export function Assistant({
     [loadError, setLoadError] = useState(''),
     [scopeFilter, setScopeFilter] = useState(initialCollectionId)
   const [includeContent, setIncludeContent] = useState(false)
+  const [fullFiles, setFullFiles] = useState<CollectedFile[] | null>(null)
   const list = useRef<HTMLDivElement>(null),
     inputRef = useRef<HTMLInputElement>(null),
     controller = useRef<AbortController | null>(null)
@@ -75,6 +76,23 @@ export function Assistant({
     }
   }, [])
   useEffect(() => {
+    void workspace.files
+    if (!workspace.summaryMode) {
+      setFullFiles(null)
+      return
+    }
+    const ctrl = new AbortController()
+    void api<Workspace>('/api/workspace?mode=full', 'GET', undefined, ctrl.signal)
+      .then((ws) => {
+        if (!ctrl.signal.aborted) setFullFiles(ws.files)
+      })
+      .catch(() => {
+        /* Fallback to summary recent files if full fetch fails. */
+      })
+    return () => ctrl.abort()
+  }, [workspace.summaryMode, workspace.files])
+  const allWorkspaceFiles = fullFiles ?? workspace.files
+  useEffect(() => {
     void [messages.length, busy]
     list.current?.scrollTo({
       top: list.current.scrollHeight,
@@ -94,17 +112,17 @@ export function Assistant({
     setConsent(false)
     setInput('')
   }, [initialCollectionId])
-  const files = workspace.files.filter((f) => !scopeFilter || f.collectionId === scopeFilter)
-  const chosen = workspace.files.filter((f) => selected.includes(f.id))
+  const files = allWorkspaceFiles.filter((f) => !scopeFilter || f.collectionId === scopeFilter)
+  const chosen = allWorkspaceFiles.filter((f) => selected.includes(f.id))
   const task = workspace.collections.find((c) => c.id === scopeFilter)
-  const report = task ? checkCollection(task, workspace.files) : null
+  const report = task ? checkCollection(task, allWorkspaceFiles) : null
   const summary = report
     ? `${report.files} 份有效文件，${report.materials ? `${report.materials.received} 人必需项收齐，${report.materials.reviewed} 人人工核对通过，${report.materials.unclassified} 份未分类` : `${report.submitted} 人已交`}；${report.hasRoster ? `${report.missing.length} 人${report.materials ? '必需项未齐' : '未交'}` : '未设置应交名单，无法判断缺交'}；${report.contentGroups.length} 组内容重复，${report.nameGroups.length} 组文件名重复。`
     : ''
   function changeScope(value: string) {
     setScopeFilter(value)
     setSelected(
-      workspace.files
+      allWorkspaceFiles
         .filter((f) => f.collectionId === value)
         .slice(0, 30)
         .map((f) => f.id),
@@ -178,20 +196,25 @@ export function Assistant({
             : '可以试试「{任务}_{提交人}_{序号}」，自动保留原扩展名。下面会打开现有命名规则预览，确认后才应用。'
         action = !task || !!chosen.length
       } else if (/进度|多少|情况|概览/.test(text)) {
-        const active = workspace.collections.filter((c) => collectionState(c) === 'active')
-        response = `当前有 ${active.length} 项收集正在进行，累计收到 ${workspace.collections.reduce((sum, c) => sum + c.received, 0)} 份文件；${workspace.files.filter((f) => f.status === 'pending').length} 份待整理。`
+        const active = workspace.collections.filter(
+          (c) => !c.archivedAt && collectionState(c) === 'active',
+        )
+        const pendingCount =
+          workspace.stats?.pendingFiles ??
+          allWorkspaceFiles.filter((f) => f.status === 'pending').length
+        response = `当前有 ${active.length} 项收集正在进行，累计收到 ${workspace.collections.reduce((sum, c) => sum + c.received, 0)} 份文件；${pendingCount} 份待整理。`
       } else if (/安全|隐私|存储/.test(text))
         response =
           '文件保存在自己的服务器。内置规则不调用外部模型；模型模式需要你逐次确认发送范围，正文只在单独授权时发送已识别的摘录。请定期完成完整备份。'
       else
         response =
           '当前使用内置规则。可以查看收集进度或预览统一命名；配置模型后，可对选定文件提出更具体的整理建议。'
-      const pendingFiles = workspace.files.filter((f) => f.status === 'pending')
+      const pendingFiles = allWorkspaceFiles.filter((f) => f.status === 'pending')
       const candidates = chosen.length
         ? chosen
         : task
           ? []
-          : (pendingFiles.length ? pendingFiles : workspace.files).slice(0, 500)
+          : (pendingFiles.length ? pendingFiles : allWorkspaceFiles).slice(0, 500)
       setMessages((old) => [
         ...old,
         {
@@ -434,8 +457,8 @@ export function Assistant({
                   <button
                     type="button"
                     className="chat-action"
-                    disabled={busy || !filesForAction(m.actionIds, workspace.files).length}
-                    onClick={() => onRename(filesForAction(m.actionIds!, workspace.files))}
+                    disabled={busy || !filesForAction(m.actionIds, allWorkspaceFiles).length}
+                    onClick={() => onRename(filesForAction(m.actionIds!, allWorkspaceFiles))}
                   >
                     <WandSparkles size={14} />
                     预览命名规则

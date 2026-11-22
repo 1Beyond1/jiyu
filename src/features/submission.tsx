@@ -218,7 +218,7 @@ function Submission({
       controller.current?.abort()
     }
   }, [])
-  const ended = c.status !== 'active' || isExpired(c, now)
+  const ended = Boolean(c.archivedAt) || c.status !== 'active' || isExpired(c, now)
   function continueSubmission(detail: ReceiptDetail, replace: boolean, key: string) {
     setMaterialChoices({})
     setName(detail.owner)
@@ -404,11 +404,13 @@ function Submission({
               <div className="empty">
                 <LockKeyhole size={30} />
                 <h3>
-                  {c.status === 'active'
-                    ? '这项收集已截止'
-                    : c.status === 'paused'
-                      ? '这项收集已暂停'
-                      : '这项收集已结束'}
+                  {c.archivedAt
+                    ? '这项收集已归档'
+                    : c.status === 'active'
+                      ? '这项收集已截止'
+                      : c.status === 'paused'
+                        ? '这项收集已暂停'
+                        : '这项收集已结束'}
                 </h3>
                 <p>请联系发起人了解下一步安排。</p>
                 {error && (

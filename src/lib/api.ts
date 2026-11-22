@@ -5,6 +5,7 @@ import type {
   SubmissionMetadata,
   UploadFeedback,
   UploadFileProgress,
+  Workspace,
 } from '../types.ts'
 import { safeRandomHex, safeRandomUUID, sha256Hex } from './browser-crypto.ts'
 
@@ -17,6 +18,7 @@ export async function api<T>(
   method = 'GET',
   body?: unknown,
   signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ): Promise<T> {
   const response = await fetch(path, {
     method,
@@ -25,6 +27,7 @@ export async function api<T>(
     headers: {
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       ...(method !== 'GET' ? { 'X-CSRF-Token': csrf } : {}),
+      ...extraHeaders,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
@@ -35,6 +38,56 @@ export async function api<T>(
     throw new Error(data.error || '操作失败，请稍后重试')
   }
   return data as T
+}
+
+export async function uploadAdminOffline(
+  collectionId: string,
+  payload: {
+    owner: string
+    files: File[]
+    fields?: Record<string, string>
+    materialIds?: string[]
+    note?: string
+    markReady?: boolean
+  },
+  signal?: AbortSignal,
+): Promise<{ workspace: Workspace; files: CollectedFile[]; receipt: UploadReceipt }> {
+  const form = new FormData()
+  form.append('owner', payload.owner)
+  if (payload.fields && Object.keys(payload.fields).length) {
+    form.append('fields', JSON.stringify(payload.fields))
+  }
+  if (payload.materialIds) {
+    form.append('materialIds', JSON.stringify(payload.materialIds))
+  }
+  if (payload.note) {
+    form.append('note', payload.note)
+  }
+  if (payload.markReady) {
+    form.append('markReady', 'true')
+  }
+  for (const file of payload.files) {
+    form.append('files', file, file.name)
+  }
+  const response = await fetch(
+    `/api/collections/${encodeURIComponent(collectionId)}/offline-upload`,
+    {
+      method: 'POST',
+      signal,
+      credentials: 'same-origin',
+      headers: {
+        'X-CSRF-Token': csrf,
+        'X-Workspace-Mode': 'summary',
+      },
+      body: form,
+    },
+  )
+  const data = await response.json().catch(() => ({ error: '服务返回了无效响应' }))
+  if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('jiyu:session-expired'))
+    throw new Error(data.error || '补录上传失败，请稍后重试')
+  }
+  return data as { workspace: Workspace; files: CollectedFile[]; receipt: UploadReceipt }
 }
 
 export type CachedApiResult<T> =

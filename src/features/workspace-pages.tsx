@@ -2,26 +2,32 @@ import { useAccount } from './auth'
 import { useState } from 'react'
 import { ArrowRight, FileDown, FolderInput, ScanLine, Sparkles, WandSparkles } from 'lucide-react'
 import { Modal } from '../components/ui'
-import type { Workspace } from '../types'
+import type { CollectedFile, Workspace } from '../types'
 import { csvCell, downloadText, formatSize } from '../lib/workspace'
 
 export function ToolsPage({
   workspace,
+  allFiles,
   onRename,
   onFiles,
   onAI,
 }: {
   workspace: Workspace
+  allFiles?: CollectedFile[]
   onRename: () => void
   onFiles: () => void
   onAI: () => void
 }) {
   const { canEdit } = useAccount()
   const [duplicates, setDuplicates] = useState(false)
-  const groups = new Map<string, typeof workspace.files>()
-  for (const file of workspace.files)
+  const fileList = allFiles ?? workspace.files
+  const groups = new Map<string, CollectedFile[]>()
+  for (const file of fileList)
     if (file.sha256) groups.set(file.sha256, [...(groups.get(file.sha256) || []), file])
   const matches = [...groups.values()].filter((files) => files.length > 1)
+  const totalCount = allFiles
+    ? allFiles.length
+    : (workspace.stats?.activeFiles ?? workspace.files.length)
   const tools = [
     {
       icon: WandSparkles,
@@ -45,13 +51,13 @@ export function ToolsPage({
       icon: FileDown,
       title: '导出文件清单',
       description: '把文件名称、提交人和大小导出为 CSV。',
-      example: `${workspace.files.length} 条文件记录，随时带走`,
+      example: `${totalCount} 条文件记录，随时带走`,
       label: '导出清单',
       action: () =>
         downloadText(
           '集屿-文件清单.csv',
           '\uFEFF文件名称,提交人,文件大小\n' +
-            workspace.files
+            fileList
               .map((f) => [f.name, f.owner, formatSize(f.size)].map(csvCell).join(','))
               .join('\n'),
           'text/csv;charset=utf-8',

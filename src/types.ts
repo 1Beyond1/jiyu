@@ -18,10 +18,13 @@ export interface Collection {
   category: 'design' | 'document' | 'photo'
   received: number
   activeFiles?: number
+  pendingFiles?: number
+  materialSummary?: { total: number; received: number; reviewed: number }
   target: number
   deadline: string
   storage: StorageId
   status: CollectionStatus
+  archivedAt?: string
   formats: string
   maxFileSizeMB: number
   maxFilesPerSubmission: number
@@ -234,6 +237,45 @@ export interface Participant {
   latestAt: string
   duplicates: number
 }
+export interface ReceiptMaterialSlotOverview {
+  materialId: string
+  name: string
+  required: boolean
+  description: string
+  state: 'missing' | MaterialReviewState
+  duplicate: boolean
+  fileCount: number
+  files: {
+    id: string
+    name: string
+    size: number
+    materialState: MaterialReviewState
+    latestNote: string
+    reviewedAt?: string
+    inCurrentBatch: boolean
+  }[]
+  latestNote: string
+}
+export interface ReceiptMaterialOverview {
+  identity: string
+  receivedComplete: boolean
+  reviewComplete: boolean
+  status: 'missing' | 'needs_changes' | 'unclassified' | 'pending' | 'accepted'
+  requiredTotal: number
+  requiredSubmitted: number
+  requiredAccepted: number
+  missingRequired: string[]
+  needsChangesCount: number
+  pendingCount: number
+  acceptedCount: number
+  unclassifiedFiles: {
+    id: string
+    name: string
+    size: number
+    inCurrentBatch: boolean
+  }[]
+  slots: ReceiptMaterialSlotOverview[]
+}
 export interface ReceiptDetail {
   receipt: UploadReceipt
   owner: string
@@ -243,6 +285,7 @@ export interface ReceiptDetail {
     materialNote?: string
   })[]
   superseded: boolean
+  materialOverview?: ReceiptMaterialOverview
 }
 export interface DiagnosticItem {
   id: string
@@ -303,6 +346,13 @@ export interface Activity {
   time: string
 }
 
+export interface WorkspaceStats {
+  activeFiles: number
+  pendingFiles: number
+  trashFiles: number
+  archivedCollections: number
+}
+
 export interface Workspace {
   version: 1
   requestLimitMB?: number
@@ -313,6 +363,8 @@ export interface Workspace {
   trash?: CollectedFile[]
   storage?: { usedBytes: number; quotaBytes: number }
   lastRenameId?: string
+  stats?: WorkspaceStats
+  summaryMode?: boolean
 }
 
 export interface UploadReceipt {
@@ -414,6 +466,8 @@ export interface StorageSpace {
 }
 export interface TransferInfo {
   file_id: string
+  fileName?: string
+  fileActive?: boolean
   provider: string
   state: string
   attempts: number
@@ -422,6 +476,50 @@ export interface TransferInfo {
   error?: string
   updated_at: string
   remote_path?: string
+}
+
+export type WebhookChannelType = 'feishu' | 'dingtalk' | 'wecom' | 'generic'
+export type WebhookEventType =
+  | 'submission.created'
+  | 'review.accepted'
+  | 'review.needs_changes'
+  | 'collection.deadline_soon'
+
+export interface WebhookChannel {
+  id: string
+  name: string
+  type: WebhookChannelType
+  enabled: boolean
+  urlHint: string
+  hasUrl: boolean
+  hasSecret: boolean
+  keyReady: boolean
+  events: WebhookEventType[]
+  debounceSeconds: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WebhookLog {
+  id: string
+  channelId: string
+  channelName: string
+  channelType: WebhookChannelType
+  event: WebhookEventType | 'test'
+  collectionId?: string
+  status: 'succeeded' | 'failed'
+  httpStatus?: number
+  attempts: number
+  mergedCount: number
+  summary: string
+  error?: string
+  targetHint: string
+  createdAt: string
+}
+
+export interface WebhookState {
+  channels: WebhookChannel[]
+  logs: WebhookLog[]
 }
 
 export type ArchiveLayout =

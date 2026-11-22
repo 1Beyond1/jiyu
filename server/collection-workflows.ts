@@ -11,7 +11,8 @@ import type { Store } from './store.ts'
 import { digest, equalToken, HttpError, object, text } from './security.ts'
 import { fileNameKey, submissionFileName } from '../src/lib/submission-naming.ts'
 import { collectionParticipants } from '../src/lib/participants.ts'
-import { materialReviewState } from '../src/lib/materials.ts'
+import { materialParticipants, materialReviewState } from '../src/lib/materials.ts'
+import type { ReceiptMaterialOverview } from '../src/types.ts'
 
 const normalized = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase('en-US')
 const uuid = /^[a-f0-9-]{36}$/
@@ -172,7 +173,7 @@ export function submissionContext(
   return context
 }
 
-function identity(c: Collection, owner: string, fields: Record<string, string>) {
+export function participantIdentity(c: Collection, owner: string, fields: Record<string, string>) {
   return c.identityField && c.identityField !== 'owner' ? fields[c.identityField] || '' : owner
 }
 export function validateSubmission(
@@ -185,7 +186,7 @@ export function validateSubmission(
   for (const f of c.fields || []) text(context.fields[f.id] ?? '', f.label, 80, f.required ? 1 : 0)
   if (context.materialIds?.some((id) => id && !c.materials?.some((m) => m.id === id)))
     throw new HttpError(400, '材料清单已变更，请刷新后重新选择归属')
-  const value = identity(c, owner, context.fields)
+  const value = participantIdentity(c, owner, context.fields)
   if (!value) throw new HttpError(400, '请填写提交人标识')
   if (c.restrictToExpectedSubmitters) {
     const allowed = new Set((c.expectedSubmitters || []).map(normalized))
@@ -201,13 +202,8 @@ export function validateSubmission(
   } else if (
     c.submissionMode === 'single' &&
     store
-      .files()
-      .some(
-        (f) =>
-          f.collectionId === c.id &&
-          !f.deletedAt &&
-          normalized(f.participant || f.owner) === normalized(value),
-      )
+      .collectionFiles(c.id, false)
+      .some((f) => normalized(f.participant || f.owner) === normalized(value))
   )
     throw new HttpError(409, '此标识已提交，请使用本人回执替换，或联系发起人')
 }
@@ -223,26 +219,20 @@ export function commitSubmission(
   files: CollectedFile[],
 ) {
   validateSubmission(store, c, owner, context)
-  const person = identity(c, owner, context.fields)
+  const person = participantIdentity(c, owner, context.fields)
   if (context.replace) {
     const old = record(store, c.id, context.replace.receiptId, context.replace.keyHash)
-    for (const f of store.files())
-      if (f.submissionId === context.replace.receiptId && !f.deletedAt)
-        store.saveFile({
-          ...f,
-          deletedAt: receipt.createdAt,
-          materialVersion: (f.materialVersion || 0) + 1,
-        })
+    for (const f of store.submissionFiles(c.id, context.replace.receiptId))
+      store.saveFile({
+        ...f,
+        deletedAt: receipt.createdAt,
+        materialVersion: (f.materialVersion || 0) + 1,
+      })
     store.db
       .prepare('UPDATE submission_records SET data=? WHERE id=?')
       .run(JSON.stringify({ ...old, superseded: true }), context.replace.receiptId)
   }
-  const occupied = new Set(
-    store
-      .files()
-      .filter((f) => f.collectionId === c.id && !f.deletedAt)
-      .map((f) => fileNameKey(f.name)),
-  )
+  const occupied = new Set(store.collectionFiles(c.id, false).map((f) => fileNameKey(f.name)))
   files.forEach((f, i) => {
     f.submissionId = receipt.receiptId
     f.submissionFields = context.fields
@@ -270,7 +260,84 @@ export function commitSubmission(
 }
 
 export function participants(store: Store, c: Collection): Participant[] {
-  return collectionParticipants(c, store.files())
+  return collectionParticipants(c, store.collectionFiles(c.id, false))
+}
+
+function buildReceiptMaterialOverview(
+  c: Collection,
+  identityValue: string,
+  receiptId: string,
+  colActiveFiles: CollectedFile[],
+): ReceiptMaterialOverview {
+  const personKey = normalized(identityValue)
+  const personFiles = colActiveFiles.filter(
+    (f) => normalized(f.participant || f.owner) === personKey,
+  )
+  const computed = materialParticipants({ ...c, expectedSubmitters: undefined }, personFiles)[0]
+  const rawSlots =
+    computed?.slots ||
+    (c.materials || []).map((requirement) => ({
+      requirement,
+      files: [] as CollectedFile[],
+      state: 'missing' as const,
+      duplicate: false,
+    }))
+  const slots = rawSlots.map((slot) => {
+    const slotFiles = slot.files.map((f) => {
+      const state = materialReviewState(c, f)
+      const isStale = state === 'stale'
+      return {
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        materialState: state,
+        latestNote: isStale ? '' : f.materialReview?.note || '',
+        ...(f.materialReview?.reviewedAt && !isStale
+          ? { reviewedAt: f.materialReview.reviewedAt }
+          : {}),
+        inCurrentBatch: f.submissionId === receiptId,
+      }
+    })
+    const sortedByReviewed = [...slotFiles].sort((a, b) =>
+      (b.reviewedAt || '').localeCompare(a.reviewedAt || ''),
+    )
+    const latestNeedsChangesNote = sortedByReviewed.find(
+      (f) => f.materialState === 'needs_changes' && f.latestNote,
+    )?.latestNote
+    const latestActiveNote = sortedByReviewed.find((f) => f.latestNote)?.latestNote
+    return {
+      materialId: slot.requirement.id,
+      name: slot.requirement.name,
+      required: slot.requirement.required,
+      description: slot.requirement.description,
+      state: slot.state as 'missing' | ReturnType<typeof materialReviewState>,
+      duplicate: slot.duplicate,
+      fileCount: slot.files.length,
+      files: slotFiles,
+      latestNote: latestNeedsChangesNote || latestActiveNote || '',
+    }
+  })
+  const requiredSlots = slots.filter((s) => s.required)
+  return {
+    identity: identityValue,
+    receivedComplete: computed?.receivedComplete ?? false,
+    reviewComplete: computed?.reviewComplete ?? false,
+    status: computed?.status ?? 'missing',
+    requiredTotal: requiredSlots.length,
+    requiredSubmitted: requiredSlots.filter((s) => s.fileCount > 0).length,
+    requiredAccepted: requiredSlots.filter((s) => s.state === 'accepted').length,
+    missingRequired: requiredSlots.filter((s) => s.state === 'missing').map((s) => s.name),
+    needsChangesCount: slots.filter((s) => s.state === 'needs_changes').length,
+    pendingCount: slots.filter((s) => s.state === 'pending' || s.state === 'stale').length,
+    acceptedCount: slots.filter((s) => s.state === 'accepted').length,
+    unclassifiedFiles: (computed?.unclassified || []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      size: f.size,
+      inCurrentBatch: f.submissionId === receiptId,
+    })),
+    slots,
+  }
 }
 
 export function registerCollectionWorkflows(
@@ -290,26 +357,35 @@ export function registerCollectionWorkflows(
     requirePublicAccess(req, c)
     const key = text(req.headers['x-receipt-key'], '回执凭证', 100),
       r = record(store, c.id, String(p.receiptId), digest(key))
+    const colActive = store.collectionFiles(c.id, false)
+    const batchFiles = colActive.filter((f) => f.submissionId === r.receipt.receiptId)
     return {
       receipt: r.receipt,
       owner: r.owner,
       fields: r.fields,
       superseded: !!r.superseded,
-      files: store
-        .files()
-        .filter((f) => f.submissionId === r.receipt.receiptId && !f.deletedAt)
-        .map((f) => ({
-          id: f.id,
-          name: f.name,
-          size: f.size,
-          ...(c.materials?.length
-            ? {
-                materialId: f.materialId,
-                materialState: materialReviewState(c, f),
-                materialNote: f.materialReview?.note || '',
-              }
-            : {}),
-        })),
+      files: batchFiles.map((f) => ({
+        id: f.id,
+        name: f.name,
+        size: f.size,
+        ...(c.materials?.length
+          ? {
+              materialId: f.materialId,
+              materialState: materialReviewState(c, f),
+              materialNote: f.materialReview?.note || '',
+            }
+          : {}),
+      })),
+      ...(c.materials?.length
+        ? {
+            materialOverview: buildReceiptMaterialOverview(
+              c,
+              r.identity || r.owner,
+              r.receipt.receiptId,
+              colActive,
+            ),
+          }
+        : {}),
     }
   })
   app.get('/api/templates', async () => ({

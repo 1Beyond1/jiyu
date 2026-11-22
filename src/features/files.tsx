@@ -57,6 +57,7 @@ interface FileTableProps {
   collections: Collection[]
   compact?: boolean
   serverPagination?: boolean
+  refreshKey?: string
   search?: string
   collectionId?: string
   onRename: (files: CollectedFile[]) => void
@@ -71,6 +72,7 @@ export function FileTable({
   collections,
   compact = false,
   serverPagination = false,
+  refreshKey = '',
   search = '',
   collectionId = '',
   onRename,
@@ -133,6 +135,7 @@ export function FileTable({
     }
     const workspaceTick = files
     void workspaceTick
+    void refreshKey
     void retryTick
     const controller = new AbortController()
     const params = new URLSearchParams({
@@ -182,6 +185,7 @@ export function FileTable({
     page,
     pageSize,
     files,
+    refreshKey,
     retryTick,
   ])
 
@@ -778,12 +782,16 @@ export function FileDetail({
 
 export function TrashPage({
   files,
+  refreshKey = '',
+  totalHint,
   onRestore,
   onPurge,
   busy = false,
   serverError = '',
 }: {
   files: CollectedFile[]
+  refreshKey?: string
+  totalHint?: number
   onRestore: (ids: string[]) => Promise<void> | void
   onPurge?: (ids: string[]) => Promise<boolean>
   busy?: boolean
@@ -821,6 +829,7 @@ export function TrashPage({
   useEffect(() => {
     const syncTick = files
     void syncTick
+    void refreshKey
     void retryTick
     const controller = new AbortController()
     const params = new URLSearchParams({
@@ -858,7 +867,7 @@ export function TrashPage({
       clearTimeout(timer)
       controller.abort()
     }
-  }, [term, sort, page, pageSize, queryKey, files, retryTick])
+  }, [term, sort, page, pageSize, queryKey, files, refreshKey, retryTick])
 
   const fallbackVisible = files
     .filter((f) => `${f.name} ${f.owner}`.toLowerCase().includes(term.toLowerCase()))
@@ -868,7 +877,12 @@ export function TrashPage({
     : pageData
       ? pageData.items
       : fallbackVisible.slice((page - 1) * pageSize, page * pageSize)
-  const totalCount = pageError ? 0 : pageData ? pageData.total : fallbackVisible.length
+  const totalCount = pageError
+    ? 0
+    : pageData
+      ? pageData.total
+      : (totalHint ?? fallbackVisible.length)
+  const hasAnyTrash = (pageData?.total ?? totalHint ?? files.length) > 0
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
 
   const fileMap = new Map<string, CollectedFile>()
@@ -893,21 +907,36 @@ export function TrashPage({
           <p>移入回收站的文件仍占用存储空间，可随时恢复；管理员可在确认备份后永久清理。</p>
         </div>
         <div className="button-row">
-          {!!files.length && (
+          {hasAnyTrash && (
             <button
               type="button"
               className="button"
-              disabled={!canEdit || busy}
+              disabled={!canEdit || busy || loading}
               onClick={async () => {
-                await onRestore(files.slice(0, 500).map((f) => f.id))
-                setSelected([])
+                try {
+                  const targets =
+                    pageData && pageData.page === 1 && pageData.items.length >= pageData.total
+                      ? pageData.items
+                      : (
+                          await fetchAllPaginatedFiles(
+                            '/api/files',
+                            new URLSearchParams({ trashed: 'true', sort }),
+                            500,
+                          )
+                        ).items
+                  if (!targets.length) return
+                  await onRestore(targets.map((f) => f.id))
+                  setSelected([])
+                } catch (err) {
+                  setPageError((err as Error).message || '读取回收站列表失败，请重试')
+                }
               }}
             >
               <RotateCcw size={15} />
               恢复全部（最多 500 个）
             </button>
           )}
-          {isAdmin && onPurge && !!files.length && (
+          {isAdmin && onPurge && (chosen.length > 0 || items.length > 0) && (
             <button
               type="button"
               className="button danger"

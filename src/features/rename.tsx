@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowRight, Check, Info, WandSparkles } from 'lucide-react'
 import { FileIcon, Modal } from '../components/ui'
+import { fetchAllPaginatedFiles } from '../lib/api'
 import { hasUnsafeFilenameChars } from '../lib/text-safety'
 import type { CollectedFile, Collection } from '../types'
 
@@ -31,6 +32,7 @@ export function RenameModal({
   files,
   allFiles,
   collections,
+  summaryMode = false,
   onClose,
   onApply,
   busy = false,
@@ -39,17 +41,46 @@ export function RenameModal({
   files: CollectedFile[]
   allFiles: CollectedFile[]
   collections: Collection[]
+  summaryMode?: boolean
   onClose: () => void
   busy?: boolean
   serverError?: string
   onApply: (changes: { id: string; name: string; oldName: string }[]) => void
 }) {
   const [pattern, setPattern] = useState('{任务}_{提交人}_{序号}')
+  const [loadedAllFiles, setLoadedAllFiles] = useState<CollectedFile[] | null>(null)
+  const touchedCollectionKey = [...new Set(files.map((f) => f.collectionId))].sort().join(',')
+  useEffect(() => {
+    if (!summaryMode || !touchedCollectionKey) {
+      setLoadedAllFiles(null)
+      return
+    }
+    const controller = new AbortController()
+    const cids = touchedCollectionKey.split(',')
+    void Promise.all(
+      cids.map((cid) =>
+        fetchAllPaginatedFiles(
+          `/api/collections/${encodeURIComponent(cid)}/files`,
+          new URLSearchParams({ sort: 'created_desc' }),
+          10000,
+          controller.signal,
+        ).then((r) => r.items),
+      ),
+    )
+      .then((lists) => {
+        if (!controller.signal.aborted) setLoadedAllFiles(lists.flat())
+      })
+      .catch(() => {
+        /* Server still enforces atomic uniqueness on submit. */
+      })
+    return () => controller.abort()
+  }, [summaryMode, touchedCollectionKey])
+  const effectiveAllFiles = loadedAllFiles ?? allFiles
   const changes = getRenames(files, collections, pattern)
   const changeById = new Map(changes.map((c) => [c.id, c.name]))
   const selectedById = new Map(files.map((f) => [f.id, f]))
   const countsByCollection = new Map<string, Map<string, number>>()
-  for (const f of allFiles) {
+  for (const f of effectiveAllFiles) {
     let counts = countsByCollection.get(f.collectionId)
     if (!counts) {
       counts = new Map()

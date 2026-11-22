@@ -14,6 +14,7 @@ import { digest, equalToken, HttpError, object, safeName, text } from './securit
 import { submissionError, isExpired } from '../src/lib/collections.ts'
 import { submissionContext, commitSubmission } from './collection-workflows.ts'
 import type { SubmissionContext } from './collection-workflows.ts'
+import type { WebhookService } from './webhooks.ts'
 
 export const CHUNK_BYTES = 4 * 1024 ** 2
 const UUID = /^[a-f0-9-]{36}$/
@@ -58,6 +59,7 @@ export async function registerUploads(
   config: Config,
   budget: UploadBudget,
   requirePublicAccess: (req: FastifyRequest, c: Collection) => void = () => {},
+  webhooks?: WebhookService,
 ) {
   const rateLimits = resolveRateLimits(config.rateLimits)
   const active = new Set<string>()
@@ -102,8 +104,11 @@ export async function registerUploads(
       c = store.byToken(value)
     if (!c) throw new HttpError(404, '收集链接无效或已撤销')
     requirePublicAccess(req, c)
-    if (!allowClosed && (c.status !== 'active' || isExpired(c)))
-      throw new HttpError(410, '这项收集已暂停、结束或截止')
+    if (!allowClosed && (c.archivedAt || c.status !== 'active' || isExpired(c)))
+      throw new HttpError(
+        410,
+        c.archivedAt ? '这项收集已归档，暂不接收新文件' : '这项收集已暂停、结束或截止',
+      )
     return c
   }
   const key = (req: FastifyRequest) => {
@@ -419,6 +424,14 @@ export async function registerUploads(
         )
       })
       committed = true
+      webhooks?.emit({
+        event: 'submission.created',
+        collectionId: latest.id,
+        collectionTitle: latest.title,
+        actor: batch.owner,
+        fileCount: staged.length,
+        summary: `${batch.owner}向「${latest.title}」提交了 ${staged.length} 份文件`,
+      })
       reply.code(201)
       await clearParts(row.id).catch(() => {})
       return result

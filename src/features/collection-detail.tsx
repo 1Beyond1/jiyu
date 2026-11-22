@@ -1,5 +1,16 @@
-import { useState } from 'react'
-import { ArrowLeft, Check, CirclePause, Link, Pencil, Play } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Check,
+  CirclePause,
+  CopyPlus,
+  Link,
+  Pencil,
+  Play,
+  Upload,
+} from 'lucide-react'
 import { CollectionIcon, Modal } from '../components/ui'
 import { FileTable } from './files'
 import {
@@ -8,20 +19,31 @@ import {
   isExpired,
   effectiveFileLimit,
 } from '../lib/collections'
-import type { CollectedFile, Collection, CollectionStatus, MaterialOperation } from '../types'
+import type {
+  CollectedFile,
+  Collection,
+  CollectionStatus,
+  MaterialOperation,
+  Workspace,
+} from '../types'
 import { MaterialWorkbench } from './materials'
 import { ParticipantLedger } from './participants'
 import { SaveTemplate } from './collection-templates'
+import { OfflineUploadModal } from './offline-upload-modal'
 import { useAccount } from './auth'
 import { materialProgress } from '../lib/materials'
+import { fetchAllPaginatedFiles } from '../lib/api'
 
 interface CollectionDetailProps {
   collection: Collection
   refreshedAt: string
   files: CollectedFile[]
+  summaryMode?: boolean
   onBack: () => void
   onEdit: () => void
   onShare: () => void
+  onClone: () => void
+  onArchive: () => void
   onStatus: (status: CollectionStatus) => void
   onRename: (files: CollectedFile[]) => void
   onReview: (ids: string[]) => void
@@ -29,16 +51,20 @@ interface CollectionDetailProps {
   onTrash?: (ids: string[]) => void
   onAI?: (files: CollectedFile[]) => void
   onMaterialAction: (kind: 'classify' | 'review', body: MaterialOperation) => Promise<void>
+  onOfflineUploaded: (result: { workspace: Workspace; files: CollectedFile[] }) => void
   onRefresh: () => Promise<void>
 }
 
 export function CollectionDetail({
   collection: c,
-  files,
+  files: propFiles,
+  summaryMode = false,
   refreshedAt,
   onBack,
   onEdit,
   onShare,
+  onClone,
+  onArchive,
   onStatus,
   onRename,
   onReview,
@@ -46,16 +72,53 @@ export function CollectionDetail({
   onTrash,
   onAI,
   onMaterialAction,
+  onOfflineUploaded,
   onRefresh,
 }: CollectionDetailProps) {
   const [confirm, setConfirm] = useState<CollectionStatus | null>(null)
-  const [tab, setTab] = useState(c.materials?.length ? 'materials' : 'files'),
-    [selected, setSelected] = useState<{ ids: string[]; label: string } | null>(null),
-    [saveTemplate, setSaveTemplate] = useState(false)
-  const { canEdit } = useAccount()
+  const [tab, setTab] = useState(c.materials?.length ? 'materials' : 'files')
+  const [selected, setSelected] = useState<{ ids: string[]; label: string } | null>(null)
+  const [saveTemplate, setSaveTemplate] = useState(false)
+  const [offlineTarget, setOfflineTarget] = useState<{ owner: string; identity: string } | null>(
+    null,
+  )
+  const [loadedFiles, setLoadedFiles] = useState<CollectedFile[] | null>(null)
+  const [filesReloadTick, setFilesReloadTick] = useState(0)
+  const { canEdit, isAdmin } = useAccount()
+
+  useEffect(() => {
+    if (!summaryMode) {
+      setLoadedFiles(null)
+      return
+    }
+    void refreshedAt
+    void filesReloadTick
+    const controller = new AbortController()
+    void fetchAllPaginatedFiles(
+      `/api/collections/${encodeURIComponent(c.id)}/files`,
+      new URLSearchParams({ sort: 'created_desc' }),
+      10000,
+      controller.signal,
+    )
+      .then((res) => {
+        if (!controller.signal.aborted) setLoadedFiles(res.items)
+      })
+      .catch(() => {
+        /* Fallback to propFiles on transient load failure. */
+      })
+    return () => controller.abort()
+  }, [c.id, summaryMode, refreshedAt, filesReloadTick])
+
+  const files = summaryMode ? (loadedFiles ?? propFiles) : propFiles
   const state = collectionState(c)
-  const pending = files.filter((f) => f.status === 'pending').length
-  const material = c.materials?.length ? materialProgress(c, files) : null
+  const archived = Boolean(c.archivedAt)
+  const pending = c.pendingFiles ?? files.filter((f) => f.status === 'pending').length
+  const activeCount = loadedFiles ? loadedFiles.length : (c.activeFiles ?? files.length)
+  const material = c.materials?.length
+    ? loadedFiles
+      ? materialProgress(c, loadedFiles)
+      : (c.materialSummary ?? materialProgress(c, files))
+    : null
   const percent = material
     ? material.total
       ? Math.round((material.received / material.total) * 100)
@@ -90,6 +153,12 @@ export function CollectionDetail({
         <div>
           <div className="collection-detail-kicker">
             <CollectionIcon category={c.category} />
+            {archived && (
+              <span className="status neutral">
+                <i />
+                已归档
+              </span>
+            )}
             <span className={`status ${state}`}>
               <i />
               {collectionStateNames[state]}
@@ -100,22 +169,54 @@ export function CollectionDetail({
         </div>
         {canEdit && (
           <div className="button-row">
+            {isAdmin && !archived && (
+              <button
+                type="button"
+                className="button"
+                onClick={() => setOfflineTarget({ owner: '', identity: '' })}
+              >
+                <Upload size={15} />
+                线下补录
+              </button>
+            )}
             {onAI && (
               <button type="button" className="button" onClick={() => onAI(files)}>
                 检查这项收集
               </button>
             )}
+            <button type="button" className="button" onClick={onClone}>
+              <CopyPlus size={15} />
+              复制任务
+            </button>
+            <button type="button" className="button" onClick={onArchive}>
+              {archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+              {archived ? '取消归档' : '归档'}
+            </button>
             <button type="button" className="button" onClick={onEdit}>
               <Pencil size={15} />
               编辑规则
             </button>
-            <button type="button" className="button primary" onClick={onShare}>
-              <Link size={15} />
-              分享收集
-            </button>
+            {!archived && (
+              <button type="button" className="button primary" onClick={onShare}>
+                <Link size={15} />
+                分享收集
+              </button>
+            )}
           </div>
         )}
       </div>
+      {archived && (
+        <div className="action-notice" role="status">
+          <span>
+            此任务已归档，公开链接已暂停接收新提交。已收文件与核对台账完整保留，随时可取消归档或一键复制为新任务。
+          </span>
+          {canEdit && (
+            <button type="button" className="text-button" onClick={onArchive}>
+              取消归档
+            </button>
+          )}
+        </div>
+      )}
       {c.draftOrigin && (
         <details className="form-note">
           <summary>
@@ -183,15 +284,17 @@ export function CollectionDetail({
       </section>
       <div className="collection-lifecycle">
         <p>
-          {state === 'active'
-            ? '收集链接已开放，可以接收文件。'
-            : state === 'expired'
-              ? '已超过截止时间。延长截止日期后即可继续收集。'
-              : state === 'paused'
-                ? '收集已暂停，提交页暂不接收文件。'
-                : '收集已结束，已收到的文件仍可整理。'}
+          {archived
+            ? '收集已归档，当前不接收公开提交。'
+            : state === 'active'
+              ? '收集链接已开放，可以接收文件。'
+              : state === 'expired'
+                ? '已超过截止时间。延长截止日期后即可继续收集。'
+                : state === 'paused'
+                  ? '收集已暂停，提交页暂不接收文件。'
+                  : '收集已结束，已收到的文件仍可整理。'}
         </p>
-        {canEdit && (
+        {canEdit && !archived && (
           <div className="button-row">
             {actions.map((a) => (
               <button
@@ -207,7 +310,7 @@ export function CollectionDetail({
             ))}
           </div>
         )}
-        {expired && c.status !== 'active' && <small>延长截止日期后可重新开放</small>}
+        {!archived && expired && c.status !== 'active' && <small>延长截止日期后可重新开放</small>}
       </div>
       <div className="collection-workflow-bar">
         <div className="tabs">
@@ -231,7 +334,7 @@ export function CollectionDetail({
               setSelected(null)
             }}
           >
-            收到的文件（{files.length}）
+            收到的文件（{activeCount}）
           </button>
           <button
             type="button"
@@ -257,7 +360,13 @@ export function CollectionDetail({
             onShare={onShare}
             onDetail={onDetail}
             onAction={onMaterialAction}
-            onRefresh={onRefresh}
+            onOfflineUpload={
+              isAdmin && !archived ? (person) => setOfflineTarget(person) : undefined
+            }
+            onRefresh={async () => {
+              await onRefresh()
+              setFilesReloadTick((n) => n + 1)
+            }}
           />
         ) : (
           <p className="form-note">材料清单已移除，请切换到收到的文件查看。</p>
@@ -267,6 +376,7 @@ export function CollectionDetail({
           collection={c}
           files={files}
           onSelect={(ids, label) => setSelected(ids ? { ids, label: label || '' } : null)}
+          onOfflineUpload={isAdmin && !archived ? (person) => setOfflineTarget(person) : undefined}
         />
       )}
       {(tab === 'files' || selected) && (
@@ -283,6 +393,7 @@ export function CollectionDetail({
             collections={[c]}
             collectionId={selected ? '' : c.id}
             serverPagination={!selected}
+            refreshKey={refreshedAt}
             onRename={onRename}
             onReview={onReview}
             onDetail={onDetail}
@@ -293,6 +404,20 @@ export function CollectionDetail({
       )}
       {saveTemplate && (
         <SaveTemplate collectionId={c.id} title={c.title} onClose={() => setSaveTemplate(false)} />
+      )}
+      {offlineTarget && isAdmin && !archived && (
+        <OfflineUploadModal
+          collection={c}
+          existingFiles={files}
+          initialOwner={offlineTarget.owner}
+          initialIdentity={offlineTarget.identity}
+          onClose={() => setOfflineTarget(null)}
+          onUploaded={(result) => {
+            setOfflineTarget(null)
+            onOfflineUploaded(result)
+            setFilesReloadTick((n) => n + 1)
+          }}
+        />
       )}
       <div className="collection-detail-note">
         文件由工作台授权成员查看和下载。云端同步后仍保留本机副本，任务总容量包含回收站文件。

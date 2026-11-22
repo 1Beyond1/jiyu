@@ -3,7 +3,7 @@ import { createReadStream, existsSync } from 'node:fs'
 import { mkdir, copyFile, readFile, writeFile, stat, rm } from 'node:fs/promises'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { createHash } from 'node:crypto'
-import { Store } from './store.ts'
+import { SCHEMA_VERSION, Store } from './store.ts'
 import { token } from './security.ts'
 
 async function checksum(path: string) {
@@ -35,7 +35,7 @@ async function writeSnapshot(db: DatabaseSync, dataDir: string, destination: str
   try {
     schema = (snapshot.prepare('PRAGMA user_version').get() as { user_version: number })
       .user_version
-    if (schema < 1 || schema > 5) throw new Error('数据库版本不受当前备份工具支持')
+    if (schema < 1 || schema > SCHEMA_VERSION) throw new Error('数据库版本不受当前备份工具支持')
     const ai = snapshot.prepare("SELECT value FROM settings WHERE key='ai.settings'").get() as
       | { value: string }
       | undefined
@@ -49,6 +49,18 @@ async function writeSnapshot(db: DatabaseSync, dataDir: string, destination: str
       !existsSync(join(dataDir, 'secrets.key'))
     )
       throw new Error('存储凭证主密钥缺失，备份未完成')
+    const webhooks = snapshot
+      .prepare("SELECT value FROM settings WHERE key='webhooks.config'")
+      .get() as { value: string } | undefined
+    if (
+      webhooks &&
+      (JSON.parse(webhooks.value).channels || []).some(
+        (ch: { encryptedUrl?: string; encryptedSecret?: string }) =>
+          ch.encryptedUrl || ch.encryptedSecret,
+      ) &&
+      !existsSync(join(dataDir, 'secrets.key'))
+    )
+      throw new Error('通知凭证主密钥缺失，备份未完成')
     rows = snapshot.prepare('SELECT storage_key,data FROM files').all() as {
       storage_key: string
       data: string
@@ -174,6 +186,18 @@ export async function restoreBackup(source: string, destination: string) {
     }[]
     if (storage.some((s) => JSON.parse(s.value).encryptedCredentials) && !manifest.secretKeySha256)
       throw new Error('备份缺少存储凭证主密钥')
+    const webhooks = db.prepare("SELECT value FROM settings WHERE key='webhooks.config'").get() as
+      | { value: string }
+      | undefined
+    if (
+      webhooks &&
+      (JSON.parse(webhooks.value).channels || []).some(
+        (ch: { encryptedUrl?: string; encryptedSecret?: string }) =>
+          ch.encryptedUrl || ch.encryptedSecret,
+      ) &&
+      !manifest.secretKeySha256
+    )
+      throw new Error('备份缺少通知凭证主密钥')
     if (
       rows.length !== manifest.files.length ||
       rows.some((row) => {

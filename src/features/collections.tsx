@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react'
 import {
+  Archive,
+  ArchiveRestore,
   ArrowUpRight,
   CalendarDays,
+  CopyPlus,
   Link,
   Plus,
   Check,
@@ -14,7 +17,7 @@ import {
 import { CollectionIcon, Empty, Modal } from '../components/ui'
 import type { Collection, CollectedFile } from '../types'
 import { materialProgress } from '../lib/materials'
-import { collectionState, collectionStateNames } from '../lib/collections'
+import { collectionState, collectionStateNames, isExpired, nextWeek } from '../lib/collections'
 import { qrSvgDataUrl, renderShareCardSvg } from '../lib/qrcode'
 import { buildShareAnnouncement } from '../lib/reminder'
 import { shareAddress } from '../lib/share-address'
@@ -26,28 +29,41 @@ export function CollectionCard({
   files,
   onOpen,
   onShare,
+  onClone,
+  onArchive,
 }: {
   collection: Collection
   files: CollectedFile[]
   onOpen: (id: string) => void
   onShare: (c: Collection) => void
+  onClone?: (c: Collection) => void
+  onArchive?: (c: Collection) => void
 }) {
   const { canEdit } = useAccount()
-  const material = c.materials?.length ? materialProgress(c, files) : null
+  const material = c.materialSummary ?? (c.materials?.length ? materialProgress(c, files) : null)
   const percent = material
     ? material.total
       ? Math.round((material.received / material.total) * 100)
       : 0
     : Math.min(100, Math.round((c.received / c.target) * 100))
   const state = collectionState(c)
+  const archived = Boolean(c.archivedAt)
   return (
-    <article className={`collection-card ${c.category}`}>
+    <article className={`collection-card ${c.category} ${archived ? 'archived' : ''}`}>
       <div className="card-top">
         <CollectionIcon category={c.category} />
-        <span className={`status ${state}`}>
-          <i />
-          {collectionStateNames[state]}
-        </span>
+        <div className="card-status-group">
+          {archived && (
+            <span className="status neutral">
+              <i />
+              已归档
+            </span>
+          )}
+          <span className={`status ${state}`}>
+            <i />
+            {collectionStateNames[state]}
+          </span>
+        </div>
       </div>
       <button type="button" className="card-title" onClick={() => onOpen(c.id)}>
         {c.title}
@@ -79,15 +95,41 @@ export function CollectionCard({
           {c.deadline.slice(5).replace('-', '月')}日截止
         </span>
         {canEdit && (
-          <button
-            type="button"
-            className="share-button"
-            onClick={() => onShare(c)}
-            aria-label={`分享${c.title}`}
-          >
-            <Link size={14} />
-            <span>分享收集</span>
-          </button>
+          <div className="card-footer-actions">
+            {onClone && (
+              <button
+                type="button"
+                className="icon-button card-quick-action"
+                onClick={() => onClone(c)}
+                title="复制为新任务"
+                aria-label={`复制${c.title}`}
+              >
+                <CopyPlus size={14} />
+              </button>
+            )}
+            {onArchive && (
+              <button
+                type="button"
+                className="icon-button card-quick-action"
+                onClick={() => onArchive(c)}
+                title={archived ? '取消归档' : '归档任务'}
+                aria-label={`${archived ? '取消归档' : '归档'}${c.title}`}
+              >
+                {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+              </button>
+            )}
+            {!archived && (
+              <button
+                type="button"
+                className="share-button"
+                onClick={() => onShare(c)}
+                aria-label={`分享${c.title}`}
+              >
+                <Link size={14} />
+                <span>分享收集</span>
+              </button>
+            )}
+          </div>
         )}
       </footer>
     </article>
@@ -100,16 +142,33 @@ export function Collections({
   onOpen,
   onShare,
   onCreate,
+  onClone,
+  onArchive,
 }: {
   collections: Collection[]
   files: CollectedFile[]
   onOpen: (id: string) => void
   onShare: (c: Collection) => void
   onCreate: () => void
+  onClone?: (c: Collection) => void
+  onArchive?: (c: Collection) => void
 }) {
   const { canEdit } = useAccount()
+  const [archiveScope, setArchiveScope] = useState<'active' | 'archived' | 'all'>('active')
   const [tab, setTab] = useState('all')
-  const list = collections.filter((c) => tab === 'all' || collectionState(c) === tab)
+  const scoped = collections.filter((c) =>
+    archiveScope === 'all'
+      ? true
+      : archiveScope === 'archived'
+        ? Boolean(c.archivedAt)
+        : !c.archivedAt,
+  )
+  const list =
+    archiveScope === 'archived'
+      ? scoped
+      : scoped.filter((c) => tab === 'all' || collectionState(c) === tab)
+  const activeCount = collections.filter((c) => !c.archivedAt).length
+  const archivedCount = collections.filter((c) => Boolean(c.archivedAt)).length
   return (
     <>
       <div className="page-title">
@@ -125,26 +184,54 @@ export function Collections({
           </button>
         )}
       </div>
-      <div className="tabs collection-tabs">
-        {[
-          ['all', '全部收集'],
-          ['active', '收集中'],
-          ['completed', '已完成'],
-          ['paused', '已暂停'],
-          ['expired', '已截止'],
-        ].map(([value, label]) => (
-          <button
-            type="button"
-            className={tab === value ? 'active' : ''}
-            key={value}
-            onClick={() => setTab(value)}
-          >
-            {label}
-            <span>
-              {collections.filter((c) => value === 'all' || collectionState(c) === value).length}
-            </span>
-          </button>
-        ))}
+      <div className="collection-scope-bar">
+        <div className="tabs archive-scope-tabs" role="tablist" aria-label="归档状态筛选">
+          {(
+            [
+              ['active', '进行中', activeCount],
+              ['archived', '已归档', archivedCount],
+              ['all', '全部', collections.length],
+            ] as const
+          ).map(([value, label, count]) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={archiveScope === value}
+              className={archiveScope === value ? 'active' : ''}
+              key={value}
+              onClick={() => {
+                setArchiveScope(value)
+                setTab('all')
+              }}
+            >
+              {label}
+              <span>{count}</span>
+            </button>
+          ))}
+        </div>
+        {archiveScope !== 'archived' && (
+          <div className="tabs collection-tabs">
+            {[
+              ['all', '全部状态'],
+              ['active', '收集中'],
+              ['completed', '已完成'],
+              ['paused', '已暂停'],
+              ['expired', '已截止'],
+            ].map(([value, label]) => (
+              <button
+                type="button"
+                className={tab === value ? 'active' : ''}
+                key={value}
+                onClick={() => setTab(value)}
+              >
+                {label}
+                <span>
+                  {scoped.filter((c) => value === 'all' || collectionState(c) === value).length}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {list.length ? (
         <div className="collection-grid all-collections">
@@ -155,9 +242,11 @@ export function Collections({
               files={files}
               onOpen={onOpen}
               onShare={onShare}
+              onClone={onClone}
+              onArchive={onArchive}
             />
           ))}
-          {canEdit && (
+          {canEdit && archiveScope !== 'archived' && (
             <button type="button" className="create-card" onClick={onCreate}>
               <span>
                 <Plus size={24} />
@@ -168,9 +257,181 @@ export function Collections({
           )}
         </div>
       ) : (
-        <Empty title="暂无这类收集" text="新建一项收集，或切换其他状态查看。" />
+        <Empty
+          title={archiveScope === 'archived' ? '暂无已归档收集' : '暂无这类收集'}
+          text={
+            archiveScope === 'archived'
+              ? '历史任务归档后会收纳在这里，随时可以取消归档或一键复制复用。'
+              : '新建一项收集，或切换其他状态查看。'
+          }
+        />
       )}
     </>
+  )
+}
+
+export function CloneCollectionModal({
+  collection: c,
+  busy,
+  serverError,
+  onClose,
+  onConfirm,
+}: {
+  collection: Collection
+  busy: boolean
+  serverError?: string
+  onClose: () => void
+  onConfirm: (payload: {
+    title: string
+    deadline: string
+    includeExpectedSubmitters: boolean
+    accessCode?: string
+  }) => void
+}) {
+  const [title, setTitle] = useState(`${c.title}（副本）`.slice(0, 50))
+  const [deadline, setDeadline] = useState(isExpired(c) ? nextWeek() : c.deadline)
+  const [includeRoster, setIncludeRoster] = useState(Boolean(c.expectedSubmitters?.length))
+  const [accessCode, setAccessCode] = useState('')
+  const [error, setError] = useState('')
+
+  return (
+    <Modal
+      title="一键复制为新任务"
+      subtitle={`来源：${c.title}`}
+      onClose={() => {
+        if (!busy) onClose()
+      }}
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!title.trim()) {
+            setError('请填写新任务名称。')
+            return
+          }
+          const code = accessCode.trim()
+          if (code && (code.length < 4 || code.length > 8 || /\s/.test(code))) {
+            setError('访问提取码需为 4–8 位非空白字符。')
+            return
+          }
+          setError('')
+          onConfirm({
+            title: title.trim(),
+            deadline,
+            includeExpectedSubmitters: includeRoster,
+            ...(code ? { accessCode: code } : {}),
+          })
+        }}
+      >
+        <fieldset disabled={busy}>
+          <div className="form-note">
+            将完整复制格式限制、自定义字段、自动命名规则与材料清单，并生成全新的收集链接（已收文件和旧提交记录不会复制到新任务）。
+          </div>
+          <label className="field">
+            新任务名称
+            <input
+              required
+              maxLength={50}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            新截止日期
+            <input
+              type="date"
+              required
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+            />
+          </label>
+          {!!c.expectedSubmitters?.length && (
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={includeRoster}
+                onChange={(e) => setIncludeRoster(e.target.checked)}
+              />
+              同时复制应交名单（{c.expectedSubmitters.length} 人）
+              {c.restrictToExpectedSubmitters ? '及名单准入限制' : ''}
+            </label>
+          )}
+          <label className="field">
+            新任务访问提取码（选填，原提取码不会自动继承）
+            <input
+              maxLength={8}
+              value={accessCode}
+              placeholder="留空表示不设提取码，或输入 4–8 位字符"
+              onChange={(e) => setAccessCode(e.target.value)}
+            />
+          </label>
+          {(error || serverError) && (
+            <p className="error-text" role="alert">
+              {error || serverError}
+            </p>
+          )}
+          <footer className="modal-footer">
+            <button type="button" className="button" disabled={busy} onClick={onClose}>
+              取消
+            </button>
+            <button type="submit" className="button primary" disabled={busy}>
+              <CopyPlus size={15} />
+              {busy ? '复制中…' : '确认复制'}
+            </button>
+          </footer>
+        </fieldset>
+      </form>
+    </Modal>
+  )
+}
+
+export function ArchiveCollectionModal({
+  collection: c,
+  busy,
+  serverError,
+  onClose,
+  onConfirm,
+}: {
+  collection: Collection
+  busy: boolean
+  serverError?: string
+  onClose: () => void
+  onConfirm: (archived: boolean) => void
+}) {
+  const archived = Boolean(c.archivedAt)
+  return (
+    <Modal
+      title={archived ? '取消归档这项收集？' : '归档这项收集？'}
+      subtitle={c.title}
+      onClose={() => {
+        if (!busy) onClose()
+      }}
+    >
+      <p className="body-copy">
+        {archived
+          ? '取消归档后，任务会重新出现在「进行中」列表中。若需要继续接收提交，可在详情页手动重新开放。'
+          : '归档后，任务将收纳至「已归档」分类并停止接收新提交，所有已收文件与台账记录均完整保留，随时可取消归档。'}
+      </p>
+      {serverError && (
+        <p className="error-text" role="alert">
+          {serverError}
+        </p>
+      )}
+      <footer className="modal-footer">
+        <button type="button" className="button" disabled={busy} onClick={onClose}>
+          取消
+        </button>
+        <button
+          type="button"
+          className="button primary"
+          disabled={busy}
+          onClick={() => onConfirm(!archived)}
+        >
+          {archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+          {busy ? '处理中…' : archived ? '确认取消归档' : '确认归档'}
+        </button>
+      </footer>
+    </Modal>
   )
 }
 

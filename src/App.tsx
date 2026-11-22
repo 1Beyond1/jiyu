@@ -28,6 +28,8 @@ import {
 import { Brand, Empty, Modal } from './components/ui'
 import { ThemeSwitch } from './components/theme-switch'
 import {
+  ArchiveCollectionModal,
+  CloneCollectionModal,
   CollectionCard,
   Collections,
   CollectionForm,
@@ -47,7 +49,7 @@ import { StartChecklist } from './features/start-checklist'
 import { SampleTourBar, SampleTourCard, readSampleTour } from './features/sample-tour'
 import { AdminGate, useAccount } from './features/auth'
 import { formatSize, useWorkspace } from './lib/workspace'
-import { api } from './lib/api'
+import { api, fetchAllPaginatedFiles } from './lib/api'
 import { collectionState, isExpired } from './lib/collections'
 import type {
   AIReply,
@@ -130,7 +132,8 @@ export default function App() {
 
 function WorkspaceApp() {
   const { canEdit, user, isAdmin } = useAccount()
-  const { workspace, loading, error, refresh, refreshing, updatedAt, mutate } = useWorkspace()
+  const { workspace, loading, error, refresh, refreshing, updatedAt, mutate, applyWorkspace } =
+    useWorkspace()
   const [busy, setBusy] = useState(false)
   const [operationError, setOperationError] = useState('')
   const busyRef = useRef(false)
@@ -142,9 +145,12 @@ function WorkspaceApp() {
   const [createOpen, setCreateOpen] = useState(false)
   const [createStorage, setCreateStorage] = useState<StorageId>('local')
   const [editing, setEditing] = useState<Collection | null>(null)
+  const [cloning, setCloning] = useState<Collection | null>(null)
+  const [archiving, setArchiving] = useState<Collection | null>(null)
   const [share, setShare] = useState<Collection | null>(null)
   const [detail, setDetail] = useState<CollectedFile | null>(null)
   const [renaming, setRenaming] = useState<CollectedFile[] | null>(null)
+  const [toolsFiles, setToolsFiles] = useState<CollectedFile[] | null>(null)
   const [aiOpen, setAiOpen] = useState(false)
   const [assistantFileIds, setAssistantFileIds] = useState<string[]>([])
   const [assistantCollectionId, setAssistantCollectionId] = useState('')
@@ -232,9 +238,30 @@ function WorkspaceApp() {
     [],
   )
   useEffect(() => {
-    void [createOpen, editing, renaming, share, trashing, aiProposal]
+    void [createOpen, editing, cloning, archiving, renaming, share, trashing, aiProposal]
     setOperationError('')
-  }, [createOpen, editing, renaming, share, trashing, aiProposal])
+  }, [createOpen, editing, cloning, archiving, renaming, share, trashing, aiProposal])
+  useEffect(() => {
+    if (page !== 'tools' || !workspace.summaryMode) {
+      setToolsFiles(null)
+      return
+    }
+    void updatedAt
+    const controller = new AbortController()
+    void fetchAllPaginatedFiles(
+      '/api/files',
+      new URLSearchParams({ sort: 'created_desc' }),
+      10000,
+      controller.signal,
+    )
+      .then((res) => {
+        if (!controller.signal.aborted) setToolsFiles(res.items)
+      })
+      .catch(() => {
+        /* Fallback to summary files if load fails. */
+      })
+    return () => controller.abort()
+  }, [page, workspace.summaryMode, updatedAt])
   function notify(text: string, failed = false) {
     setToastError(failed)
     setToast(text)
@@ -297,7 +324,9 @@ function WorkspaceApp() {
       notify(`已将 ${ids.length} 个文件标记为已整理`)
     }
   }
-  const active = workspace.collections.filter((c) => collectionState(c) === 'active')
+  const active = workspace.collections.filter(
+    (c) => !c.archivedAt && collectionState(c) === 'active',
+  )
   const currentCollection = workspace.collections.find((c) => c.id === collectionId)
   const taskId =
     page === 'collections' && hash.startsWith('#/collections/')
@@ -305,7 +334,10 @@ function WorkspaceApp() {
       : ''
   const viewedCollection = workspace.collections.find((c) => c.id === taskId)
   const total = workspace.collections.reduce((sum, c) => sum + c.received, 0)
-  const pending = workspace.files.filter((f) => f.status === 'pending').length
+  const activeFilesCount = workspace.stats?.activeFiles ?? workspace.files.length
+  const pending =
+    workspace.stats?.pendingFiles ?? workspace.files.filter((f) => f.status === 'pending').length
+  const trashFilesCount = workspace.stats?.trashFiles ?? workspace.trash?.length ?? 0
   const fileProps = {
     files: workspace.files,
     collections: workspace.collections,
@@ -320,11 +352,37 @@ function WorkspaceApp() {
     setCreateStorage(storage)
     setCreateOpen(true)
   }
-  function openRename() {
+  async function openRename() {
     if (!canEdit) return
-    const list = workspace.files.filter((f) => f.status === 'pending')
-    if (workspace.files.length) setRenaming(list.length ? list : workspace.files)
-    else notify('先添加一些文件，再来试试重命名')
+    if (!activeFilesCount) {
+      notify('先添加一些文件，再来试试重命名')
+      return
+    }
+    if (!workspace.summaryMode) {
+      const list = workspace.files.filter((f) => f.status === 'pending')
+      setRenaming(list.length ? list : workspace.files)
+      return
+    }
+    try {
+      const pendingRes = await fetchAllPaginatedFiles(
+        '/api/files',
+        new URLSearchParams({ status: 'pending', sort: 'created_desc' }),
+        500,
+      )
+      if (pendingRes.items.length) {
+        setRenaming(pendingRes.items)
+        return
+      }
+      const allRes = await fetchAllPaginatedFiles(
+        '/api/files',
+        new URLSearchParams({ sort: 'created_desc' }),
+        500,
+      )
+      if (allRes.items.length) setRenaming(allRes.items)
+      else notify('先添加一些文件，再来试试重命名')
+    } catch (e) {
+      notify((e as Error).message || '读取待整理文件失败，请重试', true)
+    }
   }
   function openAssistant(files: CollectedFile[] = []) {
     if (!canEdit) return
@@ -729,6 +787,8 @@ function WorkspaceApp() {
                         files={workspace.files}
                         onOpen={openCollection}
                         onShare={setShare}
+                        onClone={setCloning}
+                        onArchive={setArchiving}
                       />
                     ))}
                   </div>
@@ -789,6 +849,8 @@ function WorkspaceApp() {
               files={workspace.files}
               onOpen={openCollection}
               onShare={setShare}
+              onClone={setCloning}
+              onArchive={setArchiving}
               onCreate={() => startCollection()}
             />
           )}
@@ -798,8 +860,13 @@ function WorkspaceApp() {
               <CollectionDetail
                 key={viewedCollection.id}
                 refreshedAt={updatedAt}
+                summaryMode={workspace.summaryMode}
                 onMaterialAction={async (kind, body) => {
                   await mutate(`/api/materials/${kind}`, body)
+                }}
+                onOfflineUploaded={(result) => {
+                  applyWorkspace(result.workspace)
+                  notify(`已替提交人补录 ${result.files.length} 份文件`)
                 }}
                 onRefresh={refresh}
                 collection={viewedCollection}
@@ -808,6 +875,8 @@ function WorkspaceApp() {
                 onBack={() => navigate('collections')}
                 onEdit={() => setEditing(viewedCollection)}
                 onShare={() => setShare(viewedCollection)}
+                onClone={() => setCloning(viewedCollection)}
+                onArchive={() => setArchiving(viewedCollection)}
                 onStatus={(status) => changeCollectionStatus(taskId, status)}
               />
             ) : (
@@ -839,7 +908,11 @@ function WorkspaceApp() {
                       分享收集
                     </button>
                   ) : (
-                    <button type="button" className="button primary" onClick={openRename}>
+                    <button
+                      type="button"
+                      className="button primary"
+                      onClick={() => void openRename()}
+                    >
                       <WandSparkles size={16} />
                       批量重命名
                     </button>
@@ -855,7 +928,7 @@ function WorkspaceApp() {
                       setSearch('')
                     }}
                   >
-                    全部文件<span>{workspace.files.length}</span>
+                    全部文件<span>{activeFilesCount}</span>
                   </button>
                   <label>
                     <FolderClosed size={15} />
@@ -901,6 +974,7 @@ function WorkspaceApp() {
                 key={`files-${collectionId}`}
                 {...fileProps}
                 serverPagination
+                refreshKey={updatedAt}
                 search={search}
                 collectionId={collectionId}
               />
@@ -910,20 +984,23 @@ function WorkspaceApp() {
             <>
               <ToolsPage
                 workspace={workspace}
-                onRename={openRename}
+                allFiles={toolsFiles ?? workspace.files}
+                onRename={() => void openRename()}
                 onFiles={() => {
                   setCollectionId('')
                   navigate('files')
                 }}
                 onAI={() => openAssistant()}
               />
-              <ContentPanel files={workspace.files} />
+              <ContentPanel files={toolsFiles ?? workspace.files} />
             </>
           )}
           {page === 'storage' && <StoragePage workspace={workspace} onCreate={startCollection} />}
           {page === 'trash' && (
             <TrashPage
               files={workspace.trash || []}
+              refreshKey={updatedAt}
+              totalHint={trashFilesCount}
               busy={busy}
               serverError={operationError}
               onRestore={async (ids) => {
@@ -1101,6 +1178,7 @@ function WorkspaceApp() {
           files={renaming}
           allFiles={workspace.files}
           collections={workspace.collections}
+          summaryMode={workspace.summaryMode}
           busy={busy}
           serverError={operationError}
           onClose={() => {
@@ -1110,6 +1188,66 @@ function WorkspaceApp() {
             if (await action('/api/files/rename', { changes })) {
               setRenaming(null)
               notify(`已重命名 ${changes.length} 个文件`)
+            }
+          }}
+        />
+      )}
+      {cloning && (
+        <CloneCollectionModal
+          collection={cloning}
+          busy={busy}
+          serverError={operationError}
+          onClose={() => {
+            if (!busy) setCloning(null)
+          }}
+          onConfirm={async (payload) => {
+            if (!canEdit || busyRef.current) return
+            busyRef.current = true
+            setBusy(true)
+            setOperationError('')
+            try {
+              const res = await mutate(`/api/collections/${cloning.id}/clone`, payload)
+              const created =
+                'collection' in res && res.collection
+                  ? res.collection
+                  : ('workspace' in res ? res.workspace : res).collections[0]
+              if (created && payload.accessCode?.trim()) {
+                try {
+                  sessionStorage.setItem(`jiyu:passcode:${created.id}`, payload.accessCode.trim())
+                } catch {
+                  /* Session storage is optional convenience only. */
+                }
+              }
+              setCloning(null)
+              if (created) {
+                openCollection(created.id)
+                setShare(created)
+                notify(`已复制为新任务「${created.title}」`)
+              }
+            } catch (e) {
+              const message = (e as Error).message
+              setOperationError(message)
+              notify(message, true)
+            } finally {
+              busyRef.current = false
+              setBusy(false)
+            }
+          }}
+        />
+      )}
+      {archiving && (
+        <ArchiveCollectionModal
+          collection={archiving}
+          busy={busy}
+          serverError={operationError}
+          onClose={() => {
+            if (!busy) setArchiving(null)
+          }}
+          onConfirm={async (archived) => {
+            const target = archiving
+            if (await action(`/api/collections/${target.id}/archive`, { archived })) {
+              setArchiving(null)
+              notify(archived ? `已归档「${target.title}」` : `已取消归档「${target.title}」`)
             }
           }}
         />

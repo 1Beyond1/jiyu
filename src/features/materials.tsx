@@ -1,9 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, Download, Eye, FolderArchive, MessageSquareText } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  ArrowRight,
+  Download,
+  Eye,
+  FolderArchive,
+  Keyboard,
+  MessageSquareText,
+  Upload,
+} from 'lucide-react'
 import type { Collection, CollectedFile, MaterialOperation } from '../types'
 import { materialStateLabels, materialStateVersion } from '../lib/materials'
 import { safeRandomUUID } from '../lib/browser-crypto'
 import { downloadText, formatSize } from '../lib/workspace'
+import { isEditableTarget, resolveReviewShortcut, stepFileIndex } from '../lib/review-shortcuts'
 import { ArchiveModal } from './archive'
 import { useAccount } from './auth'
 import { FilePreview } from './content'
@@ -40,6 +49,7 @@ export function MaterialWorkbench({
   onRefresh,
   onEditRules,
   onShare,
+  onOfflineUpload,
 }: {
   collection: Collection
   files: CollectedFile[]
@@ -49,8 +59,9 @@ export function MaterialWorkbench({
   onDetail: (file: CollectedFile) => void
   onAction: (kind: 'classify' | 'review', body: MaterialOperation) => Promise<void>
   onRefresh: () => Promise<void>
+  onOfflineUpload?: (person: { owner: string; identity: string }) => void
 }) {
-  const { canEdit, user } = useAccount()
+  const { canEdit, isAdmin, user } = useAccount()
   const noteKey = `jiyu:material-note-drafts:${user?.id}:${c.id}`
   const [filter, setFilter] = useState('all'),
     [query, setQuery] = useState(''),
@@ -76,6 +87,7 @@ export function MaterialWorkbench({
     body: MaterialOperation
   } | null>(null)
   const detail = useRef<HTMLElement>(null)
+  const noteInputRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
     try {
       sessionStorage.setItem(
@@ -100,8 +112,10 @@ export function MaterialWorkbench({
   }, [personId])
   const state = useMaterialState(c, files, refreshKey, onRefresh)
   const { report, rows } = state
-  const fileState = (f: CollectedFile) =>
-    report?.files.find((v) => v.id === f.id)?.materialState || 'unclassified'
+  const fileState = useCallback(
+    (f: CollectedFile) => report?.files.find((v) => v.id === f.id)?.materialState || 'unclassified',
+    [report],
+  )
   const pendingPeople = rows.filter((p) => p.status === 'pending')
   // Same denominator as the progress bar: roster only when a roster exists.
   const people = report?.participants || []
@@ -144,12 +158,21 @@ export function MaterialWorkbench({
   })()
   const nextPendingPerson = otherPendingPeople[0] || null
   const draft = drafts[personId] || { materialId: '', decision: '' as const, note: '' }
-  const setDraft = (value: Partial<Draft>) => {
-    setDrafts((old) => ({ ...old, [personId]: { ...draft, ...value } }))
-    pending.current = null
-    setNotice('')
-    setError('')
-  }
+  const setDraft = useCallback(
+    (value: Partial<Draft>) => {
+      setDrafts((old) => ({
+        ...old,
+        [personId]: {
+          ...(old[personId] || { materialId: '', decision: '' as const, note: '' }),
+          ...value,
+        },
+      }))
+      pending.current = null
+      setNotice('')
+      setError('')
+    },
+    [personId],
+  )
   const chosen = (person?.files || []).filter((f) => selection.files.some((s) => s.id === f.id))
   const staleSelection =
     selection.files.length > 0 &&
@@ -188,30 +211,142 @@ export function MaterialWorkbench({
     setNotice('')
     pending.current = null
   }
-  function selectFiles(list: CollectedFile[]) {
-    setAIReview(undefined)
-    setSelection({
-      rulesRevision: c.materialRevision || '',
-      files: list.map((f) => ({ id: f.id, expectedVersion: materialStateVersion(f) })),
-    })
-    pending.current = null
-    setError('')
-    setNotice('')
-  }
+  const selectFiles = useCallback(
+    (list: CollectedFile[]) => {
+      setAIReview(undefined)
+      setSelection({
+        rulesRevision: c.materialRevision || '',
+        files: list.map((f) => ({ id: f.id, expectedVersion: materialStateVersion(f) })),
+      })
+      pending.current = null
+      setError('')
+      setNotice('')
+    },
+    [c.materialRevision],
+  )
   const chosenIdSet = new Set(chosen.map((f) => f.id))
   const remainingUnreviewedForPerson = person
     ? person.files.filter(
         (f) => !chosenIdSet.has(f.id) && !['accepted', 'needs_changes'].includes(fileState(f)),
       )
     : []
+  const submitReview = useCallback(
+    async (
+      targets: CollectedFile[],
+      decision: 'accepted' | 'needs_changes',
+      noteText: string,
+      advanceNext: boolean,
+      useCurrentSelection: boolean,
+    ) => {
+      if (busy || !state.ready || !canEdit || !targets.length) return
+      if (useCurrentSelection && staleSelection) return
+      if (decision === 'needs_changes' && !noteText.trim()) {
+        setError('请说明需要补充或纠正什么。')
+        return
+      }
+      if (
+        decision === 'accepted' &&
+        targets.some((f) => !c.materials?.some((m) => m.id === f.materialId))
+      ) {
+        setError('未分类文件不能直接标记核对通过，请先指定材料归属。')
+        return
+      }
+      const targetEntries = useCurrentSelection
+        ? selection.files
+        : targets.map((f) => ({ id: f.id, expectedVersion: materialStateVersion(f) }))
+      const rulesRev = useCurrentSelection ? selection.rulesRevision : c.materialRevision || ''
+      const signature = JSON.stringify([
+        personId,
+        'review',
+        rulesRev,
+        targetEntries,
+        decision,
+        noteText.trim(),
+        useCurrentSelection ? aiReview : undefined,
+      ])
+      if (pending.current?.signature !== signature) {
+        pending.current = {
+          signature,
+          kind: 'review',
+          body: {
+            collectionId: c.id,
+            ...(useCurrentSelection && aiReview ? { aiReview } : {}),
+            rulesRevision: rulesRev,
+            requestId: safeRandomUUID(),
+            files: targetEntries,
+            decision,
+            note: noteText.trim(),
+          },
+        }
+      }
+      const targetIdSet = new Set(targets.map((f) => f.id))
+      const leftoverFiles = person
+        ? person.files.filter(
+            (f) => !targetIdSet.has(f.id) && !['accepted', 'needs_changes'].includes(fileState(f)),
+          )
+        : []
+      const nextTarget = advanceNext ? nextPendingPerson : null
+      setBusy(true)
+      setError('')
+      setNotice('')
+      try {
+        await onAction(pending.current.kind, pending.current.body)
+        selectFiles([])
+        setDrafts((old) => ({ ...old, [personId]: { materialId: '', decision: '', note: '' } }))
+        state.retry()
+        if (advanceNext && leftoverFiles.length) {
+          setAIReview(undefined)
+          setPreviewFileId(leftoverFiles[0].id)
+          pending.current = null
+          setNotice(
+            `人工核对结果已保存；当前参与人仍有 ${leftoverFiles.length} 份未核对文件，已保留在本页并切换至「${leftoverFiles[0].name}」以免漏审。`,
+          )
+        } else if (advanceNext && nextTarget) {
+          setAIReview(undefined)
+          setPersonId(nextTarget.identity)
+          setPreviewFileId('')
+          pending.current = null
+          setNotice(
+            `人工核对结果已保存，已跳转至下一位待核对：${nextTarget.identity}${nextTarget.owner && nextTarget.owner !== nextTarget.identity ? `（${nextTarget.owner}）` : ''}。`,
+          )
+        } else {
+          setNotice(
+            advanceNext ? '人工核对结果已保存，当前已无更多待核对参与人。' : '人工核对结果已保存。',
+          )
+        }
+      } catch (e) {
+        setError((e as Error).message)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [
+      aiReview,
+      busy,
+      c.id,
+      c.materialRevision,
+      c.materials,
+      canEdit,
+      fileState,
+      nextPendingPerson,
+      onAction,
+      person,
+      personId,
+      selectFiles,
+      selection.files,
+      selection.rulesRevision,
+      staleSelection,
+      state,
+    ],
+  )
   async function apply(kind: 'classify' | 'review', advanceNext = false) {
     if (busy || !state.ready || !canEdit || !chosen.length || staleSelection) return
-    if (kind === 'review' && !draft.decision) {
-      setError('请先选择人工核对结论。')
-      return
-    }
-    if (kind === 'review' && draft.decision === 'needs_changes' && !draft.note.trim()) {
-      setError('请说明需要补充或纠正什么。')
+    if (kind === 'review') {
+      if (!draft.decision) {
+        setError('请先选择人工核对结论。')
+        return
+      }
+      await submitReview(chosen, draft.decision, draft.note, advanceNext, true)
       return
     }
     const signature = JSON.stringify([personId, kind, selection, draft, aiReview])
@@ -226,54 +361,86 @@ export function MaterialWorkbench({
           requestId: safeRandomUUID(),
           files: selection.files.map((s) => ({
             ...s,
-            ...(kind === 'classify' ? { materialId: draft.materialId } : {}),
+            materialId: draft.materialId,
           })),
-          ...(kind === 'review'
-            ? { decision: draft.decision as 'accepted' | 'needs_changes', note: draft.note.trim() }
-            : {}),
         },
       }
-    const nextTarget = advanceNext ? nextPendingPerson : null
-    const leftoverFiles = kind === 'review' ? remainingUnreviewedForPerson : []
     setBusy(true)
     setError('')
     setNotice('')
     try {
       await onAction(pending.current.kind, pending.current.body)
       selectFiles([])
-      if (kind === 'review')
-        setDrafts((old) => ({ ...old, [personId]: { materialId: '', decision: '', note: '' } }))
       state.retry()
-      if (advanceNext && leftoverFiles.length) {
-        setAIReview(undefined)
-        setPreviewFileId(leftoverFiles[0].id)
-        pending.current = null
-        setNotice(
-          `人工核对结果已保存；当前参与人仍有 ${leftoverFiles.length} 份未核对文件，已保留在本页并切换至「${leftoverFiles[0].name}」以免漏审。`,
-        )
-      } else if (advanceNext && nextTarget) {
-        setAIReview(undefined)
-        setPersonId(nextTarget.identity)
-        setPreviewFileId('')
-        pending.current = null
-        setNotice(
-          `人工核对结果已保存，已跳转至下一位待核对：${nextTarget.identity}${nextTarget.owner && nextTarget.owner !== nextTarget.identity ? `（${nextTarget.owner}）` : ''}。`,
-        )
-      } else {
-        setNotice(
-          kind === 'classify'
-            ? '材料归属已保存；变化的文件需重新核对。'
-            : advanceNext
-              ? '人工核对结果已保存，当前已无更多待核对参与人。'
-              : '人工核对结果已保存。',
-        )
-      }
+      setNotice('材料归属已保存；变化的文件需重新核对。')
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setBusy(false)
     }
   }
+  useEffect(() => {
+    if (!person || archiveOpen || reminder) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return
+      const editable = isEditableTarget(e.target as HTMLElement | null)
+      const shortcut = resolveReviewShortcut(e, editable)
+      if (!shortcut) return
+      if (shortcut === 'next' || shortcut === 'prev') {
+        if (!person.files.length) return
+        e.preventDefault()
+        const currentIdx = previewFile ? person.files.findIndex((f) => f.id === previewFile.id) : 0
+        const nextIdx = stepFileIndex(currentIdx, person.files.length, shortcut)
+        if (nextIdx >= 0) setPreviewFileId(person.files[nextIdx].id)
+        return
+      }
+      if (!canEdit || !state.ready || busy) return
+      if (shortcut === 'approve') {
+        const targets = chosen.length ? chosen : previewFile ? [previewFile] : []
+        if (!targets.length) return
+        e.preventDefault()
+        void submitReview(targets, 'accepted', '', true, chosen.length > 0)
+        return
+      }
+      if (shortcut === 'reject') {
+        if (!chosen.length && !previewFile) return
+        e.preventDefault()
+        if (!chosen.length && previewFile) selectFiles([previewFile])
+        setDraft({ decision: 'needs_changes' })
+        requestAnimationFrame(() => {
+          noteInputRef.current?.focus()
+          noteInputRef.current?.scrollIntoView({ block: 'nearest' })
+        })
+        return
+      }
+      if (shortcut === 'submit') {
+        const targets = chosen.length ? chosen : previewFile ? [previewFile] : []
+        if (!targets.length) return
+        e.preventDefault()
+        if (!draft.decision) {
+          setError('请先选择人工核对结论（或按 A 快速通过、按 R 退回）。')
+          return
+        }
+        void submitReview(targets, draft.decision, draft.note, true, chosen.length > 0)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [
+    archiveOpen,
+    busy,
+    canEdit,
+    chosen,
+    draft.decision,
+    draft.note,
+    person,
+    previewFile,
+    reminder,
+    selectFiles,
+    setDraft,
+    state.ready,
+    submitReview,
+  ])
   async function exportReport() {
     setExporting(true)
     setError('')
@@ -626,6 +793,18 @@ export function MaterialWorkbench({
               <p>左侧内联预览图片 / PDF / 文本与 DOCX，右侧归属与人工核对表单，支持连续流转。</p>
             </div>
             <div className="button-row">
+              {isAdmin && onOfflineUpload && !c.archivedAt && (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy}
+                  onClick={() =>
+                    onOfflineUpload({ owner: person.owner || '', identity: person.identity })
+                  }
+                >
+                  <Upload size={14} />替 TA 补录
+                </button>
+              )}
               {nextPendingPerson && (
                 <button
                   type="button"
@@ -646,6 +825,26 @@ export function MaterialWorkbench({
                 收起详情
               </button>
             </div>
+          </div>
+
+          <div className="review-shortcut-bar" role="note" aria-label="分栏审阅快捷键提示">
+            <Keyboard size={14} />
+            <span>
+              <kbd>J</kbd>/<kbd>K</kbd> 切换文件
+            </span>
+            {canEdit && (
+              <>
+                <span>
+                  <kbd>A</kbd> 快速通过
+                </span>
+                <span>
+                  <kbd>R</kbd> 退回并填理由
+                </span>
+                <span>
+                  <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 提交审核
+                </span>
+              </>
+            )}
           </div>
 
           <div className="material-review-split">
@@ -947,11 +1146,12 @@ export function MaterialWorkbench({
                     <label className="field">
                       核对说明
                       <textarea
+                        ref={noteInputRef}
                         rows={3}
                         maxLength={300}
                         value={draft.note}
                         onChange={(e) => setDraft({ note: e.target.value })}
-                        placeholder="需补充时说明具体要改什么；这段说明可由本人回执查看"
+                        placeholder="需补充时说明具体要改什么；这段说明可由本人回执查看（按 Ctrl+Enter 快速提交）"
                       />
                     </label>
                     {!!chosen.length && !!remainingUnreviewedForPerson.length && (

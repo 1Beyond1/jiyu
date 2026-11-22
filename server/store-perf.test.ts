@@ -7,7 +7,7 @@ import { Readable } from 'node:stream'
 import { createApp } from './app.ts'
 import type { Config } from './config.ts'
 
-test('Store SQL 聚合、按 ID 精确查询与工作台单次加载避免全表扫描，且保持 schema 5 兼容', async () => {
+test('Store SQL 聚合、按 ID 精确查询与工作台单次加载避免全表扫描，且升级至 schema 6 物化索引', async () => {
   const root = resolve('.artifacts')
   await mkdir(root, { recursive: true })
   const dir = await mkdtemp(join(root, 'store-perf-test-'))
@@ -24,12 +24,17 @@ test('Store SQL 聚合、按 ID 精确查询与工作台单次加载避免全表
   try {
     assert.equal(
       (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
-      5,
+      6,
     )
     const indexes = (
       store.db.prepare("PRAGMA index_list('files')").all() as { name: string }[]
     ).map((r) => r.name)
     assert.ok(indexes.includes('files_collection'))
+    assert.ok(indexes.includes('files_deleted_created'))
+    assert.ok(indexes.includes('files_collection_deleted_created'))
+    assert.ok(indexes.includes('files_deleted_status_created'))
+    assert.ok(indexes.includes('files_deleted_ext_created'))
+    assert.ok(indexes.includes('files_collection_submission_participant'))
 
     const colA = {
       id: randomUUID(),

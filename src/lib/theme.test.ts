@@ -66,6 +66,13 @@ test('暖炭深色模式 CSS 完整覆盖 5 项语义变量、表格交互、复
     ':root[data-theme="dark"] .drop-zone.dragging',
     ':root[data-theme="dark"] .material-ai-evidence',
     ':root[data-theme="dark"] .material-card.has-files',
+    ':root[data-theme="dark"] .webhook-channel-card',
+    ':root[data-theme="dark"] .webhook-log-row',
+    ':root[data-theme="dark"] .review-shortcut-bar',
+    ':root[data-theme="dark"] .receipt-overview-card',
+    ':root[data-theme="dark"] .receipt-slot-item',
+    ':root[data-theme="dark"] .offline-file-item',
+    ':root[data-theme="dark"] .archive-scope-tabs',
   ]) {
     assert.ok(darkBlock.includes(selector), `深色主题缺少选择器覆盖：${selector}`)
   }

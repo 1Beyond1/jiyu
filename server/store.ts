@@ -4,6 +4,7 @@ import { mkdirSync, readdirSync, rmSync, existsSync, writeFileSync, readFileSync
 import { join } from 'node:path'
 import { token } from './security.ts'
 import { fileExtension } from '../src/lib/collections.ts'
+import { materialProgress } from '../src/lib/materials.ts'
 import type {
   Workspace,
   Collection,
@@ -12,6 +13,8 @@ import type {
   PaginatedFiles,
 } from '../src/types.ts'
 import { cloudStorageIds } from '../src/types.ts'
+
+export const SCHEMA_VERSION = 6
 
 export interface FileQueryOptions {
   collectionId?: string
@@ -24,13 +27,38 @@ export interface FileQueryOptions {
   sort: FileSortOption
 }
 
-const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'svg', 'webp', 'gif'])
+export interface WorkspaceOptions {
+  mode?: 'full' | 'summary'
+  recentLimit?: number
+}
+
+const IMAGE_EXTENSIONS_SQL = "'jpg','jpeg','png','heic','svg','webp','gif'"
 
 // Removed providers fall back to the immutable local copy; keep stored history intact.
 function normalizeStorage<T extends { storage: string }>(record: T): T {
   return record.storage === 'local' || cloudStorageIds.some((id) => id === record.storage)
     ? record
     : { ...record, storage: 'local' }
+}
+
+function normalizeIso(value: string | undefined): string {
+  if (!value) return ''
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : value
+}
+
+function fileColumns(file: CollectedFile) {
+  return {
+    deleted_at: file.deletedAt ? normalizeIso(file.deletedAt) : null,
+    status: file.status === 'ready' ? 'ready' : 'pending',
+    created_at: normalizeIso(file.createdAt),
+    size: Number.isFinite(file.size) ? Math.trunc(file.size) : 0,
+    name: file.name || '',
+    ext: fileExtension(file.name || ''),
+    owner: file.owner || '',
+    participant: file.participant || '',
+    submission_id: file.submissionId || null,
+  }
 }
 
 export class Store {
@@ -50,7 +78,7 @@ export class Store {
     }
     this.db = new DatabaseSync(join(dataDir, 'jiyu.sqlite'))
     const schema = this.db.prepare('PRAGMA user_version').get() as { user_version: number }
-    if (schema.user_version > 5) {
+    if (schema.user_version > SCHEMA_VERSION) {
       this.db.close()
       this.lock.exec('ROLLBACK')
       this.lock.close()
@@ -59,7 +87,21 @@ export class Store {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS collections (id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL REFERENCES collections(id), storage_key TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY,
+        collection_id TEXT NOT NULL REFERENCES collections(id),
+        storage_key TEXT UNIQUE NOT NULL,
+        data TEXT NOT NULL,
+        deleted_at TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT '',
+        size INTEGER NOT NULL DEFAULT 0,
+        name TEXT NOT NULL DEFAULT '',
+        ext TEXT NOT NULL DEFAULT '',
+        owner TEXT NOT NULL DEFAULT '',
+        participant TEXT NOT NULL DEFAULT '',
+        submission_id TEXT
+      );
       CREATE TABLE IF NOT EXISTS activities (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, time TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS submissions (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL);
@@ -76,14 +118,90 @@ export class Store {
       CREATE TABLE IF NOT EXISTS storage_oauth (id TEXT PRIMARY KEY, provider TEXT NOT NULL, data TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS collection_templates (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS submission_records (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL REFERENCES collections(id), key_hash TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS webhook_logs (
+        id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        channel_name TEXT NOT NULL,
+        channel_type TEXT NOT NULL,
+        event TEXT NOT NULL,
+        collection_id TEXT,
+        status TEXT NOT NULL,
+        http_status INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        merged_count INTEGER NOT NULL DEFAULT 1,
+        summary TEXT NOT NULL,
+        error TEXT,
+        target_hint TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS submission_collection ON submission_records(collection_id);
       CREATE INDEX IF NOT EXISTS files_collection ON files(collection_id);
-      PRAGMA user_version=5;`)
+      CREATE INDEX IF NOT EXISTS webhook_logs_created ON webhook_logs(created_at DESC);`)
     const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as {
       name: string
     }[]
     if (!sessionColumns.some((c) => c.name === 'user_id'))
       this.db.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'primary'")
+
+    // Idempotent v5 -> v6 (and earlier) materialized columns migration + backfill
+    const existingFileCols = new Set(
+      (this.db.prepare('PRAGMA table_info(files)').all() as { name: string }[]).map((c) => c.name),
+    )
+    const materializedCols: [string, string][] = [
+      ['deleted_at', 'TEXT'],
+      ['status', "TEXT NOT NULL DEFAULT 'pending'"],
+      ['created_at', "TEXT NOT NULL DEFAULT ''"],
+      ['size', 'INTEGER NOT NULL DEFAULT 0'],
+      ['name', "TEXT NOT NULL DEFAULT ''"],
+      ['ext', "TEXT NOT NULL DEFAULT ''"],
+      ['owner', "TEXT NOT NULL DEFAULT ''"],
+      ['participant', "TEXT NOT NULL DEFAULT ''"],
+      ['submission_id', 'TEXT'],
+    ]
+    let addedMaterializedCols = false
+    for (const [col, def] of materializedCols) {
+      if (!existingFileCols.has(col)) {
+        this.db.exec(`ALTER TABLE files ADD COLUMN ${col} ${def}`)
+        addedMaterializedCols = true
+      }
+    }
+    if (schema.user_version < SCHEMA_VERSION || addedMaterializedCols) {
+      this.transaction(() => {
+        const rows = this.db.prepare('SELECT id, data FROM files').all() as {
+          id: string
+          data: string
+        }[]
+        if (rows.length) {
+          const update = this.db.prepare(
+            'UPDATE files SET deleted_at=?,status=?,created_at=?,size=?,name=?,ext=?,owner=?,participant=?,submission_id=? WHERE id=?',
+          )
+          for (const row of rows) {
+            const parsed = JSON.parse(row.data) as CollectedFile
+            const c = fileColumns(parsed)
+            update.run(
+              c.deleted_at,
+              c.status,
+              c.created_at,
+              c.size,
+              c.name,
+              c.ext,
+              c.owner,
+              c.participant,
+              c.submission_id,
+              row.id,
+            )
+          }
+        }
+      })
+    }
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS files_deleted_created ON files(deleted_at, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS files_collection_deleted_created ON files(collection_id, deleted_at, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS files_deleted_status_created ON files(deleted_at, status, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS files_deleted_ext_created ON files(deleted_at, ext, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS files_collection_submission_participant ON files(collection_id, submission_id, participant, deleted_at);
+      PRAGMA user_version=${SCHEMA_VERSION};`)
+
     if (this.get('password'))
       this.db
         .prepare("INSERT OR IGNORE INTO users VALUES ('primary','admin',?,?,'admin',0)")
@@ -191,7 +309,15 @@ export class Store {
     ).map((r) => normalizeStorage({ ...JSON.parse(r.data), uploadToken: r.token }))
   }
   saveCollection(collection: Collection) {
-    const { uploadToken, ...data } = collection
+    const {
+      uploadToken,
+      activeFiles: _activeFiles,
+      pendingFiles: _pendingFiles,
+      materialSummary: _materialSummary,
+      requestLimitMB: _requestLimitMB,
+      hasAccessCode: _hasAccessCode,
+      ...data
+    } = collection
     this.db
       .prepare(
         'INSERT INTO collections VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,data=excluded.data',
@@ -215,13 +341,38 @@ export class Store {
         .all() as { data: string; state: string | null; remote_path: string | null }[]
     ).map((r) => this.hydrateFile(r))
   }
-  collectionFiles(collectionId: string): CollectedFile[] {
+  collectionFiles(collectionId: string, includeDeleted = true): CollectedFile[] {
+    const sql = includeDeleted
+      ? 'SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id WHERE f.collection_id=? ORDER BY f.rowid DESC'
+      : 'SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id WHERE f.collection_id=? AND f.deleted_at IS NULL ORDER BY f.created_at DESC, f.id DESC'
+    return (
+      this.db.prepare(sql).all(collectionId) as {
+        data: string
+        state: string | null
+        remote_path: string | null
+      }[]
+    ).map((r) => this.hydrateFile(r))
+  }
+  submissionFiles(collectionId: string, submissionId: string): CollectedFile[] {
     return (
       this.db
         .prepare(
-          'SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id WHERE f.collection_id=? ORDER BY f.rowid DESC',
+          'SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id WHERE f.collection_id=? AND f.submission_id=? AND f.deleted_at IS NULL ORDER BY f.rowid DESC',
         )
-        .all(collectionId) as { data: string; state: string | null; remote_path: string | null }[]
+        .all(collectionId, submissionId) as {
+        data: string
+        state: string | null
+        remote_path: string | null
+      }[]
+    ).map((r) => this.hydrateFile(r))
+  }
+  recentActiveFiles(limit: number): CollectedFile[] {
+    return (
+      this.db
+        .prepare(
+          'SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id WHERE f.deleted_at IS NULL ORDER BY f.created_at DESC, f.id DESC LIMIT ?',
+        )
+        .all(limit) as { data: string; state: string | null; remote_path: string | null }[]
     ).map((r) => this.hydrateFile(r))
   }
   fileCount() {
@@ -234,7 +385,7 @@ export class Store {
       (
         this.db
           .prepare(
-            "SELECT COUNT(*) AS total FROM files WHERE collection_id=? AND json_extract(data, '$.deletedAt') IS NULL",
+            'SELECT COUNT(*) AS total FROM files WHERE collection_id=? AND deleted_at IS NULL',
           )
           .get(collectionId) as { total: number }
       ).total,
@@ -247,87 +398,137 @@ export class Store {
   queryFiles(options: FileQueryOptions): PaginatedFiles {
     const where: string[] = []
     const params: (string | number)[] = []
+    let cte = ''
+    const cteParams: (string | number)[] = []
+
     if (options.collectionId) {
       where.push('f.collection_id=?')
       params.push(options.collectionId)
     }
     const trashed = options.trashed || 'false'
-    if (trashed === 'false') where.push("json_extract(f.data, '$.deletedAt') IS NULL")
-    else if (trashed === 'true') where.push("json_extract(f.data, '$.deletedAt') IS NOT NULL")
+    if (trashed === 'false') where.push('f.deleted_at IS NULL')
+    else if (trashed === 'true') where.push('f.deleted_at IS NOT NULL')
     if (options.status && options.status !== 'all') {
-      where.push("json_extract(f.data, '$.status')=?")
+      where.push('f.status=?')
       params.push(options.status)
     }
-    const sql = `SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY f.rowid DESC`
-    let list = (
-      this.db.prepare(sql).all(...params) as {
-        data: string
-        state: string | null
-        remote_path: string | null
-      }[]
-    ).map((r) => this.hydrateFile(r))
-    if (options.kind === 'image')
-      list = list.filter((f) => IMAGE_EXTENSIONS.has(fileExtension(f.name)))
+    if (options.kind === 'image') {
+      where.push(`f.ext IN (${IMAGE_EXTENSIONS_SQL})`)
+    }
     const term = (options.q || '').trim()
     if (term) {
       const lower = term.toLowerCase()
-      const contentHits = new Set<string>()
-      if (term.length >= 2) {
-        const rows = (
-          term.length >= 3
-            ? this.db
-                .prepare(
-                  'SELECT file_id FROM content_search WHERE content_search MATCH ? LIMIT 500',
-                )
-                .all(`"${term.replaceAll('"', '""')}"`)
-            : this.db
-                .prepare(
-                  'SELECT file_id FROM content_search WHERE instr(lower(body),lower(?))>0 LIMIT 500',
-                )
-                .all(term)
-        ) as { file_id: string }[]
-        for (const r of rows) contentHits.add(r.file_id)
+      const searchClauses = [
+        'instr(lower(f.name), ?) > 0',
+        'instr(lower(f.owner), ?) > 0',
+        "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_type(f.data, '$.tags') = 'array' THEN json_extract(f.data, '$.tags') ELSE '[]' END) WHERE instr(lower(CAST(value AS TEXT)), ?) > 0)",
+      ]
+      params.push(lower, lower, lower)
+      if (term.length >= 3) {
+        cte =
+          'WITH fts_hits AS MATERIALIZED (SELECT file_id FROM content_search WHERE content_search MATCH ?) '
+        cteParams.push(`"${term.replaceAll('"', '""')}"`)
+        searchClauses.push('EXISTS (SELECT 1 FROM fts_hits h WHERE h.file_id = f.id)')
+      } else if (term.length === 2) {
+        cte =
+          'WITH fts_hits AS MATERIALIZED (SELECT file_id FROM content_search WHERE instr(lower(body), ?) > 0) '
+        cteParams.push(lower)
+        searchClauses.push('EXISTS (SELECT 1 FROM fts_hits h WHERE h.file_id = f.id)')
       }
-      list = list.filter(
-        (f) =>
-          `${f.name} ${f.owner} ${(f.tags || []).join(' ')}`.toLowerCase().includes(lower) ||
-          contentHits.has(f.id),
-      )
+      where.push(`(${searchClauses.join(' OR ')})`)
     }
-    list.sort((a, b) => {
-      switch (options.sort) {
-        case 'created_asc':
-          return Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id)
-        case 'name_asc':
-          return a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id)
-        case 'name_desc':
-          return b.name.localeCompare(a.name, 'zh-CN') || b.id.localeCompare(a.id)
-        case 'size_asc':
-          return a.size - b.size || a.id.localeCompare(b.id)
-        case 'size_desc':
-          return b.size - a.size || b.id.localeCompare(a.id)
-        default:
-          return Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id)
-      }
-    })
-    const total = list.length
-    const start = (options.page - 1) * options.pageSize
-    const items = list.slice(start, start + options.pageSize)
+
+    const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : ''
+    let orderSql = 'ORDER BY f.created_at DESC, f.id DESC'
+    switch (options.sort) {
+      case 'created_asc':
+        orderSql = 'ORDER BY f.created_at ASC, f.id ASC'
+        break
+      case 'name_asc':
+        orderSql = 'ORDER BY f.name COLLATE NOCASE ASC, f.id ASC'
+        break
+      case 'name_desc':
+        orderSql = 'ORDER BY f.name COLLATE NOCASE DESC, f.id DESC'
+        break
+      case 'size_asc':
+        orderSql = 'ORDER BY f.size ASC, f.id ASC'
+        break
+      case 'size_desc':
+        orderSql = 'ORDER BY f.size DESC, f.id DESC'
+        break
+      default:
+        orderSql = 'ORDER BY f.created_at DESC, f.id DESC'
+        break
+    }
+
+    const allWhereParams = [...cteParams, ...params]
+    const total = Number(
+      (
+        this.db
+          .prepare(`${cte}SELECT COUNT(*) AS total FROM files f${whereSql}`)
+          .get(...allWhereParams) as { total: number }
+      ).total,
+    )
+    const offset = (options.page - 1) * options.pageSize
+    const rows = this.db
+      .prepare(
+        `${cte}SELECT f.data,t.state,t.remote_path FROM files f LEFT JOIN remote_transfers t ON t.file_id=f.id${whereSql} ${orderSql} LIMIT ? OFFSET ?`,
+      )
+      .all(...allWhereParams, options.pageSize, offset) as {
+      data: string
+      state: string | null
+      remote_path: string | null
+    }[]
+    const items = rows.map((r) => this.hydrateFile(r))
     return {
       items,
       total,
       page: options.page,
       pageSize: options.pageSize,
-      hasMore: start + items.length < total,
+      hasMore: offset + items.length < total,
     }
   }
   saveFile(file: CollectedFile) {
-    this.db.prepare('UPDATE files SET data=? WHERE id=?').run(JSON.stringify(file), file.id)
+    const c = fileColumns(file)
+    this.db
+      .prepare(
+        'UPDATE files SET data=?,deleted_at=?,status=?,created_at=?,size=?,name=?,ext=?,owner=?,participant=?,submission_id=? WHERE id=?',
+      )
+      .run(
+        JSON.stringify(file),
+        c.deleted_at,
+        c.status,
+        c.created_at,
+        c.size,
+        c.name,
+        c.ext,
+        c.owner,
+        c.participant,
+        c.submission_id,
+        file.id,
+      )
   }
   addFile(file: CollectedFile, key: string) {
+    const c = fileColumns(file)
     this.db
-      .prepare('INSERT INTO files VALUES (?,?,?,?)')
-      .run(file.id, file.collectionId, key, JSON.stringify(file))
+      .prepare(
+        'INSERT INTO files(id,collection_id,storage_key,data,deleted_at,status,created_at,size,name,ext,owner,participant,submission_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      )
+      .run(
+        file.id,
+        file.collectionId,
+        key,
+        JSON.stringify(file),
+        c.deleted_at,
+        c.status,
+        c.created_at,
+        c.size,
+        c.name,
+        c.ext,
+        c.owner,
+        c.participant,
+        c.submission_id,
+      )
     if (file.storage !== 'local') {
       const profile = this.get(`storage.${file.storage}`)
       const revision = profile ? String(JSON.parse(profile).revision || '') : ''
@@ -349,15 +550,9 @@ export class Store {
     const row = (
       collectionId
         ? this.db
-            .prepare(
-              "SELECT COALESCE(SUM(CAST(json_extract(data, '$.size') AS INTEGER)), 0) AS total FROM files WHERE collection_id=?",
-            )
+            .prepare('SELECT COALESCE(SUM(size), 0) AS total FROM files WHERE collection_id=?')
             .get(collectionId)
-        : this.db
-            .prepare(
-              "SELECT COALESCE(SUM(CAST(json_extract(data, '$.size') AS INTEGER)), 0) AS total FROM files",
-            )
-            .get()
+        : this.db.prepare('SELECT COALESCE(SUM(size), 0) AS total FROM files').get()
     ) as { total: number }
     return Number(row.total)
   }
@@ -381,24 +576,88 @@ export class Store {
       ).total,
     )
   }
-  workspace(quotaBytes: number, requestBytes?: number): Workspace {
-    const files = this.files()
-    const usedBytes = files.reduce((sum, f) => sum + f.size, 0)
+  workspace(quotaBytes: number, requestBytes?: number, options: WorkspaceOptions = {}): Workspace {
+    const mode = options.mode || 'full'
+    const recentLimit = Math.max(0, Math.min(200, options.recentLimit ?? 20))
+    const rawCollections = this.collections()
+    const agg = this.db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(size), 0) AS used_bytes,
+           COALESCE(SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS active_files,
+           COALESCE(SUM(CASE WHEN deleted_at IS NULL AND status='pending' THEN 1 ELSE 0 END), 0) AS pending_files,
+           COALESCE(SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS trash_files
+         FROM files`,
+      )
+      .get() as {
+      used_bytes: number
+      active_files: number
+      pending_files: number
+      trash_files: number
+    }
+    const perColCounts = new Map<string, { active: number; pending: number }>()
+    for (const row of this.db
+      .prepare(
+        `SELECT collection_id,
+                COUNT(*) AS active_count,
+                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_count
+         FROM files WHERE deleted_at IS NULL GROUP BY collection_id`,
+      )
+      .all() as { collection_id: string; active_count: number; pending_count: number }[]) {
+      perColCounts.set(row.collection_id, {
+        active: Number(row.active_count),
+        pending: Number(row.pending_count),
+      })
+    }
+    let activeFiles: CollectedFile[]
+    let trashFiles: CollectedFile[]
+    let allActiveByCollection: Map<string, CollectedFile[]> | null = null
+    if (mode === 'summary') {
+      activeFiles = recentLimit > 0 ? this.recentActiveFiles(recentLimit) : []
+      trashFiles = []
+    } else {
+      const all = this.files()
+      activeFiles = all.filter((f) => !f.deletedAt)
+      trashFiles = all.filter((f) => f.deletedAt)
+      allActiveByCollection = new Map()
+      for (const f of activeFiles) {
+        const list = allActiveByCollection.get(f.collectionId)
+        if (list) list.push(f)
+        else allActiveByCollection.set(f.collectionId, [f])
+      }
+    }
+    const collections = rawCollections.map((c) => {
+      const { accessCodeHash, accessCodeVersion: _ver, ...pub } = c
+      const counts = perColCounts.get(c.id)
+      const colActive = c.materials?.length
+        ? allActiveByCollection
+          ? allActiveByCollection.get(c.id) || []
+          : this.collectionFiles(c.id, false)
+        : null
+      return {
+        ...pub,
+        activeFiles: counts?.active ?? 0,
+        pendingFiles: counts?.pending ?? 0,
+        ...(colActive ? { materialSummary: materialProgress(c, colActive) } : {}),
+        hasAccessCode: Boolean(accessCodeHash),
+        ...(requestBytes !== undefined ? { requestLimitMB: requestBytes / 1024 ** 2 } : {}),
+      }
+    })
     return {
       version: 1,
       displayName: this.get('displayName') || '管理员',
       ...(requestBytes !== undefined ? { requestLimitMB: requestBytes / 1024 ** 2 } : {}),
-      collections: this.collections().map((c) => {
-        const { accessCodeHash, accessCodeVersion: _ver, ...pub } = c
-        return {
-          ...pub,
-          hasAccessCode: Boolean(accessCodeHash),
-          ...(requestBytes !== undefined ? { requestLimitMB: requestBytes / 1024 ** 2 } : {}),
-        }
-      }),
-      files: files.filter((f) => !f.deletedAt),
-      trash: files.filter((f) => f.deletedAt),
-      storage: { usedBytes, quotaBytes },
+      collections,
+      files: activeFiles,
+      trash: trashFiles,
+      ...(mode === 'summary' ? { summaryMode: true } : {}),
+      stats: {
+        activeFiles: Number(agg.active_files),
+        pendingFiles: Number(agg.pending_files),
+        trashFiles: Number(agg.trash_files),
+        archivedCollections: rawCollections.filter((c) => Boolean(c.archivedAt)).length,
+      },
+      storage: { usedBytes: Number(agg.used_bytes), quotaBytes },
       lastRenameId: (
         this.db
           .prepare('SELECT id FROM renames WHERE undone=0 ORDER BY rowid DESC LIMIT 1')

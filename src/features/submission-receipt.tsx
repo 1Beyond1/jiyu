@@ -24,7 +24,7 @@ export function ReceiptManager({
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
     [detail, setDetail] = useState<ReceiptDetail | null>(null)
-  const closed = c.status !== 'active' || isExpired(c)
+  const closed = Boolean(c.archivedAt) || c.status !== 'active' || isExpired(c)
   const picker = useRef<HTMLInputElement>(null)
   const readSequence = useRef(0),
     readController = useRef<AbortController | null>(null),
@@ -135,27 +135,141 @@ export function ReceiptManager({
     setDetail(null)
     onContinue(current, replacement, secret)
   }
-  const needsChanges = detail?.files.some((f) => f.materialState === 'needs_changes') || false
-  function progress(value: ReceiptDetail) {
+  const needsChanges =
+    detail?.files.some((f) => f.materialState === 'needs_changes') ||
+    (detail?.materialOverview?.needsChangesCount ?? 0) > 0
+  function progress(value: ReceiptDetail, receiptSecret: string) {
+    const overview = value.materialOverview
     return (
       <section className="receipt-progress" aria-label="本批材料核对进度">
+        {overview && (
+          <section className="receipt-overview-card" aria-label="当前任务全部材料槽位总览">
+            <div className="receipt-overview-head">
+              <div>
+                <strong>我的全部材料进度总览</strong>
+                <small>
+                  标识：{overview.identity} · 必需项已交 {overview.requiredSubmitted} /{' '}
+                  {overview.requiredTotal} · 已通过 {overview.requiredAccepted} /{' '}
+                  {overview.requiredTotal}
+                </small>
+              </div>
+              <span className={`mstate ${overview.status}`}>
+                {overview.reviewComplete
+                  ? '全部材料审核通过'
+                  : overview.status === 'needs_changes'
+                    ? '有材料被退回'
+                    : overview.receivedComplete
+                      ? '必需项已交齐，待审核'
+                      : `仍缺 ${overview.missingRequired.length} 项必需材料`}
+              </span>
+            </div>
+
+            <div className="receipt-overview-counters">
+              <span className="overview-chip accepted">已通过 {overview.acceptedCount}</span>
+              <span className="overview-chip pending">待审核 {overview.pendingCount}</span>
+              <span className="overview-chip needs_changes">
+                被退回 {overview.needsChangesCount}
+              </span>
+              <span className="overview-chip missing">
+                缺失必需项 {overview.missingRequired.length}
+              </span>
+            </div>
+
+            <div className="receipt-slot-list">
+              {overview.slots.map((slot) => {
+                const isOptionalEmpty = !slot.required && slot.fileCount === 0
+                const badgeClass = isOptionalEmpty ? 'optional' : slot.state
+                const badgeText = isOptionalEmpty
+                  ? '选填未交'
+                  : slot.state === 'missing'
+                    ? '缺失'
+                    : materialStateLabels[slot.state]
+                return (
+                  <article className={`receipt-slot-item ${badgeClass}`} key={slot.materialId}>
+                    <header>
+                      <div>
+                        <strong>{slot.name}</strong>
+                        <small>{slot.required ? '必需' : '选填'}</small>
+                      </div>
+                      <span className={`mstate ${badgeClass}`}>
+                        {badgeText}
+                        {slot.duplicate ? ' · 内容重复' : ''}
+                      </span>
+                    </header>
+                    {slot.description && <p className="receipt-slot-desc">{slot.description}</p>}
+                    {slot.files.length > 0 ? (
+                      <ul className="receipt-slot-files">
+                        {slot.files.map((f) => (
+                          <li key={f.id}>
+                            <span>
+                              {f.name} · {formatSize(f.size)}
+                            </span>
+                            <small>{f.inCurrentBatch ? '本批' : '先前批次'}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="receipt-slot-empty">
+                        {slot.required ? '尚未提交此项必需材料' : '暂未上传选填材料'}
+                      </p>
+                    )}
+                    {slot.latestNote && (
+                      <p
+                        className={`receipt-slot-note ${slot.state === 'needs_changes' ? 'rejected' : ''}`}
+                      >
+                        {slot.state === 'needs_changes' ? '最新退回原因：' : '审核说明：'}
+                        {slot.latestNote}
+                      </p>
+                    )}
+                  </article>
+                )
+              })}
+            </div>
+
+            {!!overview.unclassifiedFiles.length && (
+              <p className="field-hint">
+                另有 {overview.unclassifiedFiles.length} 份文件暂未分类，等待发起人归类核对。
+              </p>
+            )}
+
+            {overview.missingRequired.length > 0 &&
+              !closed &&
+              !value.superseded &&
+              c.submissionMode !== 'single' && (
+                <div className="receipt-overview-cta">
+                  <span>尚缺：{overview.missingRequired.join('、')}</span>
+                  <button
+                    type="button"
+                    className="button primary"
+                    disabled={busy}
+                    onClick={() => void continueFrom(value.receipt.receiptId, receiptSecret, false)}
+                  >
+                    去补交缺失材料
+                  </button>
+                </div>
+              )}
+          </section>
+        )}
+
         {value.superseded ? (
           <p className="form-note">
             这批文件已经被替换。请使用替换成功后保存的新回执查看当前文件。
           </p>
         ) : (
           <>
-            <p className="field-hint">只显示你这一批的文件，不代表全部材料已收齐或人工通过。</p>
+            {!overview && (
+              <p className="field-hint">只显示你这一批的文件，不代表全部材料已收齐或人工通过。</p>
+            )}
             {value.files.some((f) => f.materialState === 'needs_changes') && (
               <div className="receipt-needs-change">
-                <strong>有材料需要补充</strong>
+                <strong>本批有材料需要补充</strong>
                 <p>按下方具体说明修改，再选择“按说明替换本批文件”。请重新选择本批完整文件。</p>
               </div>
             )}
           </>
         )}
         <strong>
-          {value.owner} · {value.superseded ? '已被替换' : `${value.files.length} 份有效文件`}
+          {value.owner} · 本批{value.superseded ? '已被替换' : ` ${value.files.length} 份有效文件`}
         </strong>
         {value.files.map((f) => (
           <div className={`receipt-material-file ${f.materialState || ''}`} key={f.id}>
@@ -245,7 +359,7 @@ export function ReceiptManager({
           </button>
         </div>
         {current ? (
-          progress(current)
+          progress(current, receipt.editKey || '')
         ) : (
           <p className="field-hint" role="status">
             {busy ? '正在读取你的材料进度…' : '暂未读到核对进度，可点上方更新。'}
@@ -348,7 +462,7 @@ export function ReceiptManager({
           </button>
           {detail && (
             <div className="receipt-result">
-              {progress(detail)}
+              {progress(detail, key)}
               <button
                 type="button"
                 className="text-button"

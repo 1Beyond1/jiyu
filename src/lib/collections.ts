@@ -58,6 +58,7 @@ export function submissionError(
   files: { name: string; size: number }[],
   now = Date.now(),
 ) {
+  if (collection.archivedAt) return '这项收集已归档，暂不接收新文件，请联系发起人。'
   if (collection.status !== 'active' || isExpired(collection, now))
     return '这项收集已暂停、结束或超过截止时间，请联系发起人。'
   if (!files.length) return '请先选择要提交的文件。'

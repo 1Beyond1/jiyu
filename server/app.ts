@@ -13,7 +13,7 @@ import type { FastifyRequest, FastifyReply } from 'fastify'
 import { resolveRateLimits } from './config.ts'
 import type { Config } from './config.ts'
 import { Store } from './store.ts'
-import type { FileQueryOptions } from './store.ts'
+import type { FileQueryOptions, WorkspaceOptions } from './store.ts'
 import {
   accessCodeInput,
   accessCookieName,
@@ -31,11 +31,14 @@ import {
   verifyAccessProof,
 } from './security.ts'
 import {
+  effectiveFileLimit,
   fileExtension,
   fileExtensions,
   isExpired,
+  nextWeek,
   submissionError,
 } from '../src/lib/collections.ts'
+import { fileNameKey, submissionFileName } from '../src/lib/submission-naming.ts'
 import type { Collection, CollectedFile, FileSortOption, TagChange } from '../src/types.ts'
 import { proposalHash, registerAI } from './ai.ts'
 import type { AITransport } from './ai.ts'
@@ -52,12 +55,18 @@ import { registerStorage, requireStorage } from './storage.ts'
 import type { StorageRetryPolicy } from './storage.ts'
 import type { RemoteHTTP } from './remote-http.ts'
 import { storageSpace } from './storage-space.ts'
-import { collectionRules, registerCollectionWorkflows } from './collection-workflows.ts'
+import {
+  collectionRules,
+  participantIdentity,
+  registerCollectionWorkflows,
+} from './collection-workflows.ts'
 import { diagnostics } from './diagnostics.ts'
 import { materialRuleKey, registerMaterials } from './materials.ts'
 import { confirmCollectionDraft } from './collection-draft.ts'
 import { publicSubmissionError } from './public-errors.ts'
 import { hasUnsafeTagChars } from '../src/lib/text-safety.ts'
+import { registerWebhooks } from './webhooks.ts'
+import type { WebhookPolicy } from './webhooks.ts'
 
 function makeEtag(...parts: (string | number | undefined)[]) {
   const hash = createHash('sha256')
@@ -183,7 +192,19 @@ async function collectionInput(value: unknown, current?: Collection): Promise<Co
         ? current.materialRevision
         : randomUUID()
   if (current?.draftOrigin) result.draftOrigin = current.draftOrigin
+  if (current?.archivedAt) result.archivedAt = current.archivedAt
   return result
+}
+
+function validDeadline(raw: unknown): string {
+  const deadline = text(raw, '截止日期', 10)
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(deadline) ||
+    !Number.isFinite(Date.parse(`${deadline}T00:00:00+08:00`)) ||
+    new Date(`${deadline}T00:00:00Z`).toISOString().slice(0, 10) !== deadline
+  )
+    throw new HttpError(400, '截止日期无效')
+  return deadline
 }
 
 export async function createApp(
@@ -198,6 +219,7 @@ export async function createApp(
     materialToolMode?: boolean
     unlinkObject?: (path: string) => Promise<void>
     unlockPolicy?: { globalMaxFailures?: number; backoffBaseMs?: number }
+    webhookPolicy?: WebhookPolicy
   } = {},
 ) {
   const store = new Store(config.dataDir)
@@ -306,7 +328,9 @@ export async function createApp(
       const adminOnly =
         url.startsWith('/api/users') ||
         url.startsWith('/api/backups') ||
+        url.startsWith('/api/webhooks') ||
         url === '/api/files/purge' ||
+        /^\/api\/collections\/[^/]+\/offline-upload$/.test(url) ||
         (writes &&
           (url.startsWith('/api/settings') ||
             url.startsWith('/api/storage') ||
@@ -470,18 +494,31 @@ export async function createApp(
     })
     return setSession(reply, auth.id)
   })
+  const workspaceOptions = (req: FastifyRequest): WorkspaceOptions => {
+    const q = (req.query && typeof req.query === 'object' ? req.query : {}) as Record<
+      string,
+      unknown
+    >
+    const queryMode = typeof q.mode === 'string' ? q.mode.trim() : ''
+    const headerMode = String(req.headers['x-workspace-mode'] || '').trim()
+    const mode = queryMode === 'summary' || headerMode === 'summary' ? 'summary' : 'full'
+    return { mode }
+  }
+  const webhooks = registerWebhooks(app, store, options.webhookPolicy)
   app.get('/api/workspace', async (req, reply) => {
     const role = session(req)?.role || 'viewer'
+    const wsOpt = workspaceOptions(req)
     const etag = makeEtag(
       'workspace',
       store.changeStamp(),
       role,
+      wsOpt.mode || 'full',
       config.quotaBytes,
       config.requestBytes,
     )
     reply.header('ETag', etag).header('Cache-Control', 'no-cache').header('Vary', 'Cookie')
     if (etagMatches(req.headers['if-none-match'], etag)) return reply.code(304).send()
-    const workspace = store.workspace(config.quotaBytes, config.requestBytes)
+    const workspace = store.workspace(config.quotaBytes, config.requestBytes, wsOpt)
     if (role === 'viewer') {
       workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c)
       workspace.lastRenameId = undefined
@@ -512,7 +549,7 @@ export async function createApp(
       store.set('displayName', displayName)
       store.db.prepare("UPDATE users SET display_name=? WHERE id='primary'").run(displayName)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
   })
   app.post(
     '/api/settings/diagnostics',
@@ -528,7 +565,7 @@ export async function createApp(
       store.saveCollection(c)
       store.activity(`创建了「${c.title}」`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
   })
   const getCollection = (id: string) => {
     const c = store.collection(id)
@@ -547,13 +584,15 @@ export async function createApp(
       store.saveCollection(c)
       store.activity(`修改了「${c.title}」的规则`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
   })
   app.post('/api/collections/:id/status', async (req) => {
     const c = getCollection(String(object(req.params).id)),
       status = object(req.body).status
     if (!['active', 'paused', 'completed'].includes(String(status)))
       throw new HttpError(400, '收集状态无效')
+    if (status === 'active' && c.archivedAt)
+      throw new HttpError(409, '请先取消归档后再重新开放收集')
     if (status === 'active' && isExpired(c)) throw new HttpError(400, '请先延长截止日期')
     store.transaction(() => {
       store.saveCollection({ ...c, status: status as Collection['status'] })
@@ -561,7 +600,337 @@ export async function createApp(
         `将「${c.title}」设为${status === 'active' ? '收集中' : status === 'paused' ? '暂停' : '完成'}`,
       )
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+  })
+  app.post('/api/collections/:id/archive', async (req) => {
+    const c = getCollection(String(object(req.params).id))
+    const body = object(req.body)
+    if (typeof body.archived !== 'boolean') throw new HttpError(400, '归档状态参数无效')
+    const next: Collection = { ...c }
+    if (body.archived) {
+      next.archivedAt = c.archivedAt || new Date().toISOString()
+      if (next.status === 'active') next.status = 'paused'
+    } else {
+      delete next.archivedAt
+    }
+    store.transaction(() => {
+      store.saveCollection(next)
+      store.activity(`${body.archived ? '归档' : '取消归档'}了「${c.title}」`)
+    })
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+  })
+  app.post('/api/collections/:id/clone', async (req, reply) => {
+    const source = getCollection(String(object(req.params).id))
+    const body = req.body ? object(req.body) : {}
+    const defaultTitle = `${source.title}（副本）`.slice(0, 50)
+    const title =
+      body.title !== undefined && String(body.title).trim() !== ''
+        ? text(body.title, '收集名称', 50)
+        : defaultTitle
+    const defaultDeadline = isExpired(source) ? nextWeek() : source.deadline
+    const deadline =
+      body.deadline !== undefined && String(body.deadline).trim() !== ''
+        ? validDeadline(body.deadline)
+        : defaultDeadline
+    const includeExpected =
+      body.includeExpectedSubmitters === undefined ? true : Boolean(body.includeExpectedSubmitters)
+    let storage: Collection['storage'] = 'local'
+    try {
+      storage = requireStorage(store, source.storage)
+    } catch {
+      storage = 'local'
+    }
+    const {
+      accessCodeHash: _oldHash,
+      accessCodeVersion: _oldVer,
+      archivedAt: _oldArchived,
+      draftOrigin: _oldDraft,
+      uploadToken: _oldToken,
+      activeFiles: _oldActive,
+      pendingFiles: _oldPending,
+      materialSummary: _oldMatSummary,
+      requestLimitMB: _oldReqLimit,
+      hasAccessCode: _oldHasCode,
+      ...base
+    } = source
+    const cloned: Collection = {
+      ...base,
+      id: randomUUID(),
+      uploadToken: token(),
+      title,
+      deadline,
+      storage,
+      received: 0,
+      status: 'active',
+      expectedSubmitters: includeExpected ? [...(source.expectedSubmitters || [])] : [],
+      restrictToExpectedSubmitters: includeExpected
+        ? Boolean(source.restrictToExpectedSubmitters)
+        : false,
+      ...(source.materials?.length ? { materialRevision: randomUUID() } : {}),
+    }
+    if (body.accessCode !== undefined && String(body.accessCode).trim() !== '') {
+      const code = accessCodeInput(body.accessCode)
+      cloned.accessCodeHash = await hashPassword(code)
+      cloned.accessCodeVersion = randomUUID()
+    }
+    store.transaction(() => {
+      store.saveCollection(cloned)
+      store.activity(`复制「${source.title}」创建了新任务「${cloned.title}」`)
+    })
+    const ws = store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    reply.code(201)
+    return {
+      workspace: ws,
+      collection: ws.collections.find((c) => c.id === cloned.id),
+    }
+  })
+  app.post('/api/collections/:id/offline-upload', async (req, reply) => {
+    const auth = session(req)!
+    const c = getCollection(String(object(req.params).id))
+    if (c.archivedAt) throw new HttpError(409, '该任务已归档，请先取消归档后再补录')
+    if (budget.active >= 4) throw new HttpError(429, '当前上传任务较多，请稍后重试')
+    budget.active++
+    let owner = ''
+    let rawFields = ''
+    let rawMaterialIds = ''
+    let note = ''
+    let markReady = false
+    let bytes = 0
+    let committed = false
+    const staged: { file: CollectedFile; key: string; path: string }[] = []
+    const startCommitted = budget.committedBytes
+    const startCollectionCommitted = budget.committedCollections.get(c.id) || 0
+    const baseUsed = store.usedBytes() + store.pendingBytes()
+    const baseCollectionUsed = store.usedBytes(c.id) + store.pendingBytes(c.id)
+    const maxCollectionBytes = (c.maxTotalSizeMB || 2048) * 1024 ** 2
+    const allowedExt = fileExtensions(c.formats)
+    const maxSingleBytes =
+      effectiveFileLimit({
+        maxFileSizeMB: c.maxFileSizeMB,
+        requestLimitMB: config.requestBytes / 1024 ** 2,
+      }) *
+      1024 ** 2
+    try {
+      for await (const part of req.parts({
+        limits: {
+          files: c.maxFilesPerSubmission,
+          fields: 12,
+          fieldSize: 16384,
+          parts: c.maxFilesPerSubmission + 12,
+          fileSize: Math.min(c.maxFileSizeMB * 1024 ** 2, config.requestBytes),
+        },
+      })) {
+        if (part.type === 'field') {
+          const val = typeof part.value === 'string' ? part.value : ''
+          if (part.fieldname === 'owner') owner = text(val, '提交人姓名', 30)
+          else if (part.fieldname === 'fields') rawFields = val
+          else if (part.fieldname === 'materialIds') rawMaterialIds = val
+          else if (part.fieldname === 'note') note = text(val, '补录备注', 100, 0)
+          else if (part.fieldname === 'markReady') markReady = val === 'true' || val === '1'
+          continue
+        }
+        if (part.fieldname !== 'files') {
+          part.file.resume()
+          throw new HttpError(400, '文件字段无效')
+        }
+        if (store.fileCount() + budget.files + store.pendingFiles() >= 10000) {
+          part.file.resume()
+          throw new HttpError(413, '已达到 10000 个文件的上限，请备份后整理数据')
+        }
+        const name = safeName(part.filename)
+        if (!allowedExt.includes(fileExtension(name))) {
+          part.file.resume()
+          throw new HttpError(400, `「${name}」的格式不符合要求，请选择 ${c.formats} 文件。`)
+        }
+        const key = randomUUID()
+        const tempPath = join(config.dataDir, 'tmp', key)
+        const hash = createHash('sha256')
+        const entry = {
+          file: {
+            id: randomUUID(),
+            name,
+            originalName: name,
+            size: 0,
+            collectionId: c.id,
+            owner: '',
+            createdAt: new Date().toISOString(),
+            storage: c.storage,
+            ...(c.storage !== 'local' ? { remoteStatus: 'queued' } : {}),
+            status: markReady ? 'ready' : 'pending',
+          } as CollectedFile,
+          key,
+          path: tempPath,
+        }
+        staged.push(entry)
+        budget.files++
+        await pipeline(
+          part.file,
+          new Transform({
+            transform(chunk: Buffer, _encoding, callback) {
+              const collectionReserved = budget.collections.get(c.id) || 0
+              const globalCommittedDelta = budget.committedBytes - startCommitted
+              const collectionCommittedDelta =
+                (budget.committedCollections.get(c.id) || 0) - startCollectionCommitted
+              if (
+                bytes + chunk.length > config.requestBytes ||
+                entry.file.size + chunk.length > maxSingleBytes ||
+                baseUsed + globalCommittedDelta + budget.bytes + chunk.length > config.quotaBytes ||
+                baseCollectionUsed + collectionCommittedDelta + collectionReserved + chunk.length >
+                  maxCollectionBytes
+              ) {
+                callback(new HttpError(413, '单次补录、任务或存储总容量超过上限'))
+                return
+              }
+              bytes += chunk.length
+              budget.bytes += chunk.length
+              budget.collections.set(c.id, collectionReserved + chunk.length)
+              entry.file.size += chunk.length
+              hash.update(chunk)
+              callback(null, chunk)
+            },
+          }),
+          createWriteStream(tempPath, { flags: 'wx', mode: 0o600, flush: true }),
+        )
+        if (part.file.truncated) throw new HttpError(413, '文件超过大小限制')
+        if (entry.file.size === 0) throw new HttpError(400, `「${name}」是空文件，请重新选择`)
+        entry.file.sha256 = hash.digest('hex')
+      }
+      if (!owner) throw new HttpError(400, '请填写提交人姓名')
+      if (!staged.length) throw new HttpError(400, '请至少选择 1 个补录文件')
+      if (staged.length > c.maxFilesPerSubmission)
+        throw new HttpError(400, `每次最多补录 ${c.maxFilesPerSubmission} 个文件`)
+
+      let fieldsObj: Record<string, unknown> = {}
+      if (rawFields) {
+        try {
+          fieldsObj = object(JSON.parse(rawFields))
+        } catch {
+          throw new HttpError(400, '提交字段格式无效')
+        }
+      }
+      const parsedFields: Record<string, string> = {}
+      for (const f of c.fields || []) {
+        parsedFields[f.id] = text(fieldsObj[f.id] ?? '', f.label, 80, f.required ? 1 : 0)
+      }
+      let parsedMaterialIds: string[] | undefined
+      if (rawMaterialIds) {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(rawMaterialIds)
+        } catch {
+          throw new HttpError(400, '材料归属格式无效')
+        }
+        if (!Array.isArray(parsed) || parsed.length !== staged.length)
+          throw new HttpError(400, '材料归属数量需与补录文件一致')
+        parsedMaterialIds = parsed.map((v) => text(v ?? '', '材料归属', 40, 0))
+        if (parsedMaterialIds.some((id) => id && !c.materials?.some((m) => m.id === id)))
+          throw new HttpError(400, '所选材料项已不存在，请刷新任务规则')
+      }
+      const latest = getCollection(c.id)
+      if (latest.archivedAt) throw new HttpError(409, '该任务已归档，请先取消归档后再补录')
+      const person = participantIdentity(latest, owner, parsedFields)
+      if (!person) throw new HttpError(400, '请填写提交人标识')
+      if (
+        store.usedBytes() + store.pendingBytes() + budget.bytes > config.quotaBytes ||
+        store.usedBytes(c.id) + store.pendingBytes(c.id) + (budget.collections.get(c.id) || 0) >
+          (latest.maxTotalSizeMB || 2048) * 1024 ** 2
+      )
+        throw new HttpError(413, '任务或存储容量超过上限')
+      for (const entry of staged) {
+        const destination = join(config.dataDir, 'objects', entry.key)
+        await rename(entry.path, destination)
+        entry.path = destination
+      }
+      const receipt = {
+        receiptId: randomUUID(),
+        filesCount: staged.length,
+        bytes,
+        createdAt: new Date().toISOString(),
+      }
+      const committedFiles: CollectedFile[] = []
+      store.transaction(() => {
+        const finalCol = getCollection(c.id)
+        if (finalCol.archivedAt) throw new HttpError(409, '该任务已归档，请先取消归档后再补录')
+        if (
+          store.usedBytes() + bytes > config.quotaBytes ||
+          store.usedBytes(c.id) + bytes > (finalCol.maxTotalSizeMB || 2048) * 1024 ** 2
+        )
+          throw new HttpError(413, '任务或存储容量超过上限')
+        const occupied = new Set(
+          store.collectionFiles(finalCol.id, false).map((f) => fileNameKey(f.name)),
+        )
+        const fieldLabels = Object.fromEntries((finalCol.fields || []).map((v) => [v.id, v.label]))
+        staged.forEach((entry, i) => {
+          const matId =
+            finalCol.materials?.length || parsedMaterialIds
+              ? parsedMaterialIds?.[i] || undefined
+              : undefined
+          const finalName = submissionFileName(
+            finalCol,
+            entry.file.name,
+            owner,
+            parsedFields,
+            finalCol.received + i + 1,
+            receipt.createdAt,
+            occupied,
+            matId,
+          )
+          const savedFile: CollectedFile = {
+            ...entry.file,
+            owner,
+            name: finalName,
+            submissionId: receipt.receiptId,
+            submissionFields: parsedFields,
+            fieldLabels,
+            participant: person,
+            ...(finalCol.materials?.length || parsedMaterialIds
+              ? { materialId: matId, materialVersion: 1 }
+              : {}),
+            storage: finalCol.storage,
+            remoteStatus: finalCol.storage === 'local' ? undefined : 'queued',
+          }
+          store.addFile(savedFile, entry.key)
+          committedFiles.push(savedFile)
+        })
+        store.saveCollection({ ...finalCol, received: finalCol.received + staged.length })
+        store.db
+          .prepare('INSERT INTO submission_records VALUES (?,?,?,?)')
+          .run(
+            receipt.receiptId,
+            finalCol.id,
+            digest(token()),
+            JSON.stringify({ owner, fields: parsedFields, identity: person, receipt }),
+          )
+        store.activity(
+          `管理员「${auth.display_name}」替「${owner}」向「${finalCol.title}」线下补录了 ${staged.length} 份文件${note ? `（${note}）` : ''}`,
+        )
+      })
+      budget.committedBytes += bytes
+      budget.committedCollections.set(c.id, (budget.committedCollections.get(c.id) || 0) + bytes)
+      committed = true
+      webhooks.emit({
+        event: 'submission.created',
+        collectionId: c.id,
+        collectionTitle: c.title,
+        actor: owner,
+        fileCount: staged.length,
+        summary: `管理员「${auth.display_name}」替「${owner}」向「${c.title}」线下补录了 ${staged.length} 份文件`,
+        ...(note ? { detail: `补录备注：${note}` } : {}),
+      })
+      reply.code(201)
+      return {
+        workspace: store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req)),
+        files: committedFiles,
+        receipt,
+      }
+    } finally {
+      budget.active--
+      budget.bytes -= bytes
+      budget.files -= staged.length
+      budget.collections.set(c.id, (budget.collections.get(c.id) || 0) - bytes)
+      if (!committed)
+        for (const entry of staged) await rm(entry.path, { force: true }).catch(() => {})
+    }
   })
   app.post('/api/collections/:id/rotate-token', async (req) => {
     const c = getCollection(String(object(req.params).id))
@@ -569,7 +938,7 @@ export async function createApp(
       store.saveCollection({ ...c, uploadToken: token() })
       store.activity(`更换了「${c.title}」的收集链接，旧链接失效`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
   })
   const publicCollection = (value: string) => {
     const c = store.byToken(value)
@@ -685,21 +1054,22 @@ export async function createApp(
       if (!code || code.length > 32) throw new HttpError(400, '请输入 4–8 位提取码')
       const valid = await checkPassword(code, c.accessCodeHash)
       if (!valid) {
+        const failedAt = Date.now()
         const nextIpFailures =
-          ipRecord && now - ipRecord.lastSeen <= UNLOCK_WINDOW_MS ? ipRecord.failures + 1 : 1
+          ipRecord && failedAt - ipRecord.lastSeen <= UNLOCK_WINDOW_MS ? ipRecord.failures + 1 : 1
         const backoffMs =
           nextIpFailures >= 3
             ? Math.min(UNLOCK_BACKOFF_MAX_MS, unlockBackoffBaseMs * 2 ** (nextIpFailures - 3))
             : 0
         unlockIpFailures.set(ipKey, {
           failures: nextIpFailures,
-          lockedUntil: backoffMs ? now + backoffMs : 0,
-          lastSeen: now,
+          lockedUntil: backoffMs ? failedAt + backoffMs : 0,
+          lastSeen: failedAt,
         })
         const activeCol =
-          colRecord && now - colRecord.windowStart <= UNLOCK_WINDOW_MS
+          colRecord && failedAt - colRecord.windowStart <= UNLOCK_WINDOW_MS
             ? colRecord
-            : { failures: 0, windowStart: now, lockedUntil: 0 }
+            : { failures: 0, windowStart: failedAt, lockedUntil: 0 }
         activeCol.failures += 1
         if (activeCol.failures >= unlockGlobalMaxFailures) {
           activeCol.lockedUntil = activeCol.windowStart + UNLOCK_WINDOW_MS
@@ -732,8 +1102,11 @@ export async function createApp(
     async (req, reply) => {
       const c = publicCollection(String(object(req.params).token))
       requirePublicAccess(req, c)
-      if (c.status !== 'active' || isExpired(c))
-        throw new HttpError(410, '这项收集已暂停、结束或超过截止时间')
+      if (c.archivedAt || c.status !== 'active' || isExpired(c))
+        throw new HttpError(
+          410,
+          c.archivedAt ? '这项收集已归档，暂不接收新文件' : '这项收集已暂停、结束或超过截止时间',
+        )
       if (
         c.fields?.length ||
         c.materials?.length ||
@@ -915,6 +1288,14 @@ export async function createApp(
         budget.committedBytes += bytes
         budget.committedCollections.set(c.id, (budget.committedCollections.get(c.id) || 0) + bytes)
         committed = true
+        webhooks.emit({
+          event: 'submission.created',
+          collectionId: c.id,
+          collectionTitle: c.title,
+          actor: owner,
+          fileCount: staged.length,
+          summary: `${owner}向「${c.title}」提交了 ${staged.length} 份文件`,
+        })
         reply.code(201)
         return receipt
       } finally {
@@ -965,7 +1346,7 @@ export async function createApp(
       for (const f of list) store.saveFile({ ...f, status: 'ready' })
       store.activity(`将 ${list.length} 个文件标记为已整理`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
   })
   app.post('/api/files/trash', async (req) => {
     const list = chosenFiles(object(req.body).ids)
@@ -978,7 +1359,7 @@ export async function createApp(
         })
       store.activity(`将 ${list.length} 个文件移入回收站`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
   })
   app.post('/api/files/restore', async (req) => {
     const list = chosenFiles(object(req.body).ids, true)
@@ -989,7 +1370,7 @@ export async function createApp(
       }
       store.activity(`从回收站恢复 ${list.length} 个文件`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
   })
   app.post('/api/files/rename', async (req) => {
     const body = object(req.body),
@@ -1110,7 +1491,10 @@ export async function createApp(
         `${aiRunId ? '确认 AI 方案，' : ''}整理 ${selected.length} 个文件的名称${tagPlan.length ? '与分类' : ''}`,
       )
     })
-    return { workspace: store.workspace(config.quotaBytes, config.requestBytes), operationId }
+    return {
+      workspace: store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req)),
+      operationId,
+    }
   })
   app.post('/api/files/rename/:id/undo', async (req) => {
     const id = String(object(req.params).id),
@@ -1165,7 +1549,7 @@ export async function createApp(
       store.db.prepare('UPDATE renames SET undone=1 WHERE id=?').run(id)
       store.activity(`撤销了 ${files.length} 个文件的整理操作`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes)
+    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
   })
   app.get('/api/storage', async () =>
     storageSpace(
@@ -1184,8 +1568,8 @@ export async function createApp(
   )
   const archives = registerArchives(app, store)
   registerCollectionWorkflows(app, store, requirePublicAccess)
-  registerMaterials(app, store, config, session)
-  await registerUploads(app, store, config, budget, requirePublicAccess)
+  registerMaterials(app, store, config, session, webhooks, workspaceOptions)
+  await registerUploads(app, store, config, budget, requirePublicAccess, webhooks)
   registerUsers(app, store, (req) => session(req)?.id)
   const backups = await registerBackups(
     app,
@@ -1258,7 +1642,7 @@ export async function createApp(
       )
     }
     return {
-      workspace: store.workspace(config.quotaBytes, config.requestBytes),
+      workspace: store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req)),
       purged: targets.length,
       freedBytes,
       ...(failedFiles.length
@@ -1279,6 +1663,7 @@ export async function createApp(
     options.storageRetry,
   )
   app.addHook('onClose', async () => {
+    await webhooks.stop()
     await stopStorage()
     await stopContent()
     await backups.stop()
@@ -1292,5 +1677,5 @@ export async function createApp(
     })
   }
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: '页面或接口不存在' }))
-  return { app, store }
+  return { app, store, webhooks }
 }

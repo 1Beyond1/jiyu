@@ -236,12 +236,19 @@ export function registerStorage(
     const allProfiles = profiles()
     const transfers = (
       store.db
-        .prepare('SELECT * FROM remote_transfers ORDER BY updated_at DESC LIMIT 100')
-        .all() as unknown as TransferInfo[]
-    ).map((t) => {
+        .prepare(
+          'SELECT t.*, f.name AS file_name, f.deleted_at AS file_deleted_at FROM remote_transfers t LEFT JOIN files f ON f.id = t.file_id ORDER BY t.updated_at DESC LIMIT 100',
+        )
+        .all() as unknown as (TransferInfo & {
+        file_name?: string | null
+        file_deleted_at?: string | null
+      })[]
+    ).map(({ file_name, file_deleted_at, ...t }) => {
       const retry = readRetryState(t.file_id)
       return {
         ...t,
+        ...(file_name ? { fileName: file_name } : {}),
+        fileActive: file_name != null && file_deleted_at == null,
         retryCount: retry?.retryCount ?? 0,
         ...(retry?.nextRetryAt ? { nextRetryAt: retry.nextRetryAt } : {}),
       }
@@ -262,8 +269,20 @@ export function registerStorage(
       supported: [...implemented],
       callbackUrls: {},
       transfers: transfers.map(
-        ({ file_id, provider, state, attempts, retryCount, nextRetryAt, updated_at }) => ({
+        ({
           file_id,
+          fileName,
+          fileActive,
+          provider,
+          state,
+          attempts,
+          retryCount,
+          nextRetryAt,
+          updated_at,
+        }) => ({
+          file_id,
+          ...(fileName ? { fileName } : {}),
+          fileActive,
           provider,
           state,
           attempts,

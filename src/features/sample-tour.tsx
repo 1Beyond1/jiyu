@@ -81,9 +81,14 @@ async function createSample(create: (body: unknown) => Promise<Workspace | undef
 
 function tourStep(c: Collection, workspace: Workspace) {
   const person = materialParticipants(c, workspace.files).find((p) => p.identity === 'DEMO-01')
-  const replaced = (workspace.trash || []).some(
-    (f) => f.collectionId === c.id && (f.participant || f.owner) === 'DEMO-01',
-  )
+  const replaced =
+    (workspace.trash || []).some(
+      (f) => f.collectionId === c.id && (f.participant || f.owner) === 'DEMO-01',
+    ) ||
+    (Boolean(workspace.summaryMode) &&
+      c.activeFiles !== undefined &&
+      c.received > c.activeFiles &&
+      (person?.files.length ?? 0) >= 2)
   if (person?.reviewComplete)
     return {
       n: 4,
