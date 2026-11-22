@@ -12,18 +12,24 @@ test('首次启动仅回环监听时输出初始化口令', async () => {
   try {
     for (const host of ['127.0.0.1', '0.0.0.0']) {
       const server = createServer()
-      await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
       const port = (server.address() as { port: number }).port
-      await new Promise<void>(r => server.close(() => r()))
+      await new Promise<void>((r) => server.close(() => r()))
       const child = spawn(process.execPath, ['--experimental-strip-types', 'server/index.ts'], {
-        env: { ...process.env, JIYU_HOST: host, JIYU_PORT: String(port), JIYU_DATA_DIR: join(dir, host), JIYU_ORIGIN: `http://127.0.0.1:${port}` },
+        env: {
+          ...process.env,
+          JIYU_HOST: host,
+          JIYU_PORT: String(port),
+          JIYU_DATA_DIR: join(dir, host),
+          JIYU_ORIGIN: `http://127.0.0.1:${port}`,
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       let output = ''
       try {
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => reject(Error('服务启动超时')), 10000)
-          child.stdout.on('data', chunk => {
+          child.stdout.on('data', (chunk) => {
             output += chunk.toString()
             if (output.includes('首次使用请读取')) {
               clearTimeout(timeout)
@@ -31,12 +37,12 @@ test('首次启动仅回环监听时输出初始化口令', async () => {
             }
           })
           child.once('error', reject)
-          child.once('exit', code => reject(Error(`启动退出 ${code}`)))
+          child.once('exit', (code) => reject(Error(`启动退出 ${code}`)))
         })
         assert.equal(output.includes('初始化口令：'), host === '127.0.0.1')
       } finally {
         child.kill()
-        await new Promise<void>(r => child.once('exit', () => r()))
+        await new Promise<void>((r) => child.once('exit', () => r()))
       }
     }
   } finally {

@@ -7,41 +7,92 @@ import type { Config } from './config.ts'
 import type { DiagnosticItem } from '../src/types.ts'
 
 test('部署检查读取真实环境、提示 HTTP 与未配置备份，临时探针不残留', async () => {
-  const root = resolve('.artifacts'); await mkdir(root, { recursive: true }); const dir = await mkdtemp(join(root, 'diagnostics-test-'))
-  const config: Config = { dataDir: join(dir, 'data'), origin: 'http://127.0.0.1:3000', host: '127.0.0.1', port: 3000, quotaBytes: 1024 ** 3, requestBytes: 1024 ** 2, secureCookie: false }
+  const root = resolve('.artifacts')
+  await mkdir(root, { recursive: true })
+  const dir = await mkdtemp(join(root, 'diagnostics-test-'))
+  const config: Config = {
+    dataDir: join(dir, 'data'),
+    origin: 'http://127.0.0.1:3000',
+    host: '127.0.0.1',
+    port: 3000,
+    quotaBytes: 1024 ** 3,
+    requestBytes: 1024 ** 2,
+    secureCookie: false,
+  }
   const { app, store } = await createApp(config, { serveFrontend: false })
   try {
     const origin = { origin: config.origin }
-    assert.equal((await app.inject({ method: 'POST', url: '/api/settings/diagnostics', headers: origin, payload: {} })).statusCode, 401)
-    const setup = await app.inject({ method: 'POST', url: '/api/auth/setup', headers: origin, payload: { setupToken: store.setupToken(), password: 'test-diagnostics-password', displayName: '环境测试' } })
-    const headers = { ...origin, cookie: setup.headers['set-cookie']!.toString().split(';')[0], 'x-csrf-token': setup.json().csrf }
+    assert.equal(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/settings/diagnostics',
+          headers: origin,
+          payload: {},
+        })
+      ).statusCode,
+      401,
+    )
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/setup',
+      headers: origin,
+      payload: {
+        setupToken: store.setupToken(),
+        password: 'test-diagnostics-password',
+        displayName: '环境测试',
+      },
+    })
+    const headers = {
+      ...origin,
+      cookie: setup.headers['set-cookie']!.toString().split(';')[0],
+      'x-csrf-token': setup.json().csrf,
+    }
     const workspace = await app.inject({ method: 'GET', url: '/api/workspace', headers })
     assert.equal(workspace.json().requestLimitMB, 1)
-    const checked = await app.inject({ method: 'POST', url: '/api/settings/diagnostics', headers, payload: {} })
+    const checked = await app.inject({
+      method: 'POST',
+      url: '/api/settings/diagnostics',
+      headers,
+      payload: {},
+    })
     assert.equal(checked.statusCode, 200, checked.body)
     const rows = checked.json().items as DiagnosticItem[]
-    assert.equal(rows.find(r => r.id === 'data')?.state, 'ok'); assert.equal(rows.find(r => r.id === 'database')?.state, 'ok')
-    assert.equal(rows.find(r => r.id === 'origin')?.state, 'attention'); assert.equal(rows.find(r => r.id === 'backup')?.state, 'attention')
-    assert.equal(rows.length, 7); assert.deepEqual(await readdir(join(config.dataDir, 'tmp')), [])
+    assert.equal(rows.find((r) => r.id === 'data')?.state, 'ok')
+    assert.equal(rows.find((r) => r.id === 'database')?.state, 'ok')
+    assert.equal(rows.find((r) => r.id === 'origin')?.state, 'attention')
+    assert.equal(rows.find((r) => r.id === 'backup')?.state, 'attention')
+    assert.equal(rows.length, 7)
+    assert.deepEqual(await readdir(join(config.dataDir, 'tmp')), [])
     assert.equal(store.files().length, 0)
 
     // Verify JIYU_PDFTOTEXT / JIYU_TESSERACT environment overrides are respected.
-    const oldPdf = process.env.JIYU_PDFTOTEXT, oldOcr = process.env.JIYU_TESSERACT
+    const oldPdf = process.env.JIYU_PDFTOTEXT,
+      oldOcr = process.env.JIYU_TESSERACT
     try {
       process.env.JIYU_PDFTOTEXT = process.execPath
       process.env.JIYU_TESSERACT = process.execPath
-      const customOk = (await app.inject({ method: 'POST', url: '/api/settings/diagnostics', headers, payload: {} })).json().items as DiagnosticItem[]
-      assert.equal(customOk.find(r => r.id === 'pdf')?.state, 'ok')
-      assert.equal(customOk.find(r => r.id === 'ocr')?.state, 'ok')
+      const customOk = (
+        await app.inject({ method: 'POST', url: '/api/settings/diagnostics', headers, payload: {} })
+      ).json().items as DiagnosticItem[]
+      assert.equal(customOk.find((r) => r.id === 'pdf')?.state, 'ok')
+      assert.equal(customOk.find((r) => r.id === 'ocr')?.state, 'ok')
 
       process.env.JIYU_PDFTOTEXT = join(dir, 'missing-pdftotext-bin')
       process.env.JIYU_TESSERACT = join(dir, 'missing-tesseract-bin')
-      const customMissing = (await app.inject({ method: 'POST', url: '/api/settings/diagnostics', headers, payload: {} })).json().items as DiagnosticItem[]
-      assert.equal(customMissing.find(r => r.id === 'pdf')?.state, 'attention')
-      assert.equal(customMissing.find(r => r.id === 'ocr')?.state, 'attention')
+      const customMissing = (
+        await app.inject({ method: 'POST', url: '/api/settings/diagnostics', headers, payload: {} })
+      ).json().items as DiagnosticItem[]
+      assert.equal(customMissing.find((r) => r.id === 'pdf')?.state, 'attention')
+      assert.equal(customMissing.find((r) => r.id === 'ocr')?.state, 'attention')
     } finally {
-      if (oldPdf === undefined) delete process.env.JIYU_PDFTOTEXT; else process.env.JIYU_PDFTOTEXT = oldPdf
-      if (oldOcr === undefined) delete process.env.JIYU_TESSERACT; else process.env.JIYU_TESSERACT = oldOcr
+      if (oldPdf === undefined) delete process.env.JIYU_PDFTOTEXT
+      else process.env.JIYU_PDFTOTEXT = oldPdf
+      if (oldOcr === undefined) delete process.env.JIYU_TESSERACT
+      else process.env.JIYU_TESSERACT = oldOcr
     }
-  } finally { await app.close(); if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true }) }
+  } finally {
+    await app.close()
+    if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true })
+  }
 })

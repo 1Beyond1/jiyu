@@ -1,9 +1,15 @@
 export type Page = 'overview' | 'collections' | 'files' | 'tools' | 'storage' | 'settings' | 'trash'
 export type CollectionStatus = 'active' | 'completed' | 'paused'
 export const cloudStorageIds = ['webdav', 's3', 'baidu', 'onedrive', 'gdrive'] as const
-export type StorageId = 'local' | typeof cloudStorageIds[number]
+export type StorageId = 'local' | (typeof cloudStorageIds)[number]
 export type UserRole = 'admin' | 'editor' | 'viewer'
-export interface SessionUser { id: string; username: string; displayName: string; role: UserRole; disabled?: boolean }
+export interface SessionUser {
+  id: string
+  username: string
+  displayName: string
+  role: UserRole
+  disabled?: boolean
+}
 
 export interface Collection {
   id: string
@@ -29,42 +35,217 @@ export interface Collection {
   allowReplacement?: boolean
   materials?: MaterialRequirement[]
   materialRevision?: string
-  draftOrigin?: { runId: string; testMode: boolean; confirmedAt: string; resolutions: { question: string; answer?: string; materialId?: string; skipped?: boolean }[] }
+  draftOrigin?: {
+    runId: string
+    testMode: boolean
+    confirmedAt: string
+    resolutions: { question: string; answer?: string; materialId?: string; skipped?: boolean }[]
+  }
 }
 
-export interface DraftMaterial extends Omit<MaterialRequirement, 'required'> { required: boolean | null; sourceQuote: string }
-export interface CollectionDraft { runId: string; source: string; title: string; description: string; materials: DraftMaterial[]; clarifications: { id: string; question: string; sourceQuote: string; materialId: string | null }[]; testMode: boolean }
-export interface DraftConfirmation { runId: string; confirmed: boolean; resolutions: { id: string; answer?: string; materialId?: string; skipped?: boolean }[] }
+export interface DraftMaterial extends Omit<MaterialRequirement, 'required'> {
+  required: boolean | null
+  sourceQuote: string
+}
+export interface CollectionDraft {
+  runId: string
+  source: string
+  title: string
+  description: string
+  materials: DraftMaterial[]
+  clarifications: { id: string; question: string; sourceQuote: string; materialId: string | null }[]
+  testMode: boolean
+}
+export interface DraftConfirmation {
+  runId: string
+  confirmed: boolean
+  resolutions: { id: string; answer?: string; materialId?: string; skipped?: boolean }[]
+}
 export type CollectionInput = Collection & { draftConfirmation?: DraftConfirmation }
 
-export interface MaterialRequirement { id: string; name: string; required: boolean; description: string }
-export type MaterialReviewState = 'unclassified' | 'pending' | 'accepted' | 'needs_changes' | 'stale'
-export interface MaterialReview { decision: 'accepted' | 'needs_changes'; note: string; rulesRevision: string; fileVersion: string; operationId: string; reviewerId: string; reviewerName: string; reviewedAt: string }
-export interface MaterialAction { id: string; signature: string; resultVersion: string }
-export interface MaterialOperation { collectionId: string; rulesRevision: string; requestId: string; files: { id: string; expectedVersion: string; materialId?: string }[]; decision?: 'accepted' | 'needs_changes'; note?: string; aiReview?: { runId: string; fileId: string; acknowledged: boolean } }
-export interface MaterialAISource { id: string; alias: string; name: string; materialId: string; expectedVersion: string; sha256: string; contentVersion: string; extractionStatus: string; kind: string; coverage: 'full' | 'partial' | 'unread'; excerpt: string; start: number; end: number; reason: string }
-export interface MaterialAIPreview { previewId: string; collectionId: string; title: string; description: string; rulesRevision: string; materials: MaterialRequirement[]; sources: MaterialAISource[]; settingsRevision: string; expiresAt: string; testMode: boolean }
-export interface MaterialAIFinding { fileId: string; assessment: 'attention' | 'uncertain' | 'no_issue_in_excerpt'; materialId: string; message: string; suggestion: string; evidence: { fileId: string; start: number; end: number; quote: string }[] }
-export interface MaterialAIPlan { runId: string; preview: MaterialAIPreview; model: string; tokens: number | null; createdAt: string; findings: MaterialAIFinding[]; stale: boolean; staleReason?: string; dispositions?: Record<string, { kind: string; decision?: string; materialId?: string; note: string; at: string; by: string }> }
-export interface MaterialSlot { requirement: MaterialRequirement; files: CollectedFile[]; state: 'missing' | 'duplicate' | MaterialReviewState; duplicate: boolean }
-export interface MaterialParticipant { identity: string; owner: string; expected: boolean; files: CollectedFile[]; slots: MaterialSlot[]; unclassified: CollectedFile[]; receivedComplete: boolean; reviewComplete: boolean; status: 'missing' | 'needs_changes' | 'unclassified' | 'pending' | 'accepted'; duplicateCount: number }
+export interface MaterialRequirement {
+  id: string
+  name: string
+  required: boolean
+  description: string
+}
+export type MaterialReviewState =
+  | 'unclassified'
+  | 'pending'
+  | 'accepted'
+  | 'needs_changes'
+  | 'stale'
+export interface MaterialReview {
+  decision: 'accepted' | 'needs_changes'
+  note: string
+  rulesRevision: string
+  fileVersion: string
+  operationId: string
+  reviewerId: string
+  reviewerName: string
+  reviewedAt: string
+}
+export interface MaterialAction {
+  id: string
+  signature: string
+  resultVersion: string
+}
+export interface MaterialOperation {
+  collectionId: string
+  rulesRevision: string
+  requestId: string
+  files: { id: string; expectedVersion: string; materialId?: string }[]
+  decision?: 'accepted' | 'needs_changes'
+  note?: string
+  aiReview?: { runId: string; fileId: string; acknowledged: boolean }
+}
+export interface MaterialAISource {
+  id: string
+  alias: string
+  name: string
+  materialId: string
+  expectedVersion: string
+  sha256: string
+  contentVersion: string
+  extractionStatus: string
+  kind: string
+  coverage: 'full' | 'partial' | 'unread'
+  excerpt: string
+  start: number
+  end: number
+  reason: string
+}
+export interface MaterialAIPreview {
+  previewId: string
+  collectionId: string
+  title: string
+  description: string
+  rulesRevision: string
+  materials: MaterialRequirement[]
+  sources: MaterialAISource[]
+  settingsRevision: string
+  expiresAt: string
+  testMode: boolean
+}
+export interface MaterialAIFinding {
+  fileId: string
+  assessment: 'attention' | 'uncertain' | 'no_issue_in_excerpt'
+  materialId: string
+  message: string
+  suggestion: string
+  evidence: { fileId: string; start: number; end: number; quote: string }[]
+}
+export interface MaterialAIPlan {
+  runId: string
+  preview: MaterialAIPreview
+  model: string
+  tokens: number | null
+  createdAt: string
+  findings: MaterialAIFinding[]
+  stale: boolean
+  staleReason?: string
+  dispositions?: Record<
+    string,
+    { kind: string; decision?: string; materialId?: string; note: string; at: string; by: string }
+  >
+}
+export interface MaterialSlot {
+  requirement: MaterialRequirement
+  files: CollectedFile[]
+  state: 'missing' | 'duplicate' | MaterialReviewState
+  duplicate: boolean
+}
+export interface MaterialParticipant {
+  identity: string
+  owner: string
+  expected: boolean
+  files: CollectedFile[]
+  slots: MaterialSlot[]
+  unclassified: CollectedFile[]
+  receivedComplete: boolean
+  reviewComplete: boolean
+  status: 'missing' | 'needs_changes' | 'unclassified' | 'pending' | 'accepted'
+  duplicateCount: number
+}
 export interface MaterialStateReport {
   collectionId: string
   rulesRevision: string
   stateVersion: string
   generatedAt: string
   requirements: MaterialRequirement[]
-  summary: { participants: number; receivedComplete: number; reviewComplete: number; missing: number; needsChanges: number; unclassified: number }
-  participants: (Omit<MaterialParticipant, 'files' | 'slots' | 'unclassified'> & { unclassifiedFileIds: string[]; slots: { materialId: string; state: MaterialSlot['state']; label: string; fileIds: string[]; duplicate: boolean }[] })[]
-  files: { id: string; materialId: string; materialState: MaterialReviewState; materialNote: string; expectedVersion: string }[]
+  summary: {
+    participants: number
+    receivedComplete: number
+    reviewComplete: number
+    missing: number
+    needsChanges: number
+    unclassified: number
+  }
+  participants: (Omit<MaterialParticipant, 'files' | 'slots' | 'unclassified'> & {
+    unclassifiedFileIds: string[]
+    slots: {
+      materialId: string
+      state: MaterialSlot['state']
+      label: string
+      fileIds: string[]
+      duplicate: boolean
+    }[]
+  })[]
+  files: {
+    id: string
+    materialId: string
+    materialState: MaterialReviewState
+    materialNote: string
+    expectedVersion: string
+  }[]
 }
-export interface CollectionField { id: string; label: string; required: boolean }
-export interface CollectionTemplate { id: string; name: string; rules: Partial<Collection>; archived: boolean }
-export interface SubmissionMetadata { fields?: Record<string, string>; replace?: { receiptId: string; key: string }; materialIds?: string[] }
-export interface Participant { identity: string; owner: string; expected: boolean; fileIds: string[]; bytes: number; submissions: number; latestAt: string; duplicates: number }
-export interface ReceiptDetail { receipt: UploadReceipt; owner: string; fields: Record<string, string>; files: (Pick<CollectedFile, 'id' | 'name' | 'size' | 'materialId'> & { materialState?: MaterialReviewState; materialNote?: string })[]; superseded: boolean }
-export interface DiagnosticItem { id: string; label: string; state: 'ok' | 'attention'; detail: string; action?: string }
-export interface Diagnostics { checkedAt: string; items: DiagnosticItem[] }
+export interface CollectionField {
+  id: string
+  label: string
+  required: boolean
+}
+export interface CollectionTemplate {
+  id: string
+  name: string
+  rules: Partial<Collection>
+  archived: boolean
+}
+export interface SubmissionMetadata {
+  fields?: Record<string, string>
+  replace?: { receiptId: string; key: string }
+  materialIds?: string[]
+}
+export interface Participant {
+  identity: string
+  owner: string
+  expected: boolean
+  fileIds: string[]
+  bytes: number
+  submissions: number
+  latestAt: string
+  duplicates: number
+}
+export interface ReceiptDetail {
+  receipt: UploadReceipt
+  owner: string
+  fields: Record<string, string>
+  files: (Pick<CollectedFile, 'id' | 'name' | 'size' | 'materialId'> & {
+    materialState?: MaterialReviewState
+    materialNote?: string
+  })[]
+  superseded: boolean
+}
+export interface DiagnosticItem {
+  id: string
+  label: string
+  state: 'ok' | 'attention'
+  detail: string
+  action?: string
+}
+export interface Diagnostics {
+  checkedAt: string
+  items: DiagnosticItem[]
+}
 
 export interface CollectedFile {
   id: string
@@ -109,24 +290,127 @@ export interface Workspace {
   lastRenameId?: string
 }
 
-export interface UploadReceipt { receiptId: string; filesCount: number; bytes: number; createdAt: string; editKey?: string }
-export type UploadFileState = 'queued' | 'checking' | 'uploading' | 'retrying' | 'uploaded' | 'saving' | 'received' | 'paused' | 'failed'
-export interface UploadFileProgress { state: UploadFileState; sentBytes: number; totalBytes: number; message?: string }
-export interface UploadFeedback { phase: 'preparing' | 'uploading' | 'saving' | 'received' | 'paused' | 'failed'; files: UploadFileProgress[] }
-export interface BackupSettings { enabled: boolean; intervalHours: number; keep: number }
-export interface BackupInfo { id: string; createdAt: string; files: number; bytes: number }
-export interface BackupRun { id: string; status: 'running' | 'succeeded' | 'failed'; startedAt: string; finishedAt?: string; error?: string }
-export interface BackupStatus { settings: BackupSettings; lastRun: BackupRun | null; backups: BackupInfo[]; directory: string; maxKeep?: number }
-export interface DocumentInfo { file_id: string; status: 'queued' | 'processing' | 'ready' | 'failed' | 'unsupported'; kind?: string; chars: number; truncated: number; updated_at?: string; error?: string }
-export interface FileContent { preview: 'image' | 'pdf' | 'text' | 'none'; mime?: string; text?: string; document?: DocumentInfo }
-export interface StorageProfile { id: Exclude<StorageId, 'local'>; endpoint: string; root: string; region?: string; bucket?: string; username?: string; clientId?: string; via?: 'webdav'; hasCredentials: boolean; authorized?: boolean; enabled: boolean; verifiedAt?: string; revision: string }
-export interface StorageSpace { usedBytes: number; quotaBytes: number; reservedBytes: number; quotaRemainingBytes: number; totalBytes: number | null; availableBytes: number | null; receiveRemainingBytes: number | null; checkedAt: string; diskError?: string }
-export interface TransferInfo { file_id: string; provider: string; state: string; attempts: number; error?: string; updated_at: string; remote_path?: string }
+export interface UploadReceipt {
+  receiptId: string
+  filesCount: number
+  bytes: number
+  createdAt: string
+  editKey?: string
+}
+export type UploadFileState =
+  | 'queued'
+  | 'checking'
+  | 'uploading'
+  | 'retrying'
+  | 'uploaded'
+  | 'saving'
+  | 'received'
+  | 'paused'
+  | 'failed'
+export interface UploadFileProgress {
+  state: UploadFileState
+  sentBytes: number
+  totalBytes: number
+  message?: string
+}
+export interface UploadFeedback {
+  phase: 'preparing' | 'uploading' | 'saving' | 'received' | 'paused' | 'failed'
+  files: UploadFileProgress[]
+}
+export interface BackupSettings {
+  enabled: boolean
+  intervalHours: number
+  keep: number
+}
+export interface BackupInfo {
+  id: string
+  createdAt: string
+  files: number
+  bytes: number
+}
+export interface BackupRun {
+  id: string
+  status: 'running' | 'succeeded' | 'failed'
+  startedAt: string
+  finishedAt?: string
+  error?: string
+}
+export interface BackupStatus {
+  settings: BackupSettings
+  lastRun: BackupRun | null
+  backups: BackupInfo[]
+  directory: string
+  maxKeep?: number
+}
+export interface DocumentInfo {
+  file_id: string
+  status: 'queued' | 'processing' | 'ready' | 'failed' | 'unsupported'
+  kind?: string
+  chars: number
+  truncated: number
+  updated_at?: string
+  error?: string
+}
+export interface FileContent {
+  preview: 'image' | 'pdf' | 'text' | 'none'
+  mime?: string
+  text?: string
+  document?: DocumentInfo
+}
+export interface StorageProfile {
+  id: Exclude<StorageId, 'local'>
+  endpoint: string
+  root: string
+  region?: string
+  bucket?: string
+  username?: string
+  clientId?: string
+  via?: 'webdav'
+  hasCredentials: boolean
+  authorized?: boolean
+  enabled: boolean
+  verifiedAt?: string
+  revision: string
+}
+export interface StorageSpace {
+  usedBytes: number
+  quotaBytes: number
+  reservedBytes: number
+  quotaRemainingBytes: number
+  totalBytes: number | null
+  availableBytes: number | null
+  receiveRemainingBytes: number | null
+  checkedAt: string
+  diskError?: string
+}
+export interface TransferInfo {
+  file_id: string
+  provider: string
+  state: string
+  attempts: number
+  error?: string
+  updated_at: string
+  remote_path?: string
+}
 
 export type ArchiveLayout = 'flat' | 'collection' | 'owner' | 'collection-owner'
 export type ArchiveStatus = 'ready' | 'streaming' | 'completed' | 'failed' | 'cancelled'
-export interface ArchiveEntry { id: string; name: string; path: string; size: number }
-export interface ArchivePlan { id: string; fileName: string; layout: ArchiveLayout; totalBytes: number; entries: ArchiveEntry[]; expiresAt: string; status: ArchiveStatus; error?: string }
+export interface ArchiveEntry {
+  id: string
+  name: string
+  path: string
+  size: number
+}
+export interface ArchivePlan {
+  id: string
+  fileName: string
+  layout: ArchiveLayout
+  totalBytes: number
+  entries: ArchiveEntry[]
+  expiresAt: string
+  status: ArchiveStatus
+  error?: string
+}
 
 export interface AISettings {
   materialToolMode?: boolean
@@ -145,11 +429,38 @@ export interface AISettings {
   keyReady: boolean
   usedToday: number
 }
-export interface RenameChange { id: string; oldName: string; name: string }
-export interface TagChange { id: string; name: string; oldTags: string[]; tags: string[] }
-export interface AIReply { runId: string; reply: string; changes: RenameChange[]; tags?: TagChange[]; tokens: number | null }
-export interface AIRun { id: string; model: string; fileCount: number; status: string; tokens: number | null; createdAt: string }
+export interface RenameChange {
+  id: string
+  oldName: string
+  name: string
+}
+export interface TagChange {
+  id: string
+  name: string
+  oldTags: string[]
+  tags: string[]
+}
+export interface AIReply {
+  runId: string
+  reply: string
+  changes: RenameChange[]
+  tags?: TagChange[]
+  tokens: number | null
+}
+export interface AIRun {
+  id: string
+  model: string
+  fileCount: number
+  status: string
+  tokens: number | null
+  createdAt: string
+}
 
 export const storageNames: Record<StorageId, string> = {
-  local: '本地存储', onedrive: 'OneDrive', s3: 'S3 对象存储', webdav: 'WebDAV', baidu: '百度网盘', gdrive: 'Google Drive',
+  local: '本地存储',
+  onedrive: 'OneDrive',
+  s3: 'S3 对象存储',
+  webdav: 'WebDAV',
+  baidu: '百度网盘',
+  gdrive: 'Google Drive',
 }

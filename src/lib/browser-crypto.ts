@@ -1,8 +1,7 @@
 // Browser-safe UUID and SHA-256 helpers that work on both HTTPS and non-HTTPS LAN origins.
 
 const SHA256_INIT = new Uint32Array([
-  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-  0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ])
 
 const SHA256_K = new Uint32Array([
@@ -22,7 +21,9 @@ function fillRandomBytes(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer
     try {
       c.getRandomValues(bytes)
       return bytes
-    } catch { /* Fall back below if the environment blocks WebCrypto. */ }
+    } catch {
+      /* Fall back below if the environment blocks WebCrypto. */
+    }
   }
   let seed = Date.now() ^ (Math.floor(Math.random() * 0x100000000) >>> 0)
   for (let i = 0; i < bytes.length; i++) {
@@ -47,7 +48,9 @@ export function safeRandomUUID(): string {
   if (c && typeof c.randomUUID === 'function') {
     try {
       return c.randomUUID()
-    } catch { /* Fall back to RFC 4122 v4 generation on non-secure contexts. */ }
+    } catch {
+      /* Fall back to RFC 4122 v4 generation on non-secure contexts. */
+    }
   }
   const bytes = fillRandomBytes(new Uint8Array(16))
   bytes[6] = (bytes[6] & 0x0f) | 0x40
@@ -58,7 +61,7 @@ export function safeRandomUUID(): string {
 
 export function sha256BytesFallback(data: Uint8Array): Uint8Array {
   const len = data.length
-  const totalLen = ((len + 9 + 63) & ~63)
+  const totalLen = (len + 9 + 63) & ~63
   const padded = new Uint8Array(totalLen)
   padded.set(data)
   padded[len] = 0x80
@@ -68,19 +71,33 @@ export function sha256BytesFallback(data: Uint8Array): Uint8Array {
   view.setUint32(totalLen - 8, highBits, false)
   view.setUint32(totalLen - 4, lowBits, false)
 
-  let h0 = SHA256_INIT[0], h1 = SHA256_INIT[1], h2 = SHA256_INIT[2], h3 = SHA256_INIT[3]
-  let h4 = SHA256_INIT[4], h5 = SHA256_INIT[5], h6 = SHA256_INIT[6], h7 = SHA256_INIT[7]
+  let h0 = SHA256_INIT[0],
+    h1 = SHA256_INIT[1],
+    h2 = SHA256_INIT[2],
+    h3 = SHA256_INIT[3]
+  let h4 = SHA256_INIT[4],
+    h5 = SHA256_INIT[5],
+    h6 = SHA256_INIT[6],
+    h7 = SHA256_INIT[7]
   const w = new Uint32Array(64)
 
   for (let offset = 0; offset < totalLen; offset += 64) {
     for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false)
     for (let i = 16; i < 64; i++) {
-      const w15 = w[i - 15], w2 = w[i - 2]
+      const w15 = w[i - 15],
+        w2 = w[i - 2]
       const s0 = ((w15 >>> 7) | (w15 << 25)) ^ ((w15 >>> 18) | (w15 << 14)) ^ (w15 >>> 3)
       const s1 = ((w2 >>> 17) | (w2 << 15)) ^ ((w2 >>> 19) | (w2 << 13)) ^ (w2 >>> 10)
       w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0
     }
-    let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7
+    let a = h0,
+      b = h1,
+      c = h2,
+      d = h3,
+      e = h4,
+      f = h5,
+      g = h6,
+      h = h7
     for (let i = 0; i < 64; i++) {
       const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7))
       const ch = (e & f) ^ (~e & g)
@@ -88,19 +105,35 @@ export function sha256BytesFallback(data: Uint8Array): Uint8Array {
       const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10))
       const maj = (a & b) ^ (a & c) ^ (b & c)
       const temp2 = (S0 + maj) >>> 0
-      h = g; g = f; f = e; e = (d + temp1) >>> 0
-      d = c; c = b; b = a; a = (temp1 + temp2) >>> 0
+      h = g
+      g = f
+      f = e
+      e = (d + temp1) >>> 0
+      d = c
+      c = b
+      b = a
+      a = (temp1 + temp2) >>> 0
     }
-    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0
-    h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0
+    h0 = (h0 + a) >>> 0
+    h1 = (h1 + b) >>> 0
+    h2 = (h2 + c) >>> 0
+    h3 = (h3 + d) >>> 0
+    h4 = (h4 + e) >>> 0
+    h5 = (h5 + f) >>> 0
+    h6 = (h6 + g) >>> 0
+    h7 = (h7 + h) >>> 0
   }
 
   const out = new Uint8Array(32)
   const outView = new DataView(out.buffer)
-  outView.setUint32(0, h0, false); outView.setUint32(4, h1, false)
-  outView.setUint32(8, h2, false); outView.setUint32(12, h3, false)
-  outView.setUint32(16, h4, false); outView.setUint32(20, h5, false)
-  outView.setUint32(24, h6, false); outView.setUint32(28, h7, false)
+  outView.setUint32(0, h0, false)
+  outView.setUint32(4, h1, false)
+  outView.setUint32(8, h2, false)
+  outView.setUint32(12, h3, false)
+  outView.setUint32(16, h4, false)
+  outView.setUint32(20, h5, false)
+  outView.setUint32(24, h6, false)
+  outView.setUint32(28, h7, false)
   return out
 }
 
@@ -117,10 +150,15 @@ export async function sha256Buffer(input: Uint8Array | ArrayBuffer | string): Pr
       const copy = new Uint8Array(bytes.byteLength)
       copy.set(bytes)
       return await subtle.digest('SHA-256', copy.buffer)
-    } catch { /* Fall back to pure-JS SHA-256 if subtle is unavailable or restricted. */ }
+    } catch {
+      /* Fall back to pure-JS SHA-256 if subtle is unavailable or restricted. */
+    }
   }
   const digest = sha256BytesFallback(bytes)
-  return digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength) as ArrayBuffer
+  return digest.buffer.slice(
+    digest.byteOffset,
+    digest.byteOffset + digest.byteLength,
+  ) as ArrayBuffer
 }
 
 export async function sha256Hex(input: Uint8Array | ArrayBuffer | string): Promise<string> {

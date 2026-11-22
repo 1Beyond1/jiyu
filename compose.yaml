@@ -8,7 +8,7 @@ services:
       JIYU_DATA_DIR: /data/${JIYU_DATA_SUBDIR:-live}
       JIYU_QUOTA_MB: ${JIYU_QUOTA_MB:-10240}
       JIYU_REQUEST_MB: ${JIYU_REQUEST_MB:-512}
-      JIYU_TRUST_PROXY: 'true'
+      JIYU_TRUST_PROXY: "true"
       JIYU_BACKUP_DIR: /backups
       JIYU_BACKUP_MAX_KEEP: ${JIYU_BACKUP_MAX_KEEP:-30}
       JIYU_AI_BASE_URL: ${JIYU_AI_BASE_URL:-}
@@ -32,13 +32,13 @@ services:
     mem_limit: 768m
     logging:
       driver: json-file
-      options: { max-size: 10m, max-file: '2' }
+      options: { max-size: 10m, max-file: "2" }
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
       JIYU_DOMAIN: ${JIYU_DOMAIN:?请在 .env 中配置 JIYU_DOMAIN}
-    ports: ['80:80', '443:443', '443:443/udp']
+    ports: ["80:80", "443:443", "443:443/udp"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -48,7 +48,7 @@ services:
         condition: service_healthy
     logging:
       driver: json-file
-      options: { max-size: 10m, max-file: '2' }
+      options: { max-size: 10m, max-file: "2" }
 volumes:
   data:
   backups:

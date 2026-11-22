@@ -13,11 +13,18 @@ function masterKey(store: Store, create = false) {
   return key
 }
 export function encrypt(store: Store, value: string) {
-  const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', masterKey(store, true), iv)
+  const iv = randomBytes(12),
+    cipher = createCipheriv('aes-256-gcm', masterKey(store, true), iv)
   const data = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
-  return [iv, cipher.getAuthTag(), data].map(b => b.toString('base64')).join('.')
+  return [iv, cipher.getAuthTag(), data].map((b) => b.toString('base64')).join('.')
 }
 export function decrypt(store: Store, value: string) {
-  try { const [iv, tag, data] = value.split('.').map(s => Buffer.from(s, 'base64')); const cipher = createDecipheriv('aes-256-gcm', masterKey(store), iv); cipher.setAuthTag(tag); return Buffer.concat([cipher.update(data), cipher.final()]).toString('utf8') }
-  catch { throw new HttpError(400, '凭证无法解密，请从完整备份恢复或重新填写') }
+  try {
+    const [iv, tag, data] = value.split('.').map((s) => Buffer.from(s, 'base64'))
+    const cipher = createDecipheriv('aes-256-gcm', masterKey(store), iv)
+    cipher.setAuthTag(tag)
+    return Buffer.concat([cipher.update(data), cipher.final()]).toString('utf8')
+  } catch {
+    throw new HttpError(400, '凭证无法解密，请从完整备份恢复或重新填写')
+  }
 }

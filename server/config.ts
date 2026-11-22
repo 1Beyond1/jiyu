@@ -30,18 +30,25 @@ function envPositiveInt(key: string, fallback: number, max: number) {
 
 export function resolveRateLimits(overrides?: RateLimitConfig) {
   return {
-    globalPerMinute: overrides?.globalPerMinute ?? envPositiveInt('JIYU_RATE_LIMIT_GLOBAL', 180, 100000),
-    multipartPerHour: overrides?.multipartPerHour ?? envPositiveInt('JIYU_RATE_LIMIT_UPLOAD_MULTIPART', 30, 100000),
-    uploadCreatePerHour: overrides?.uploadCreatePerHour ?? envPositiveInt('JIYU_RATE_LIMIT_UPLOAD_CREATE', 60, 100000),
-    uploadChunkPerMinute: overrides?.uploadChunkPerMinute ?? envPositiveInt('JIYU_RATE_LIMIT_UPLOAD_CHUNK', 180, 100000),
+    globalPerMinute:
+      overrides?.globalPerMinute ?? envPositiveInt('JIYU_RATE_LIMIT_GLOBAL', 180, 100000),
+    multipartPerHour:
+      overrides?.multipartPerHour ?? envPositiveInt('JIYU_RATE_LIMIT_UPLOAD_MULTIPART', 30, 100000),
+    uploadCreatePerHour:
+      overrides?.uploadCreatePerHour ?? envPositiveInt('JIYU_RATE_LIMIT_UPLOAD_CREATE', 60, 100000),
+    uploadChunkPerMinute:
+      overrides?.uploadChunkPerMinute ??
+      envPositiveInt('JIYU_RATE_LIMIT_UPLOAD_CHUNK', 180, 100000),
   }
 }
 
 export function configFromEnv(): Config {
   const origin = new URL(process.env.JIYU_ORIGIN || 'http://127.0.0.1:3000').origin
   return {
-    dataDir: resolve(process.env.JIYU_DATA_DIR || 'data'), origin,
-    host: process.env.JIYU_HOST || '127.0.0.1', port: envPositiveInt('JIYU_PORT', 3000, 65535),
+    dataDir: resolve(process.env.JIYU_DATA_DIR || 'data'),
+    origin,
+    host: process.env.JIYU_HOST || '127.0.0.1',
+    port: envPositiveInt('JIYU_PORT', 3000, 65535),
     quotaBytes: envPositiveInt('JIYU_QUOTA_MB', 10240, 10485760) * 1024 * 1024,
     requestBytes: envPositiveInt('JIYU_REQUEST_MB', 512, 2048) * 1024 * 1024,
     secureCookie: origin.startsWith('https:'),
