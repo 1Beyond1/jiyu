@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { ArrowRight, Check, FileDown, LogOut } from 'lucide-react'
+import { ArrowRight, Check, FileDown, LogOut, ShieldAlert } from 'lucide-react'
 import { Modal } from '../components/ui'
 import type { Workspace } from '../types'
 import { downloadText } from '../lib/workspace'
+import { buildMetadataExport } from '../lib/metadata-export'
 import { api, setCsrf } from '../lib/api'
 import { AISettingsPanel } from './ai-settings'
 import { MembersPanel } from './members'
@@ -19,9 +20,11 @@ export function SettingsPage({
   onSave: (name: string) => void
   onLogout: () => void
 }) {
-  const { user, isAdmin } = useAccount()
+  const { user, isAdmin, canEdit } = useAccount()
   const [name, setName] = useState(workspace.displayName),
     [passwordOpen, setPasswordOpen] = useState(false)
+  const [fullExportOpen, setFullExportOpen] = useState(false),
+    [fullExportConfirmed, setFullExportConfirmed] = useState(false)
   const [currentPassword, setCurrentPassword] = useState(''),
     [password, setPassword] = useState(''),
     [confirmation, setConfirmation] = useState(''),
@@ -106,21 +109,35 @@ export function SettingsPage({
         )}
         <section className="settings-panel full">
           <h2>带走你的记录</h2>
-          <p>元数据清单包含任务与文件信息，完整正文需要使用备份或打包下载。</p>
+          <p>
+            默认导出会自动屏蔽活跃收集链接令牌（uploadToken）与应交名单（expectedSubmitters）。元数据清单不含文件正文，完整备份请使用上方备份功能或打包下载。
+          </p>
           <div className="button-row">
             <button
               className="button"
               onClick={() =>
                 downloadText(
                   '集屿-元数据清单.json',
-                  JSON.stringify(workspace, null, 2),
+                  JSON.stringify(buildMetadataExport(workspace), null, 2),
                   'application/json',
                 )
               }
             >
               <FileDown size={15} />
-              导出元数据清单
+              导出元数据清单（已脱敏）
             </button>
+            {canEdit && (
+              <button
+                className="button"
+                onClick={() => {
+                  setFullExportConfirmed(false)
+                  setFullExportOpen(true)
+                }}
+              >
+                <ShieldAlert size={15} />
+                包含敏感令牌与名单的完整导出
+              </button>
+            )}
             <a
               className="button"
               href="https://github.com/1Beyond1/jiyu/blob/main/docs/DEPLOYMENT.md"
@@ -133,6 +150,52 @@ export function SettingsPage({
           </div>
         </section>
       </div>
+      {fullExportOpen && (
+        <Modal
+          title="导出包含敏感信息的元数据清单？"
+          subtitle="请确认保存环境安全，切勿公开分享或提交至代码仓库。"
+          onClose={() => setFullExportOpen(false)}
+        >
+          <div className="form-note">
+            完整元数据清单包含所有任务的活跃收集链接令牌（<code>uploadToken</code>）与应交名单（
+            <code>expectedSubmitters</code>
+            ）。一旦泄露，任何持有令牌的人都可向对应任务提交文件，名单隐私也会随之暴露。
+          </div>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={fullExportConfirmed}
+              onChange={(e) => setFullExportConfirmed(e.target.checked)}
+            />
+            <span>我了解风险，确认需要导出包含活跃令牌与应交名单的完整元数据清单</span>
+          </label>
+          <footer className="modal-footer">
+            <button type="button" className="button" onClick={() => setFullExportOpen(false)}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="button primary"
+              disabled={!fullExportConfirmed}
+              onClick={() => {
+                downloadText(
+                  '集屿-元数据清单-含敏感信息.json',
+                  JSON.stringify(
+                    buildMetadataExport(workspace, { includeSensitive: true }),
+                    null,
+                    2,
+                  ),
+                  'application/json',
+                )
+                setFullExportOpen(false)
+              }}
+            >
+              <FileDown size={15} />
+              确认导出完整清单
+            </button>
+          </footer>
+        </Modal>
+      )}
       {passwordOpen && (
         <Modal
           title="修改我的密码"

@@ -35,6 +35,32 @@ export async function api<T>(
   return data as T
 }
 
+export type CachedApiResult<T> =
+  | { status: 304; etag: string }
+  | { status: 200; etag: string; data: T }
+
+export async function apiCached<T>(
+  path: string,
+  etag?: string,
+  signal?: AbortSignal,
+): Promise<CachedApiResult<T>> {
+  const response = await fetch(path, {
+    method: 'GET',
+    signal,
+    credentials: 'same-origin',
+    headers: etag ? { 'If-None-Match': etag } : undefined,
+  })
+  const nextEtag = response.headers.get('ETag') || etag || ''
+  if (response.status === 304) return { status: 304, etag: nextEtag }
+  const data = await response.json().catch(() => ({ error: '服务返回了无效响应' }))
+  if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/api/auth/'))
+      window.dispatchEvent(new Event('jiyu:session-expired'))
+    throw new Error(data.error || '操作失败，请稍后重试')
+  }
+  return { status: 200, etag: nextEtag, data: data as T }
+}
+
 export function uploadMultipart(
   uploadToken: string,
   files: File[],

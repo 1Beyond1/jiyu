@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUpRight,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Download,
   Ellipsis,
   RotateCcw,
@@ -14,19 +16,20 @@ import {
   X,
 } from 'lucide-react'
 import { Empty, FileIcon, Modal } from '../components/ui'
-import type { CollectedFile, Collection } from '../types'
+import type { CollectedFile, Collection, PaginatedFiles } from '../types'
 import { storageNames } from '../types'
 import { csvCell, downloadText, formatDate, formatSize } from '../lib/workspace'
 import { fileExtension } from '../lib/collections'
 import { ArchiveModal } from './archive'
 import { useAccount } from './auth'
 import { FilePreview } from './content'
-import { api } from '../lib/api'
+import { api, apiCached } from '../lib/api'
 
 interface FileTableProps {
   files: CollectedFile[]
   collections: Collection[]
   compact?: boolean
+  serverPagination?: boolean
   search?: string
   collectionId?: string
   onRename: (files: CollectedFile[]) => void
@@ -40,6 +43,7 @@ export function FileTable({
   files,
   collections,
   compact = false,
+  serverPagination = false,
   search = '',
   collectionId = '',
   onRename,
@@ -53,11 +57,68 @@ export function FileTable({
   const [filter, setFilter] = useState('all')
   const [selected, setSelected] = useState<string[]>([])
   const [sortAsc, setSortAsc] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+  const [pageData, setPageData] = useState<PaginatedFiles | null>(null)
+  const [pageLoading, setPageLoading] = useState(false)
+  const pageEtag = useRef('')
   const [archiveFiles, setArchiveFiles] = useState<CollectedFile[] | null>(null)
   const [matches, setMatches] = useState<{ id: string; excerpt: string }[]>([]),
     [searchError, setSearchError] = useState(''),
     [searching, setSearching] = useState(false)
   const term = (search || query).trim()
+  const useServerPaging = !compact && serverPagination
+
+  useEffect(() => {
+    setPage(1)
+    pageEtag.current = ''
+  }, [term, filter, sortAsc, collectionId, pageSize])
+
+  useEffect(() => {
+    if (!useServerPaging) {
+      setPageData(null)
+      return
+    }
+    const controller = new AbortController()
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+      sort: sortAsc ? 'created_asc' : 'created_desc',
+    })
+    if (filter === 'pending') params.set('status', 'pending')
+    else if (filter === 'image') params.set('kind', 'image')
+    if (term) params.set('q', term)
+    const endpoint = collectionId
+      ? `/api/collections/${encodeURIComponent(collectionId)}/files?${params}`
+      : `/api/files?${params}`
+    // 当本地工作台文件列表发生变化（例如新建/重命名/删改）时清空局部 ETag 以保证及时同步
+    pageEtag.current = ''
+    setPageLoading(true)
+    const timer = setTimeout(
+      () => {
+        void apiCached<PaginatedFiles>(endpoint, pageEtag.current || undefined, controller.signal)
+          .then((res) => {
+            if (controller.signal.aborted) return
+            if (res.etag) pageEtag.current = res.etag
+            if (res.status === 200) {
+              setPageData(res.data)
+              const maxPage = Math.max(1, Math.ceil(res.data.total / res.data.pageSize))
+              if (page > maxPage) setPage(maxPage)
+            }
+            setPageLoading(false)
+          })
+          .catch(() => {
+            if (!controller.signal.aborted) setPageLoading(false)
+          })
+      },
+      term ? 200 : 0,
+    )
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [useServerPaging, collectionId, filter, term, sortAsc, page, pageSize, files])
+
   useEffect(() => {
     setMatches([])
     setSearchError('')
@@ -101,14 +162,27 @@ export function FileTable({
         (filter === 'all' ||
           (filter === 'pending'
             ? f.status === 'pending'
-            : ['jpg', 'jpeg', 'png', 'heic', 'svg'].includes(fileExtension(f.name)))),
+            : ['jpg', 'jpeg', 'png', 'heic', 'svg', 'webp', 'gif'].includes(
+                fileExtension(f.name),
+              ))),
     )
     .sort(
       (a, b) =>
         (sortAsc ? 1 : -1) * (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     )
-  const list = compact ? visible.slice(0, 5) : visible
-  const chosen = files.filter((f) => selected.includes(f.id))
+  const totalCount = useServerPaging && pageData ? pageData.total : visible.length
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+  const list = compact
+    ? visible.slice(0, 5)
+    : useServerPaging
+      ? pageData
+        ? pageData.items
+        : visible.slice((page - 1) * pageSize, page * pageSize)
+      : visible
+  const chosenMap = new Map<string, CollectedFile>()
+  for (const f of files) chosenMap.set(f.id, f)
+  for (const f of list) chosenMap.set(f.id, f)
+  const chosen = selected.map((id) => chosenMap.get(id)).filter((f): f is CollectedFile => !!f)
   const allChecked = list.length > 0 && list.every((f) => selected.includes(f.id))
   function exportCsv() {
     const rows = (chosen.length ? chosen : visible).map((f) =>
@@ -327,11 +401,59 @@ export function FileTable({
       {!list.length && <Empty />}
       {!compact && (
         <footer className="table-footer">
-          <span>共 {visible.length} 个文件</span>
           <span>
-            所有文件都已显示
-            <Check size={13} />
+            共 {totalCount} 个文件
+            {useServerPaging && totalPages > 1 ? ` · 第 ${page} / ${totalPages} 页` : ''}
+            {pageLoading ? ' · 同步中…' : ''}
           </span>
+          {useServerPaging ? (
+            <div className="table-pagination">
+              <label className="page-size-select">
+                <span>每页</span>
+                <select
+                  aria-label="每页显示数量"
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                >
+                  <option value={20}>20 条</option>
+                  <option value={50}>50 条</option>
+                  <option value={100}>100 条</option>
+                </select>
+              </label>
+              {totalPages > 1 ? (
+                <>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    <ChevronLeft size={14} />
+                    上一页
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  >
+                    下一页
+                    <ChevronRight size={14} />
+                  </button>
+                </>
+              ) : (
+                <span>
+                  所有文件都已显示
+                  <Check size={13} />
+                </span>
+              )}
+            </div>
+          ) : (
+            <span>
+              所有文件都已显示
+              <Check size={13} />
+            </span>
+          )}
         </footer>
       )}
       {archiveFiles && <ArchiveModal files={archiveFiles} onClose={() => setArchiveFiles(null)} />}

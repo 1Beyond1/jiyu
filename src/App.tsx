@@ -583,7 +583,7 @@ function WorkspaceApp() {
               正在保存，请稍候…
             </div>
           )}
-          {workspace.lastRenameId && (
+          {canEdit && workspace.lastRenameId && (
             <div className="action-notice">
               <span>最近的批量整理可撤销</span>
               <button
@@ -610,10 +610,12 @@ function WorkspaceApp() {
                   </h1>
                   <p>收集、整理、妥善存放。把时间留给更重要的事。</p>
                 </div>
-                <button className="button primary" onClick={() => startCollection()}>
-                  <Plus size={17} />
-                  新建收集
-                </button>
+                {canEdit && (
+                  <button className="button primary" onClick={() => startCollection()}>
+                    <Plus size={17} />
+                    新建收集
+                  </button>
+                )}
               </div>
               {!workspace.collections.some((c) => c.id === readSampleTour()) && (
                 <SampleTourCard
@@ -796,17 +798,18 @@ function WorkspaceApp() {
                     {currentCollection?.description || '告别散落的文件，在这里找到每一份认真。'}
                   </p>
                 </div>
-                {currentCollection ? (
-                  <button className="button primary" onClick={() => setShare(currentCollection)}>
-                    <Link size={16} />
-                    分享收集
-                  </button>
-                ) : (
-                  <button className="button primary" onClick={openRename}>
-                    <WandSparkles size={16} />
-                    批量重命名
-                  </button>
-                )}
+                {canEdit &&
+                  (currentCollection ? (
+                    <button className="button primary" onClick={() => setShare(currentCollection)}>
+                      <Link size={16} />
+                      分享收集
+                    </button>
+                  ) : (
+                    <button className="button primary" onClick={openRename}>
+                      <WandSparkles size={16} />
+                      批量重命名
+                    </button>
+                  ))}
               </div>
               <div className="files-view-header">
                 <div className="files-tabs">
@@ -860,6 +863,7 @@ function WorkspaceApp() {
               <FileTable
                 key={`files-${collectionId}`}
                 {...fileProps}
+                serverPagination
                 search={search}
                 collectionId={collectionId}
               />

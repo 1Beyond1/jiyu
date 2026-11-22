@@ -4674,6 +4674,7 @@ tr.selected td {
 .form-note code {
   overflow-wrap: anywhere;
 }
+/* 兜底防御样式：只读成员权限已由各组件显式 canEdit 控制，此处保留防遗漏 */
 .read-only-workspace .create-card,
 .read-only-workspace .share-button,
 .read-only-workspace .collection-detail-title .button-row,
@@ -4685,6 +4686,27 @@ tr.selected td {
 }
 .read-only-workspace .page-title > button.primary {
   display: none;
+}
+.table-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.page-size-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.page-size-select select {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
 }
 .archive-summary {
   display: flex;

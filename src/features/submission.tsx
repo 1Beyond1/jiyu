@@ -274,7 +274,13 @@ function Submission({
             <p className="submission-description">{c.description}</p>
             <div className="submission-meta">
               <span>截止 {c.deadline}</span>
-              <span>已收到 {c.received} 份</span>
+              <span>
+                {c.activeFiles !== undefined
+                  ? c.activeFiles === c.received
+                    ? `当前有效 ${c.activeFiles} 份`
+                    : `当前有效 ${c.activeFiles} 份 · 累计提交 ${c.received} 份`
+                  : `累计提交 ${c.received} 份`}
+              </span>
             </div>
             {!busy && receiptManager}
             {pending && !busy && (

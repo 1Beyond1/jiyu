@@ -5,6 +5,7 @@ import type { Collection, CollectedFile } from '../types'
 import { materialProgress } from '../lib/materials'
 import { collectionState, collectionStateNames } from '../lib/collections'
 import { shareAddress } from '../lib/share-address'
+import { useAccount } from './auth'
 
 export function CollectionCard({
   collection: c,
@@ -17,6 +18,7 @@ export function CollectionCard({
   onOpen: (id: string) => void
   onShare: (c: Collection) => void
 }) {
+  const { canEdit } = useAccount()
   const material = c.materials?.length ? materialProgress(c, files) : null
   const percent = material
     ? material.total
@@ -62,10 +64,12 @@ export function CollectionCard({
           <CalendarDays size={13} />
           {c.deadline.slice(5).replace('-', '月')}日截止
         </span>
-        <button className="share-button" onClick={() => onShare(c)} aria-label={`分享${c.title}`}>
-          <Link size={14} />
-          <span>分享收集</span>
-        </button>
+        {canEdit && (
+          <button className="share-button" onClick={() => onShare(c)} aria-label={`分享${c.title}`}>
+            <Link size={14} />
+            <span>分享收集</span>
+          </button>
+        )}
       </footer>
     </article>
   )
@@ -84,6 +88,7 @@ export function Collections({
   onShare: (c: Collection) => void
   onCreate: () => void
 }) {
+  const { canEdit } = useAccount()
   const [tab, setTab] = useState('all')
   const list = collections.filter((c) => tab === 'all' || collectionState(c) === tab)
   return (
@@ -94,10 +99,12 @@ export function Collections({
           <h1>让收集，有条不紊。</h1>
           <p>一个链接收齐文件，进展尽在掌握。</p>
         </div>
-        <button className="button primary" onClick={onCreate}>
-          <Plus size={17} />
-          新建收集
-        </button>
+        {canEdit && (
+          <button className="button primary" onClick={onCreate}>
+            <Plus size={17} />
+            新建收集
+          </button>
+        )}
       </div>
       <div className="tabs collection-tabs">
         {[
@@ -130,13 +137,15 @@ export function Collections({
               onShare={onShare}
             />
           ))}
-          <button className="create-card" onClick={onCreate}>
-            <span>
-              <Plus size={24} />
-            </span>
-            <b>发起下一项收集</b>
-            <p>让文件自己找到归处</p>
-          </button>
+          {canEdit && (
+            <button className="create-card" onClick={onCreate}>
+              <span>
+                <Plus size={24} />
+              </span>
+              <b>发起下一项收集</b>
+              <p>让文件自己找到归处</p>
+            </button>
+          )}
         </div>
       ) : (
         <Empty title="暂无这类收集" text="新建一项收集，或切换其他状态查看。" />

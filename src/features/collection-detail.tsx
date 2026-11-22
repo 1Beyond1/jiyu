@@ -98,21 +98,23 @@ export function CollectionDetail({
           <h1>{c.title}</h1>
           <p>{c.description}</p>
         </div>
-        <div className="button-row">
-          {canEdit && onAI && (
-            <button className="button" onClick={() => onAI(files)}>
-              检查这项收集
+        {canEdit && (
+          <div className="button-row">
+            {onAI && (
+              <button className="button" onClick={() => onAI(files)}>
+                检查这项收集
+              </button>
+            )}
+            <button className="button" onClick={onEdit}>
+              <Pencil size={15} />
+              编辑规则
             </button>
-          )}
-          <button className="button" onClick={onEdit}>
-            <Pencil size={15} />
-            编辑规则
-          </button>
-          <button className="button primary" onClick={onShare}>
-            <Link size={15} />
-            分享收集
-          </button>
-        </div>
+            <button className="button primary" onClick={onShare}>
+              <Link size={15} />
+              分享收集
+            </button>
+          </div>
+        )}
       </div>
       {c.draftOrigin && (
         <details className="form-note">
@@ -177,19 +179,21 @@ export function CollectionDetail({
                 ? '收集已暂停，提交页暂不接收文件。'
                 : '收集已结束，已收到的文件仍可整理。'}
         </p>
-        <div className="button-row">
-          {actions.map((a) => (
-            <button
-              key={a.status}
-              className="text-button"
-              disabled={a.status === 'active' && expired}
-              onClick={() => setConfirm(a.status)}
-            >
-              <a.icon size={14} />
-              {a.label}
-            </button>
-          ))}
-        </div>
+        {canEdit && (
+          <div className="button-row">
+            {actions.map((a) => (
+              <button
+                key={a.status}
+                className="text-button"
+                disabled={a.status === 'active' && expired}
+                onClick={() => setConfirm(a.status)}
+              >
+                <a.icon size={14} />
+                {a.label}
+              </button>
+            ))}
+          </div>
+        )}
         {expired && c.status !== 'active' && <small>延长截止日期后可重新开放</small>}
       </div>
       <div className="collection-workflow-bar">
@@ -258,6 +262,8 @@ export function CollectionDetail({
             key={`${c.id}-${selected?.label || 'all'}`}
             files={selected ? files.filter((f) => selected.ids.includes(f.id)) : files}
             collections={[c]}
+            collectionId={selected ? '' : c.id}
+            serverPagination={!selected}
             onRename={onRename}
             onReview={onReview}
             onDetail={onDetail}

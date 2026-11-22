@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Workspace } from '../types'
-import { api } from './api'
+import { api, apiCached } from './api'
 
 const empty: Workspace = {
   version: 1,
@@ -19,15 +19,17 @@ export function useWorkspace() {
   const sequence = useRef(0)
   const inFlight = useRef(0)
   const reading = useRef(false)
+  const etag = useRef('')
   const refresh = useCallback(async () => {
     if (inFlight.current || reading.current) return
     reading.current = true
     setRefreshing(true)
     const current = ++sequence.current
     try {
-      const data = await api<Workspace>('/api/workspace')
+      const result = await apiCached<Workspace>('/api/workspace', etag.current || undefined)
       if (current === sequence.current) {
-        setWorkspace(data)
+        if (result.etag) etag.current = result.etag
+        if (result.status === 200) setWorkspace(result.data)
         setUpdatedAt(new Date().toISOString())
         setError('')
       }
@@ -65,6 +67,7 @@ export function useWorkspace() {
         body,
       )
       if (current === sequence.current) {
+        etag.current = ''
         setWorkspace('workspace' in result ? result.workspace : result)
         setUpdatedAt(new Date().toISOString())
         setError('')
