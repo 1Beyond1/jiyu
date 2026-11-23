@@ -273,7 +273,12 @@ export function CollectionDetail({
             <dt>截止时间</dt>
             <dd>
               {c.deadline}
-              <small>当天 23:59 · UTC+8</small>
+              <small>
+                当天 23:59 · UTC+8
+                {c.deadlineReminder?.enabled
+                  ? ` · 提前 ${c.deadlineReminder.hoursBefore}h 自动预警`
+                  : ''}
+              </small>
             </dd>
           </div>
           <div>

@@ -43,12 +43,28 @@ export interface Collection {
   allowReplacement?: boolean
   materials?: MaterialRequirement[]
   materialRevision?: string
+  deadlineReminder?: DeadlineReminderConfig
   draftOrigin?: {
     runId: string
     testMode: boolean
     confirmedAt: string
     resolutions: { question: string; answer?: string; materialId?: string; skipped?: boolean }[]
   }
+}
+
+export interface DeadlineReminderConfig {
+  enabled: boolean
+  hoursBefore: number
+  desensitizeNames: boolean
+  lastSentDeadline?: string
+  lastSentAt?: string
+}
+
+export interface ExportedCollectionTemplate {
+  schema: 'jiyu-template-v1'
+  exportedAt: string
+  name: string
+  rules: Partial<Collection>
 }
 
 export interface DraftMaterial extends Omit<MaterialRequirement, 'required'> {
@@ -522,6 +538,32 @@ export interface WebhookLog {
 export interface WebhookState {
   channels: WebhookChannel[]
   logs: WebhookLog[]
+}
+
+export interface WebhookRemindDelivery {
+  channelId: string
+  channelName: string
+  channelType: WebhookChannelType
+  status: 'succeeded' | 'failed'
+  httpStatus?: number
+  error?: string
+  targetHint: string
+}
+
+export interface WebhookRemindResult {
+  ok: boolean
+  totalChannels: number
+  succeeded: number
+  failed: number
+  summary: string
+  stats: {
+    receivedCount: number
+    totalCount: number
+    missingCount: number
+    needsChangesCount: number
+  }
+  deliveries: WebhookRemindDelivery[]
+  error?: string
 }
 
 export type ArchiveLayout =

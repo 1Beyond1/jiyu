@@ -64,28 +64,26 @@ export function registerUsers(
     // Other admins may run the workspace, but only the owner can change, demote or disable the owner account.
     if (id === 'primary' && actorId(req) !== 'primary')
       throw new HttpError(403, '只有工作台所有者可以修改所有者账号')
-    const role = body.role === undefined ? original.role : roleInput(body.role),
-      disabled =
-        body.disabled === undefined
-          ? original.disabled
-          : body.disabled === true
-            ? 1
-            : body.disabled === false
-              ? 0
-              : -1
-    if (disabled === -1) throw new HttpError(400, '账号状态无效')
-    const displayName =
-      body.displayName === undefined
-        ? original.display_name
-        : text(body.displayName, '成员名称', 20)
-    const hash =
-      body.password === undefined
-        ? original.password
-        : await hashPassword(passwordInput(body.password))
+    const nextRole = body.role === undefined ? undefined : roleInput(body.role)
+    let nextDisabled: 0 | 1 | undefined
+    if (body.disabled !== undefined) {
+      if (body.disabled !== true && body.disabled !== false)
+        throw new HttpError(400, '账号状态无效')
+      nextDisabled = body.disabled ? 1 : 0
+    }
+    const nextDisplayName =
+      body.displayName === undefined ? undefined : text(body.displayName, '成员名称', 20)
+    const nextHash =
+      body.password === undefined ? undefined : await hashPassword(passwordInput(body.password))
     store.transaction(() => {
-      const current = store.db
-        .prepare('SELECT * FROM users WHERE id=?')
-        .get(id) as unknown as UserRow
+      const current = store.db.prepare('SELECT * FROM users WHERE id=?').get(id) as unknown as
+        | UserRow
+        | undefined
+      if (!current) throw new HttpError(404, '成员不存在')
+      const role = nextRole ?? current.role
+      const disabled = nextDisabled ?? current.disabled
+      const displayName = nextDisplayName ?? current.display_name
+      const hash = nextHash ?? current.password
       const admins = (
         store.db
           .prepare("SELECT COUNT(*) AS count FROM users WHERE role='admin' AND disabled=0")

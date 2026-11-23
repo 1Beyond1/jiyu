@@ -7480,3 +7480,86 @@ h3,
 :root[data-theme="dark"] .webhook-log-row.failed {
   border-color: rgba(249, 112, 102, 0.5);
 }
+
+/* v0.5.0 Deadline Reminder & Template Portability */
+.deadline-reminder-rule {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.deadline-desensitize-check {
+  align-self: center;
+  margin-top: 18px;
+}
+.webhook-push-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin: 12px 0;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.webhook-push-banner.ok {
+  background: var(--success-soft);
+  border-color: var(--success);
+  color: var(--success);
+}
+.webhook-push-banner.error {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.template-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6px;
+}
+.template-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.template-manager-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.template-manager-head > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.template-meta-line {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+:root[data-theme="dark"] .deadline-reminder-rule {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+:root[data-theme="dark"] .webhook-push-banner.ok {
+  background: var(--success-soft);
+  border-color: rgba(74, 222, 128, 0.35);
+  color: var(--success);
+}
+:root[data-theme="dark"] .webhook-push-banner.error {
+  background: var(--danger-soft);
+  border-color: rgba(249, 112, 102, 0.45);
+  color: var(--danger);
+}

@@ -153,59 +153,105 @@ export function registerStorage(
     store.set(`storage.${p.id}`, JSON.stringify(saved))
     return saved
   }
-  const refresh = async (p: SavedProfile) => {
-    const c = credentials(p)
-    if (
-      (p.id === 'onedrive' || p.id === 'gdrive') &&
-      !p.via &&
-      (!c.accessToken || (c.expiresAt && c.expiresAt < Date.now() + 60000))
-    ) {
-      if (!c.refreshToken || !c.clientSecret || !p.clientId)
-        throw new HttpError(400, '网盘授权已过期，请重新连接')
-      const fresh = await exchangeToken(
-        http,
-        p.id,
-        {
+  const inFlightRefresh = new Map<Provider, Promise<StorageCredentials>>()
+  const needsTokenRefresh = (p: SavedProfile, c: StorageCredentials) => {
+    const expiredOrMissing =
+      !c.accessToken || (c.expiresAt !== undefined && c.expiresAt < Date.now() + 60000)
+    if (!expiredOrMissing) return false
+    if ((p.id === 'onedrive' || p.id === 'gdrive') && !p.via) return true
+    if (p.id === 'baidu') return true
+    return false
+  }
+  const refresh = async (p: SavedProfile): Promise<StorageCredentials> => {
+    const existing = inFlightRefresh.get(p.id)
+    if (existing) {
+      try {
+        const fresh = await existing
+        const after = get(p.id)
+        if (after.revision !== p.revision) throw new HttpError(409, '连接设置已变更，请重新操作')
+        const afterCreds = credentials(after)
+        if (!needsTokenRefresh(after, afterCreds)) return afterCreds
+        return fresh
+      } catch (err) {
+        const after = get(p.id)
+        if (after.revision === p.revision && err instanceof HttpError && err.statusCode === 409) {
+          return refresh(p)
+        }
+        throw err
+      }
+    }
+
+    const initial = get(p.id)
+    if (initial.revision !== p.revision) throw new HttpError(409, '连接设置已变更，请重新操作')
+    const initialCreds = credentials(initial)
+    if (!needsTokenRefresh(initial, initialCreds)) return initialCreds
+
+    const task = (async () => {
+      const current = get(p.id)
+      if (current.revision !== p.revision) throw new HttpError(409, '连接设置已变更，请重新操作')
+      const c = credentials(current)
+      if (!needsTokenRefresh(current, c)) return c
+      if ((current.id === 'onedrive' || current.id === 'gdrive') && !current.via) {
+        if (!c.refreshToken || !c.clientSecret || !current.clientId)
+          throw new HttpError(400, '网盘授权已过期，请重新连接')
+        const fresh = await exchangeToken(
+          http,
+          current.id,
+          {
+            grant_type: 'refresh_token',
+            refresh_token: c.refreshToken,
+            client_id: current.clientId,
+            client_secret: c.clientSecret,
+            ...(current.id === 'onedrive'
+              ? { scope: 'offline_access https://graph.microsoft.com/Files.ReadWrite' }
+              : {}),
+          },
+          controller.signal,
+        )
+        const nextCreds: StorageCredentials = {
+          ...c,
+          ...fresh,
+          refreshToken: fresh.refreshToken || c.refreshToken,
+        }
+        saveCredentials(current, nextCreds)
+        return nextCreds
+      }
+      if (current.id === 'baidu') {
+        if (!c.refreshToken || !c.clientSecret || !current.clientId)
+          throw new HttpError(400, '百度授权已过期，请重新连接')
+        const url = new URL('https://openapi.baidu.com/oauth/2.0/token')
+        url.search = new URLSearchParams({
           grant_type: 'refresh_token',
           refresh_token: c.refreshToken,
-          client_id: p.clientId,
+          client_id: current.clientId,
           client_secret: c.clientSecret,
-          ...(p.id === 'onedrive'
-            ? { scope: 'offline_access https://graph.microsoft.com/Files.ReadWrite' }
-            : {}),
-        },
-        controller.signal,
-      )
-      Object.assign(c, { ...fresh, refreshToken: fresh.refreshToken || c.refreshToken })
-      saveCredentials(p, c)
-    }
-    if (p.id === 'baidu' && (!c.accessToken || (c.expiresAt && c.expiresAt < Date.now() + 60000))) {
-      if (!c.refreshToken || !c.clientSecret || !p.clientId)
-        throw new HttpError(400, '百度授权已过期，请重新连接')
-      const url = new URL('https://openapi.baidu.com/oauth/2.0/token')
-      url.search = new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: c.refreshToken,
-        client_id: p.clientId,
-        client_secret: c.clientSecret,
-      }).toString()
-      const response = await http({ url, method: 'GET', signal: controller.signal })
-      remoteOK(response)
-      const result = JSON.parse((await remoteBody(response)).toString())
-      if (
-        typeof result.access_token !== 'string' ||
-        !result.access_token ||
-        !Number.isFinite(result.expires_in)
-      )
-        throw new HttpError(502, '百度授权刷新失败，请重新连接')
-      Object.assign(c, {
-        accessToken: result.access_token,
-        refreshToken: result.refresh_token || c.refreshToken,
-        expiresAt: Date.now() + result.expires_in * 1000,
-      })
-      saveCredentials(p, c)
-    }
-    return c
+        }).toString()
+        const response = await http({ url, method: 'GET', signal: controller.signal })
+        remoteOK(response)
+        const result = JSON.parse((await remoteBody(response)).toString())
+        if (
+          typeof result.access_token !== 'string' ||
+          !result.access_token ||
+          !Number.isFinite(result.expires_in)
+        )
+          throw new HttpError(502, '百度授权刷新失败，请重新连接')
+        const nextCreds: StorageCredentials = {
+          ...c,
+          accessToken: result.access_token,
+          refreshToken: result.refresh_token || c.refreshToken,
+          expiresAt: Date.now() + result.expires_in * 1000,
+        }
+        saveCredentials(current, nextCreds)
+        return nextCreds
+      }
+      return c
+    })().finally(() => {
+      if (inFlightRefresh.get(p.id) === task) {
+        inFlightRefresh.delete(p.id)
+      }
+    })
+    inFlightRefresh.set(p.id, task)
+    return task
   }
   const adapter = (p: SavedProfile, c: StorageCredentials) =>
     p.id === 'baidu'

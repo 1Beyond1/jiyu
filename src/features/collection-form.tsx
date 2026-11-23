@@ -89,7 +89,14 @@ export function CollectionForm({
     setMaxFileSizeMB(r.maxFileSizeMB || 100)
     setMaxFilesPerSubmission(r.maxFilesPerSubmission || 20)
     setMaxTotalSizeMB(r.maxTotalSizeMB || 2048)
-    setRules({ ...r, expectedSubmitters: [] })
+    const cleanReminder = r.deadlineReminder
+      ? {
+          enabled: Boolean(r.deadlineReminder.enabled),
+          hoursBefore: r.deadlineReminder.hoursBefore || 24,
+          desensitizeNames: r.deadlineReminder.desensitizeNames ?? true,
+        }
+      : undefined
+    setRules({ ...r, expectedSubmitters: [], deadlineReminder: cleanReminder })
     setError('')
   }
   function validate() {
@@ -469,6 +476,14 @@ export function CollectionForm({
                           .map((m) => `${m.name}（${m.required ? '必需' : '选填'}）`)
                           .join('、')
                       : '普通文件收集，未设置逐项核对'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>定时预警</dt>
+                  <dd>
+                    {rules.deadlineReminder?.enabled
+                      ? `截止前 ${rules.deadlineReminder.hoursBefore} 小时自动推送 Webhook 催交摘要（${rules.deadlineReminder.desensitizeNames ? '缺交名单脱敏' : '显示完整标识'}）`
+                      : '未启用（可在核对页手动推送）'}
                   </dd>
                 </div>
                 <div>

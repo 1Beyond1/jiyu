@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { Readable, Transform } from 'node:stream'
@@ -53,6 +53,12 @@ export interface UploadBudget {
   committedCollections: Map<string, number>
 }
 
+export interface UploadCleanupOptions {
+  orphanGraceMs?: number
+  now?: () => number
+  cleanupIntervalMs?: number
+}
+
 export async function registerUploads(
   app: FastifyInstance,
   store: Store,
@@ -60,38 +66,61 @@ export async function registerUploads(
   budget: UploadBudget,
   requirePublicAccess: (req: FastifyRequest, c: Collection) => void = () => {},
   webhooks?: WebhookService,
+  cleanupOptions: UploadCleanupOptions = {},
 ) {
   const rateLimits = resolveRateLimits(config.rateLimits)
   const active = new Set<string>()
+  const orphanGraceMs = Math.max(0, cleanupOptions.orphanGraceMs ?? 60 * 1000)
+  const nowFn = cleanupOptions.now ?? (() => Date.now())
+  const cleanupIntervalMs = Math.max(100, cleanupOptions.cleanupIntervalMs ?? 60 * 60 * 1000)
   const path = (id: string, file: number, part: number) =>
     join(config.dataDir, 'chunks', `${id}.${file}.${part}`)
-  async function clearParts(id: string) {
-    for (const name of await readdir(join(config.dataDir, 'chunks')))
+  async function clearParts(id: string, skipIfActive = false) {
+    for (const name of await readdir(join(config.dataDir, 'chunks'))) {
+      if (skipIfActive && active.has(id)) return
       if (name.startsWith(`${id}.`)) await rm(join(config.dataDir, 'chunks', name), { force: true })
+    }
   }
+  let cleanupRunning = false
   async function cleanup() {
-    const expired = store.db.prepare('SELECT id FROM uploads WHERE expires<=?').all(Date.now()) as {
-      id: string
-    }[]
-    for (const { id } of expired)
-      if (!active.has(id)) {
-        store.db.prepare('DELETE FROM uploads WHERE id=?').run(id)
-        await clearParts(id)
+    if (cleanupRunning) return
+    cleanupRunning = true
+    try {
+      const now = nowFn()
+      const expired = store.db.prepare('SELECT id FROM uploads WHERE expires<=?').all(now) as {
+        id: string
+      }[]
+      for (const { id } of expired) {
+        if (active.has(id)) continue
+        const deleted = store.db
+          .prepare('DELETE FROM uploads WHERE id=? AND expires<=?')
+          .run(id, nowFn())
+        if (deleted.changes > 0 && !active.has(id)) {
+          await clearParts(id, true)
+        }
       }
-    const ids = new Set(
-      (store.db.prepare('SELECT id FROM uploads').all() as { id: string }[]).map((r) => r.id),
-    )
-    for (const name of await readdir(join(config.dataDir, 'chunks')))
-      if (/^[a-f0-9-]{36}\.\d+\.\d+(\.tmp)?$/.test(name) && !ids.has(name.slice(0, 36)))
-        await rm(join(config.dataDir, 'chunks', name), { force: true })
+      const chunksDir = join(config.dataDir, 'chunks')
+      const existsStmt = store.db.prepare('SELECT 1 FROM uploads WHERE id=?')
+      for (const name of await readdir(chunksDir)) {
+        if (!/^[a-f0-9-]{36}\.\d+\.\d+(\.tmp)?$/.test(name)) continue
+        const batchId = name.slice(0, 36)
+        if (active.has(batchId)) continue
+        if (existsStmt.get(batchId)) continue
+        const filePath = join(chunksDir, name)
+        const info = await stat(filePath).catch(() => null)
+        if (!info) continue
+        if (nowFn() - info.mtimeMs < orphanGraceMs) continue
+        if (active.has(batchId) || existsStmt.get(batchId)) continue
+        await rm(filePath, { force: true })
+      }
+    } finally {
+      cleanupRunning = false
+    }
   }
   await cleanup()
-  const timer = setInterval(
-    () => {
-      void cleanup().catch(() => {})
-    },
-    60 * 60 * 1000,
-  )
+  const timer = setInterval(() => {
+    void cleanup().catch(() => {})
+  }, cleanupIntervalMs)
   timer.unref()
   app.addHook('onClose', async () => clearInterval(timer))
   app.addContentTypeParser(
@@ -442,4 +471,5 @@ export async function registerUploads(
         for (const entry of staged) await rm(entry.path, { force: true }).catch(() => {})
     }
   })
+  return { cleanup }
 }

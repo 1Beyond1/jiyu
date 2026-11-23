@@ -20,6 +20,8 @@ services:
       JIYU_RATE_LIMIT_UPLOAD_MULTIPART: ${JIYU_RATE_LIMIT_UPLOAD_MULTIPART:-30}
       JIYU_RATE_LIMIT_UPLOAD_CREATE: ${JIYU_RATE_LIMIT_UPLOAD_CREATE:-60}
       JIYU_RATE_LIMIT_UPLOAD_CHUNK: ${JIYU_RATE_LIMIT_UPLOAD_CHUNK:-180}
+      JIYU_RATE_LIMIT_UNLOCK: ${JIYU_RATE_LIMIT_UNLOCK:-6}
+      JIYU_STORAGE_STRICT_READBACK: ${JIYU_STORAGE_STRICT_READBACK:-}
     volumes:
       - data:/data
       - backups:/backups
@@ -46,6 +48,11 @@ services:
     depends_on:
       app:
         condition: service_healthy
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 256m
     logging:
       driver: json-file
       options: { max-size: 10m, max-file: "2" }

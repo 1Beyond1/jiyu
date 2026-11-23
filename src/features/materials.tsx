@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowRight,
+  BellRing,
   Download,
   Eye,
   FolderArchive,
@@ -8,7 +9,8 @@ import {
   MessageSquareText,
   Upload,
 } from 'lucide-react'
-import type { Collection, CollectedFile, MaterialOperation } from '../types'
+import type { Collection, CollectedFile, MaterialOperation, WebhookRemindResult } from '../types'
+import { api } from '../lib/api'
 import { materialStateLabels, materialStateVersion } from '../lib/materials'
 import { safeRandomUUID } from '../lib/browser-crypto'
 import { downloadText, formatSize } from '../lib/workspace'
@@ -81,6 +83,11 @@ export function MaterialWorkbench({
   const [reminder, setReminder] = useState<{ mode: 'group' | 'direct'; personId?: string } | null>(
     null,
   )
+  const [pushingWebhook, setPushingWebhook] = useState(false)
+  const [webhookBanner, setWebhookBanner] = useState<{
+    kind: 'ok' | 'error'
+    text: string
+  } | null>(null)
   const pending = useRef<{
     signature: string
     kind: 'classify' | 'review'
@@ -447,6 +454,36 @@ export function MaterialWorkbench({
     state.ready,
     submitReview,
   ])
+  async function pushWebhookDigest() {
+    if (pushingWebhook || !canEdit || c.archivedAt) return
+    setPushingWebhook(true)
+    setWebhookBanner(null)
+    try {
+      const res = await api<WebhookRemindResult>(
+        `/api/collections/${encodeURIComponent(c.id)}/remind-webhook`,
+        'POST',
+        { desensitizeNames: c.deadlineReminder?.desensitizeNames ?? true },
+      )
+      const failedNote =
+        res.failed > 0
+          ? `（${res.failed} 个渠道投递失败：${res.deliveries
+              .filter((d) => d.status === 'failed')
+              .map((d) => `${d.channelName}${d.error ? `·${d.error}` : ''}`)
+              .join('；')}）`
+          : ''
+      setWebhookBanner({
+        kind: 'ok',
+        text: `已向 ${res.succeeded}/${res.totalChannels} 个 Webhook 渠道推送催交摘要（已收齐 ${res.stats.receivedCount}/${res.stats.totalCount} 人，缺交 ${res.stats.missingCount} 人）${failedNote}`,
+      })
+    } catch (e) {
+      setWebhookBanner({
+        kind: 'error',
+        text: (e as Error).message || 'Webhook 催交摘要推送失败，请检查渠道配置',
+      })
+    } finally {
+      setPushingWebhook(false)
+    }
+  }
   async function exportReport() {
     setExporting(true)
     setError('')
@@ -618,15 +655,26 @@ export function MaterialWorkbench({
             定向打包
           </button>
           {canEdit && !c.archivedAt && (
-            <button
-              type="button"
-              className="button"
-              disabled={busy || !state.ready}
-              onClick={() => setReminder({ mode: 'group' })}
-            >
-              <MessageSquareText size={15} />
-              一键催交话术
-            </button>
+            <>
+              <button
+                type="button"
+                className="button"
+                disabled={busy || !state.ready}
+                onClick={() => setReminder({ mode: 'group' })}
+              >
+                <MessageSquareText size={15} />
+                一键催交话术
+              </button>
+              <button
+                type="button"
+                className="button"
+                disabled={busy || pushingWebhook || !state.ready}
+                onClick={() => void pushWebhookDigest()}
+              >
+                <BellRing size={15} />
+                {pushingWebhook ? '推送中…' : '立即推送 Webhook 催交'}
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -638,6 +686,17 @@ export function MaterialWorkbench({
           </button>
         </div>
       </div>
+      {webhookBanner && (
+        <div
+          className={`webhook-push-banner ${webhookBanner.kind}`}
+          role={webhookBanner.kind === 'error' ? 'alert' : 'status'}
+        >
+          <span>{webhookBanner.text}</span>
+          <button type="button" className="text-button" onClick={() => setWebhookBanner(null)}>
+            关闭
+          </button>
+        </div>
+      )}
       <div className="material-matrix">
         <table>
           <thead>

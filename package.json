@@ -1,6 +1,6 @@
 {
   "name": "jiyu",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT",
   "author": "1Beyond1",
   "private": true,
@@ -25,7 +25,7 @@
     "@fastify/cookie": "11.1.3",
     "@fastify/multipart": "10.1.4",
     "@fastify/rate-limit": "11.2.1",
-    "@fastify/static": "10.1.6",
+    "@fastify/static": "10.1.12",
     "fastify": "5.12.7",
     "lucide-react": "1.59.0",
     "react": "19.3.1",

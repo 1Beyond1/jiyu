@@ -44,7 +44,7 @@ const EVENT_OPTIONS: { id: WebhookEventType; label: string; hint: string }[] = [
   {
     id: 'collection.deadline_soon',
     label: '临近截止汇总',
-    hint: '活跃任务在截止前 24 小时内自动推送进度摘要',
+    hint: '按任务设定的提前小时数（默认 24h）自动推送催交摘要，并支持在核对页一键推送',
   },
 ]
 

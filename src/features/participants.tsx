@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { MessageSquareText } from 'lucide-react'
-import type { Collection, CollectedFile } from '../types'
+import { BellRing, MessageSquareText } from 'lucide-react'
+import type { Collection, CollectedFile, WebhookRemindResult } from '../types'
+import { api } from '../lib/api'
 import { collectionParticipants } from '../lib/participants'
 import { formatSize } from '../lib/workspace'
 import { useAccount } from './auth'
@@ -22,7 +23,36 @@ export function ParticipantLedger({
   const [reminder, setReminder] = useState<{ mode: 'group' | 'direct'; personId?: string } | null>(
     null,
   )
+  const [pushingWebhook, setPushingWebhook] = useState(false)
+  const [webhookBanner, setWebhookBanner] = useState<{
+    kind: 'ok' | 'error'
+    text: string
+  } | null>(null)
   const rows = collectionParticipants(c, files)
+
+  async function pushWebhookDigest() {
+    if (pushingWebhook || !canEdit || c.archivedAt) return
+    setPushingWebhook(true)
+    setWebhookBanner(null)
+    try {
+      const res = await api<WebhookRemindResult>(
+        `/api/collections/${encodeURIComponent(c.id)}/remind-webhook`,
+        'POST',
+        { desensitizeNames: c.deadlineReminder?.desensitizeNames ?? true },
+      )
+      setWebhookBanner({
+        kind: 'ok',
+        text: `已向 ${res.succeeded}/${res.totalChannels} 个 Webhook 渠道推送催交摘要（${res.summary}）`,
+      })
+    } catch (e) {
+      setWebhookBanner({
+        kind: 'error',
+        text: (e as Error).message || 'Webhook 催交摘要推送失败，请检查渠道配置',
+      })
+    } finally {
+      setPushingWebhook(false)
+    }
+  }
 
   const missing = rows.filter((p) => p.expected && !p.fileIds.length).length
   const list = rows.filter(
@@ -74,16 +104,42 @@ export function ParticipantLedger({
         </div>
         <div className="button-row">
           {canEdit && !c.archivedAt && (
-            <button type="button" className="button" onClick={() => setReminder({ mode: 'group' })}>
-              <MessageSquareText size={15} />
-              一键催交话术
-            </button>
+            <>
+              <button
+                type="button"
+                className="button"
+                onClick={() => setReminder({ mode: 'group' })}
+              >
+                <MessageSquareText size={15} />
+                一键催交话术
+              </button>
+              <button
+                type="button"
+                className="button"
+                disabled={pushingWebhook}
+                onClick={() => void pushWebhookDigest()}
+              >
+                <BellRing size={15} />
+                {pushingWebhook ? '推送中…' : '立即推送 Webhook 催交'}
+              </button>
+            </>
           )}
           <button type="button" className="button" disabled={!rows.length} onClick={exportList}>
             导出完整台账
           </button>
         </div>
       </div>
+      {webhookBanner && (
+        <div
+          className={`webhook-push-banner ${webhookBanner.kind}`}
+          role={webhookBanner.kind === 'error' ? 'alert' : 'status'}
+        >
+          <span>{webhookBanner.text}</span>
+          <button type="button" className="text-button" onClick={() => setWebhookBanner(null)}>
+            关闭
+          </button>
+        </div>
+      )}
       <p className="field-hint">
         按
         {c.identityField && c.identityField !== 'owner'

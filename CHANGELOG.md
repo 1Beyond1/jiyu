@@ -1,5 +1,23 @@
 # 更新记录
 
+## v0.5.0 — 2026-11-23
+
+### 新功能与高频产品体验
+
+- **任务定时截止预警与 Webhook 催交播报**：在收集任务配置中新增 `deadlineReminder`（支持截止前 24h / 12h / 6h / 1h 触发与缺交名单脱敏开关，存于 `collections.data` JSON，兼容旧数据）；服务端新增受单进程锁保护的幂等定时检查器（默认每 5 分钟扫描），按任务统计已收/缺交人数与可选脱敏名单并向已启用的飞书 / 钉钉 / 企业微信 / 通用 HMAC 渠道播报，投递成功后原子持久化 `lastSentDeadline` 防止重启重复发送；新增 `POST /api/collections/:id/remind-webhook`（仅 `admin`/`editor`）并在任务设置、材料核对页与提交人台账提供一键推送与实时状态反馈。
+- **标准模板 JSON 导入 / 导出（Template Portability）**：新增 `GET /api/templates/:id/export` 与 `POST /api/templates/import`（仅 `admin`/`editor`），支持标准 `jiyu-template-v1` JSON 跨工作台迁移；导出严格剔除名单、截止时间、令牌、提取码与存储凭证，导入强校验格式、字段上限与名称长度；前端模板选择与管理界面新增导出/导入按钮与状态提示。
+- **多渠道 Webhook 引擎、任务归档克隆与管理员线下补录**：内置飞书 / 钉钉加签 / 企业微信 / 通用 HMAC 通知引擎（公网 HTTPS + SSRF 校验、AES-GCM 加密凭证、同任务防刷屏聚合、单渠道队列隔离与 50 条脱敏日志）；支持任务归档与一键复制、管理员线下代收补录（`POST /api/collections/:id/offline-upload`），以及材料分栏审阅快捷键与回执信任链进度汇总。
+- **SQLite schema 6 真 SQL 分页**：升级至 `PRAGMA user_version=6`，为 `files` 表新增物化索引列并新增 `webhook_logs` 表，驱动真 SQL 分页、排序、状态筛选与 FTS5 检索。
+
+### 安全加固、并发修复与依赖归零
+
+- **提取码防爆破并发竞态修复**：修复 `POST /api/public/:token/unlock` 在 `await checkPassword` 失败分支读取过期计数器的丢失更新问题，并增加按任务提取码版本维度的并发在途校验上限（默认 2），防止并发突发绕过退避与全局锁定。
+- **分片清理 TOCTOU 修复**：`server/uploads.ts` 清理孤立分片前增加 `!active.has(batchId)` 校验、实时数据库存在性查询与 `mtime` 宽限期（默认 60 秒），避免误删活跃上传分片。
+- **OAuth Token 单飞刷新锁**：`server/storage.ts` 按云盘 Provider 维护 `inFlightRefresh` 单飞锁并在刷新前重读数据库最新凭证，防止并发刷新导致 Refresh Token 轮换失效并误停用云存储连接。
+- **成员更新原子合并**：`PATCH /api/users/:id` 在 `await hashPassword` 后的事务内基于最新 `current` 记录合并显式传入字段，避免并发改密覆盖角色降权或禁用状态。
+- **生产依赖漏洞归零与容器加固**：`@fastify/static` 升级至 `10.1.12`（`npm audit --omit=dev` 输出 0 漏洞）；`compose.yaml` 补齐 `JIYU_RATE_LIMIT_UNLOCK` 与 `JIYU_STORAGE_STRICT_READBACK` 透传并为 `caddy` 增加 `cap_drop: [ALL]`、`cap_add: [NET_BIND_SERVICE]`、`no-new-privileges:true`、`mem_limit`、`pids_limit`；`Caddyfile` 补充 `Strict-Transport-Security` 与 `Permissions-Policy` 安全头。
+- **版本与文档同步**：统一 `package.json`、`/api/health` 与 Webhook `User-Agent` 为 `0.5.0`，同步中英文 README 与运维文档至 `v0.5.0` / `SQLite schema 6`。
+
 ## v0.4.0 — 2026-11-22
 
 ### 收集流程、材料核对与 AI 辅助

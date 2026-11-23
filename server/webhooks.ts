@@ -4,13 +4,17 @@ import { existsSync, statSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { join } from 'node:path'
 import type {
+  Collection,
   WebhookChannel,
   WebhookChannelType,
   WebhookEventType,
   WebhookLog,
+  WebhookRemindDelivery,
+  WebhookRemindResult,
 } from '../src/types.ts'
-import { isExpired, localDate } from '../src/lib/collections.ts'
-import { materialProgress } from '../src/lib/materials.ts'
+import { materialParticipants } from '../src/lib/materials.ts'
+import { collectionParticipants } from '../src/lib/participants.ts'
+import { maskIdentifier } from '../src/lib/reminder.ts'
 import { isBidiControlCode, isControlCode } from '../src/lib/text-safety.ts'
 import type { Store } from './store.ts'
 import { decrypt, encrypt } from './secrets.ts'
@@ -74,6 +78,7 @@ export interface WebhookPolicy {
   maxAttempts?: number
   deadlineIntervalMs?: number
   maxQueuePerChannel?: number
+  now?: () => number
 }
 
 export interface WebhookDeliveryPayload {
@@ -246,7 +251,7 @@ export function buildWebhookRequest(
   const { title, plain, markdown } = formatMessageText(payload, nowMs)
   const headers: Record<string, string> = {
     'Content-Type': 'application/json; charset=utf-8',
-    'User-Agent': 'Jiyu-Webhook/0.5',
+    'User-Agent': 'Jiyu-Webhook/0.5.0',
   }
 
   if (type === 'feishu') {
@@ -497,6 +502,7 @@ interface PendingAggregate {
   mergedCount: number
   totalFiles: number
   deadlineMarker?: string
+  deadlineCollection?: { collectionId: string; deadline: string }
   timer: ReturnType<typeof setTimeout>
 }
 
@@ -504,6 +510,131 @@ interface DeliveryJob {
   channelId: string
   payload: WebhookDeliveryPayload
   deadlineMarker?: string
+  deadlineCollection?: { collectionId: string; deadline: string }
+}
+
+const MAX_DIGEST_NAMES = 20
+
+function formatDigestPerson(identity: string, owner: string, desensitize: boolean): string {
+  const cleanId = identity.trim()
+  const cleanOwner = owner.trim()
+  const idLabel = desensitize ? maskIdentifier(cleanId) : cleanId
+  if (!cleanOwner || cleanOwner === cleanId) return idLabel
+  const ownerLabel = desensitize ? maskIdentifier(cleanOwner) : cleanOwner
+  return `${idLabel}（${ownerLabel}）`
+}
+
+function joinDigestNames(names: string[]): string {
+  if (!names.length) return ''
+  const visible = names.slice(0, MAX_DIGEST_NAMES).join('、')
+  return names.length > MAX_DIGEST_NAMES ? `${visible} 等 ${names.length} 人` : visible
+}
+
+export interface CollectionReminderDigest {
+  summary: string
+  detail: string
+  receivedCount: number
+  totalCount: number
+  missingCount: number
+  needsChangesCount: number
+  missingNames: string[]
+}
+
+export function buildCollectionReminderDigest(
+  store: Store,
+  c: Collection,
+  options: { desensitizeNames: boolean; nowMs?: number },
+): CollectionReminderDigest {
+  const { desensitizeNames } = options
+  const activeFiles = store.collectionFiles(c.id, false)
+
+  if (c.materials?.length) {
+    const people = materialParticipants(c, activeFiles)
+    const roster = c.expectedSubmitters?.length ? people.filter((p) => p.expected) : people
+    const receivedCount = roster.filter((p) => p.receivedComplete).length
+    const reviewedCount = roster.filter((p) => p.reviewComplete).length
+    const missingPeople = roster.filter((p) => !p.receivedComplete)
+    const needsChangesPeople = people.filter((p) => p.status === 'needs_changes')
+    const missingNames = missingPeople.map((p) =>
+      formatDigestPerson(p.identity, p.owner, desensitizeNames),
+    )
+    const needsChangesNames = needsChangesPeople.map((p) =>
+      formatDigestPerson(p.identity, p.owner, desensitizeNames),
+    )
+    const summary = `「${c.title}」催交摘要：必需材料已收齐 ${receivedCount}/${roster.length} 人，缺交 ${missingPeople.length} 人${needsChangesPeople.length ? `，退回需补充 ${needsChangesPeople.length} 人` : ''}（截止 ${c.deadline} 23:59）`
+    const detailParts = [`核对通过 ${reviewedCount} 人`]
+    if (missingNames.length) {
+      detailParts.push(`缺交名单（${missingNames.length} 人）：${joinDigestNames(missingNames)}`)
+    } else if (roster.length) {
+      detailParts.push('应交人员必需材料均已收齐')
+    }
+    if (needsChangesNames.length) {
+      detailParts.push(
+        `退回需补充（${needsChangesNames.length} 人）：${joinDigestNames(needsChangesNames)}`,
+      )
+    }
+    return {
+      summary,
+      detail: detailParts.join('；'),
+      receivedCount,
+      totalCount: roster.length,
+      missingCount: missingPeople.length,
+      needsChangesCount: needsChangesPeople.length,
+      missingNames,
+    }
+  }
+
+  const people = collectionParticipants(c, activeFiles)
+  if (c.expectedSubmitters?.length) {
+    const roster = people.filter((p) => p.expected)
+    const receivedCount = roster.filter((p) => p.fileIds.length > 0).length
+    const missingPeople = roster.filter((p) => !p.fileIds.length)
+    const missingNames = missingPeople.map((p) =>
+      formatDigestPerson(p.identity, p.owner, desensitizeNames),
+    )
+    const summary = `「${c.title}」催交摘要：已提交 ${receivedCount}/${roster.length} 人，缺交 ${missingPeople.length} 人（截止 ${c.deadline} 23:59）`
+    const detailParts = [`有效文件 ${activeFiles.length} 份`]
+    if (missingNames.length) {
+      detailParts.push(`缺交名单（${missingNames.length} 人）：${joinDigestNames(missingNames)}`)
+    } else {
+      detailParts.push('应交名单内人员均已提交')
+    }
+    return {
+      summary,
+      detail: detailParts.join('；'),
+      receivedCount,
+      totalCount: roster.length,
+      missingCount: missingPeople.length,
+      needsChangesCount: 0,
+      missingNames,
+    }
+  }
+
+  const submittedPeople = people.filter((p) => p.fileIds.length > 0).length
+  const missingCount = Math.max(0, c.target - activeFiles.length)
+  return {
+    summary: `「${c.title}」催交摘要：已收 ${activeFiles.length}/${c.target} 份（${submittedPeople} 人已提交，截止 ${c.deadline} 23:59）`,
+    detail: `累计提交 ${c.received} 份，有效文件 ${activeFiles.length} 份，距离目标还差 ${missingCount} 份`,
+    receivedCount: submittedPeople,
+    totalCount: c.target,
+    missingCount,
+    needsChangesCount: 0,
+    missingNames: [],
+  }
+}
+
+function resolveDeadlineIntervalMs(policy: WebhookPolicy): number {
+  if (policy.deadlineIntervalMs !== undefined) {
+    return Math.max(100, policy.deadlineIntervalMs)
+  }
+  const envRaw = process.env.JIYU_DEADLINE_CHECK_INTERVAL_SECONDS
+  if (envRaw && envRaw.trim()) {
+    const parsed = Number(envRaw)
+    if (Number.isFinite(parsed) && parsed >= 10 && parsed <= 86400) {
+      return Math.trunc(parsed) * 1000
+    }
+  }
+  return 5 * 60 * 1000
 }
 
 function buildAggregatedSummary(agg: PendingAggregate): string {
@@ -539,6 +670,7 @@ export function registerWebhooks(
   policy: WebhookPolicy = {},
 ): WebhookService {
   const http = policy.http ?? remoteHTTP
+  const nowFn = policy.now ?? (() => Date.now())
   const maxAttempts = Math.max(1, Math.min(5, policy.maxAttempts ?? 3))
   const retryBaseMs = Math.max(10, policy.retryBaseMs ?? 2000)
   const maxQueuePerChannel = Math.max(
@@ -547,6 +679,7 @@ export function registerWebhooks(
   )
   const controller = new AbortController()
   let stopped = false
+  let deadlineScanActive = false
 
   const pending = new Map<string, PendingAggregate>()
   const channelQueues = new Map<string, DeliveryJob[]>()
@@ -685,13 +818,30 @@ export function registerWebhooks(
   function markDeadlineNotified(marker: string) {
     if (stopped) return
     const notified = readDeadlineNotified()
-    const now = Date.now()
+    const now = nowFn()
     notified[marker] = new Date(now).toISOString()
     const cutoff = now - 30 * 24 * 60 * 60 * 1000
     for (const [k, v] of Object.entries(notified)) {
       if (Date.parse(v) < cutoff) delete notified[k]
     }
     store.set('webhooks.deadlineNotified', JSON.stringify(notified))
+  }
+
+  function markCollectionDeadlineSent(collectionId: string, deadline: string) {
+    if (stopped) return
+    store.transaction(() => {
+      const latest = store.collection(collectionId)
+      if (!latest || latest.deadline !== deadline || !latest.deadlineReminder?.enabled) return
+      if (latest.deadlineReminder.lastSentDeadline === deadline) return
+      store.saveCollection({
+        ...latest,
+        deadlineReminder: {
+          ...latest.deadlineReminder,
+          lastSentDeadline: deadline,
+          lastSentAt: new Date(nowFn()).toISOString(),
+        },
+      })
+    })
   }
 
   function startChannelDrain(channelId: string) {
@@ -713,8 +863,14 @@ export function registerWebhooks(
               continue
             }
             const log = await deliverNow(ch, job.payload, maxAttempts)
-            if (job.deadlineMarker && log.status === 'succeeded' && !stopped) {
-              markDeadlineNotified(job.deadlineMarker)
+            if (log.status === 'succeeded' && !stopped) {
+              if (job.deadlineMarker) markDeadlineNotified(job.deadlineMarker)
+              if (job.deadlineCollection) {
+                markCollectionDeadlineSent(
+                  job.deadlineCollection.collectionId,
+                  job.deadlineCollection.deadline,
+                )
+              }
             }
           } finally {
             if (job.deadlineMarker) inFlightDeadlines.delete(job.deadlineMarker)
@@ -793,6 +949,7 @@ export function registerWebhooks(
       channelId: agg.channelId,
       payload,
       ...(agg.deadlineMarker ? { deadlineMarker: agg.deadlineMarker } : {}),
+      ...(agg.deadlineCollection ? { deadlineCollection: agg.deadlineCollection } : {}),
     })
   }
 
@@ -801,6 +958,7 @@ export function registerWebhooks(
     input: WebhookEmitInput,
     nowIso: string,
     deadlineMarker?: string,
+    deadlineCollection?: { collectionId: string; deadline: string },
   ) {
     const key = `${ch.id}:${input.collectionId || 'global'}:${input.event}`
     const existing = pending.get(key)
@@ -808,6 +966,8 @@ export function registerWebhooks(
       existing.mergedCount += 1
       existing.totalFiles += input.fileCount || 0
       if (deadlineMarker && !existing.deadlineMarker) existing.deadlineMarker = deadlineMarker
+      if (deadlineCollection && !existing.deadlineCollection)
+        existing.deadlineCollection = deadlineCollection
       if (existing.items.length < 20) {
         existing.items.push({
           ...(input.actor ? { actor: input.actor } : {}),
@@ -838,6 +998,7 @@ export function registerWebhooks(
       mergedCount: 1,
       totalFiles: input.fileCount || 0,
       ...(deadlineMarker ? { deadlineMarker } : {}),
+      ...(deadlineCollection ? { deadlineCollection } : {}),
       timer,
     })
   }
@@ -845,7 +1006,7 @@ export function registerWebhooks(
   function emit(input: WebhookEmitInput) {
     if (stopped) return
     const cfg = readConfig(store)
-    const nowIso = new Date().toISOString()
+    const nowIso = new Date(nowFn()).toISOString()
     for (const ch of cfg.channels) {
       if (!ch.enabled || !ch.events.includes(input.event)) continue
       emitToChannel(ch, input, nowIso)
@@ -853,67 +1014,83 @@ export function registerWebhooks(
   }
 
   function checkDeadlines(force = false): number {
-    if (stopped) return 0
-    const cfg = readConfig(store)
-    const eligibleChannels = cfg.channels.filter(
-      (c) => c.enabled && c.events.includes('collection.deadline_soon'),
-    )
-    if (!eligibleChannels.length) return 0
-    const today = localDate()
-    const tomorrow = localDate(new Date(Date.now() + 24 * 60 * 60 * 1000))
-    const notified = readDeadlineNotified()
-    const active = store.collections().filter((c) => !c.archivedAt && c.status === 'active')
-    let emitted = 0
-    const now = Date.now()
-    const nowIso = new Date(now).toISOString()
-    for (const c of active) {
-      if (isExpired(c, now)) continue
-      if (c.deadline !== today && c.deadline !== tomorrow) continue
-      const legacyMarker = `${c.id}:${c.deadline}`
-      const targetChannels = eligibleChannels.filter((ch) => {
-        const chMarker = `${ch.id}:${c.id}:${c.deadline}`
-        if (force) return true
-        if (notified[legacyMarker] || notified[chMarker]) return false
-        if (inFlightDeadlines.has(chMarker)) return false
-        return true
-      })
-      if (!targetChannels.length) continue
-      let detail = `已收 ${c.received} / 目标 ${c.target} 份，截止 ${c.deadline} 23:59`
-      if (c.materials?.length) {
-        const prog = materialProgress(c, store.collectionFiles(c.id, false))
-        detail = `必需材料已收齐 ${prog.received}/${prog.total} 人，核对通过 ${prog.reviewed} 人，截止 ${c.deadline} 23:59`
+    if (stopped || deadlineScanActive) return 0
+    deadlineScanActive = true
+    try {
+      const cfg = readConfig(store)
+      const eligibleChannels = cfg.channels.filter(
+        (c) => c.enabled && c.events.includes('collection.deadline_soon'),
+      )
+      if (!eligibleChannels.length) return 0
+      const notified = readDeadlineNotified()
+      const active = store.collections().filter((c) => !c.archivedAt && c.status === 'active')
+      let emitted = 0
+      const now = nowFn()
+      const nowIso = new Date(now).toISOString()
+      for (const c of active) {
+        const deadlineMs = new Date(`${c.deadline}T23:59:59.999+08:00`).getTime()
+        const remainingMs = deadlineMs - now
+        if (!Number.isFinite(deadlineMs) || remainingMs <= 0) continue
+
+        const reminder = c.deadlineReminder
+        if (reminder !== undefined) {
+          if (!reminder.enabled) continue
+          if (remainingMs > reminder.hoursBefore * 60 * 60 * 1000) continue
+          if (!force && reminder.lastSentDeadline === c.deadline) continue
+        } else if (remainingMs > 24 * 60 * 60 * 1000) {
+          continue
+        }
+
+        const legacyMarker = `${c.id}:${c.deadline}`
+        const targetChannels = eligibleChannels.filter((ch) => {
+          const chMarker = `${ch.id}:${c.id}:${c.deadline}`
+          if (force) return true
+          if (inFlightDeadlines.has(chMarker)) return false
+          if (notified[legacyMarker] || notified[chMarker]) return false
+          return true
+        })
+        if (!targetChannels.length) continue
+
+        const digest = buildCollectionReminderDigest(store, c, {
+          desensitizeNames: reminder?.desensitizeNames ?? true,
+          nowMs: now,
+        })
+        const deadlineCollection = reminder?.enabled
+          ? { collectionId: c.id, deadline: c.deadline }
+          : undefined
+
+        for (const ch of targetChannels) {
+          const chMarker = `${ch.id}:${c.id}:${c.deadline}`
+          inFlightDeadlines.add(chMarker)
+          emitToChannel(
+            ch,
+            {
+              event: 'collection.deadline_soon',
+              collectionId: c.id,
+              collectionTitle: c.title,
+              summary: digest.summary,
+              detail: digest.detail,
+            },
+            nowIso,
+            chMarker,
+            deadlineCollection,
+          )
+        }
+        emitted++
       }
-      for (const ch of targetChannels) {
-        const chMarker = `${ch.id}:${c.id}:${c.deadline}`
-        inFlightDeadlines.add(chMarker)
-        emitToChannel(
-          ch,
-          {
-            event: 'collection.deadline_soon',
-            collectionId: c.id,
-            collectionTitle: c.title,
-            summary: `「${c.title}」即将于 ${c.deadline} 截止`,
-            detail,
-          },
-          nowIso,
-          chMarker,
-        )
-      }
-      emitted++
+      return emitted
+    } finally {
+      deadlineScanActive = false
     }
-    return emitted
   }
 
-  const deadlineTimer = setInterval(
-    () => {
-      try {
-        checkDeadlines(false)
-      } catch {
-        /* Ignore periodic deadline scan errors. */
-      }
-    },
-    Math.max(1000, policy.deadlineIntervalMs ?? 30 * 60 * 1000),
-  )
+  const deadlineTimer = setInterval(() => {
+    try {
+      checkDeadlines(false)
+    } catch {
+      /* Ignore periodic deadline scan errors. */
+    }
+  }, resolveDeadlineIntervalMs(policy))
   deadlineTimer.unref()
 
   // Admin-only HTTP API (enforced by app.ts onRequest for /api/webhooks*)
@@ -1116,6 +1293,93 @@ export function registerWebhooks(
     async () => {
       const count = checkDeadlines(true)
       return { triggered: count }
+    },
+  )
+
+  // Admin & Editor endpoint (viewer blocked by app.ts onRequest write guard; CSRF + Origin enforced)
+  app.post(
+    '/api/collections/:id/remind-webhook',
+    { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const id = String(object(req.params).id)
+      const c = store.collection(id)
+      if (!c) throw new HttpError(404, '没有找到这项收集')
+      if (c.archivedAt) throw new HttpError(409, '该任务已归档，无法推送催交摘要')
+      const body = req.body ? object(req.body) : {}
+      if (body.desensitizeNames !== undefined && typeof body.desensitizeNames !== 'boolean') {
+        throw new HttpError(400, '缺交名单脱敏参数无效')
+      }
+      const desensitizeNames =
+        body.desensitizeNames !== undefined
+          ? Boolean(body.desensitizeNames)
+          : (c.deadlineReminder?.desensitizeNames ?? true)
+      const cfg = readConfig(store)
+      const targetChannels = cfg.channels.filter(
+        (ch) => ch.enabled && ch.events.includes('collection.deadline_soon'),
+      )
+      if (!targetChannels.length) {
+        throw new HttpError(
+          400,
+          '尚未启用订阅「临近截止汇总」的 Webhook 渠道，请先在设置 → 事件通知中配置并启用',
+        )
+      }
+      const nowMs = nowFn()
+      const nowIso = new Date(nowMs).toISOString()
+      const digest = buildCollectionReminderDigest(store, c, { desensitizeNames, nowMs })
+      const logs = await Promise.all(
+        targetChannels.map((ch) =>
+          deliverNow(
+            ch,
+            {
+              deliveryId: randomUUID(),
+              event: 'collection.deadline_soon',
+              collectionId: c.id,
+              collectionTitle: c.title,
+              mergedCount: 1,
+              summary: digest.summary,
+              items: [{ summary: digest.summary, detail: digest.detail, at: nowIso }],
+            },
+            1,
+          ),
+        ),
+      )
+      const deliveries: WebhookRemindDelivery[] = logs.map((log) => ({
+        channelId: log.channelId,
+        channelName: log.channelName,
+        channelType: log.channelType,
+        status: log.status,
+        ...(log.httpStatus !== undefined ? { httpStatus: log.httpStatus } : {}),
+        ...(log.error ? { error: log.error } : {}),
+        targetHint: log.targetHint,
+      }))
+      const succeeded = deliveries.filter((d) => d.status === 'succeeded').length
+      const failed = deliveries.length - succeeded
+      store.activity(
+        `手动向 Webhook 推送「${c.title}」催交摘要（成功 ${succeeded}/${deliveries.length} 个渠道）`,
+      )
+      const result: WebhookRemindResult = {
+        ok: succeeded > 0,
+        totalChannels: deliveries.length,
+        succeeded,
+        failed,
+        summary: digest.summary,
+        stats: {
+          receivedCount: digest.receivedCount,
+          totalCount: digest.totalCount,
+          missingCount: digest.missingCount,
+          needsChangesCount: digest.needsChangesCount,
+        },
+        deliveries,
+        ...(succeeded === 0
+          ? {
+              error:
+                deliveries.find((d) => d.error)?.error ||
+                '全部通知渠道投递失败，请前往设置 → 事件通知查看日志',
+            }
+          : {}),
+      }
+      if (succeeded === 0) reply.code(502)
+      return result
     },
   )
 

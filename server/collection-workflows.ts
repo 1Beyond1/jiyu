@@ -4,11 +4,14 @@ import type {
   Collection,
   CollectedFile,
   CollectionTemplate,
+  DeadlineReminderConfig,
+  ExportedCollectionTemplate,
   Participant,
   UploadReceipt,
 } from '../src/types.ts'
 import type { Store } from './store.ts'
-import { digest, equalToken, HttpError, object, text } from './security.ts'
+import { digest, equalToken, HttpError, object, safeName, text } from './security.ts'
+import { fileExtensions } from '../src/lib/collections.ts'
 import { fileNameKey, submissionFileName } from '../src/lib/submission-naming.ts'
 import { collectionParticipants } from '../src/lib/participants.ts'
 import { materialParticipants, materialReviewState } from '../src/lib/materials.ts'
@@ -114,6 +117,40 @@ export function collectionRules(
     !['_', '-'].includes(String(naming.separator))
   )
     throw new HttpError(400, '命名规则无效')
+  let deadlineReminder: DeadlineReminderConfig | undefined = current?.deadlineReminder
+  if (body.deadlineReminder === null) {
+    deadlineReminder = undefined
+  } else if (body.deadlineReminder !== undefined) {
+    const rawReminder = object(body.deadlineReminder)
+    if (typeof rawReminder.enabled !== 'boolean') {
+      throw new HttpError(400, '定时截止预警开关无效')
+    }
+    const rawHours = rawReminder.hoursBefore ?? current?.deadlineReminder?.hoursBefore ?? 24
+    if (
+      typeof rawHours !== 'number' ||
+      !Number.isInteger(rawHours) ||
+      rawHours < 1 ||
+      rawHours > 168
+    ) {
+      throw new HttpError(400, '预警提前时长需为 1–168 小时之间的整数')
+    }
+    const rawDesensitize =
+      rawReminder.desensitizeNames ?? current?.deadlineReminder?.desensitizeNames ?? true
+    if (typeof rawDesensitize !== 'boolean') {
+      throw new HttpError(400, '缺交名单脱敏设置无效')
+    }
+    deadlineReminder = {
+      enabled: rawReminder.enabled,
+      hoursBefore: rawHours,
+      desensitizeNames: rawDesensitize,
+      ...(current?.deadlineReminder?.lastSentDeadline
+        ? { lastSentDeadline: current.deadlineReminder.lastSentDeadline }
+        : {}),
+      ...(current?.deadlineReminder?.lastSentAt
+        ? { lastSentAt: current.deadlineReminder.lastSentAt }
+        : {}),
+    }
+  }
   return {
     fields,
     identityField,
@@ -123,6 +160,7 @@ export function collectionRules(
     allowReplacement,
     materials,
     naming: { parts: naming.parts as string[], separator: naming.separator as '_' | '-' },
+    ...(deadlineReminder ? { deadlineReminder } : {}),
   }
 }
 
@@ -455,6 +493,114 @@ function buildReceiptMaterialOverview(
   }
 }
 
+const TEMPLATE_SCHEMA_V1 = 'jiyu-template-v1' as const
+const MAX_IMPORT_RULES_BYTES = 32 * 1024
+
+export function sanitizeTemplateRules(source: Partial<Collection>): Partial<Collection> {
+  const rules: Partial<Collection> = {}
+  const portableKeys = [
+    'title',
+    'description',
+    'category',
+    'target',
+    'formats',
+    'maxFileSizeMB',
+    'maxFilesPerSubmission',
+    'maxTotalSizeMB',
+    'fields',
+    'identityField',
+    'naming',
+    'submissionMode',
+    'allowReplacement',
+    'materials',
+  ] as const
+  for (const k of portableKeys) {
+    if (source[k] !== undefined) Object.assign(rules, { [k]: source[k] })
+  }
+  if (source.deadlineReminder) {
+    rules.deadlineReminder = {
+      enabled: Boolean(source.deadlineReminder.enabled),
+      hoursBefore: source.deadlineReminder.hoursBefore,
+      desensitizeNames: source.deadlineReminder.desensitizeNames,
+    }
+  }
+  return rules
+}
+
+function parseImportedTemplate(raw: unknown): { name: string; rules: Partial<Collection> } {
+  const body = object(raw)
+  if (body.schema !== TEMPLATE_SCHEMA_V1) {
+    throw new HttpError(400, `模板格式不受支持，仅支持 ${TEMPLATE_SCHEMA_V1} 标准 JSON`)
+  }
+  const name = text(body.name, '模板名称', 40)
+  const rawRules = object(body.rules)
+  if (Buffer.byteLength(JSON.stringify(rawRules), 'utf8') > MAX_IMPORT_RULES_BYTES) {
+    throw new HttpError(400, '模板规则内容过长，请精简后再导入')
+  }
+  const optInt = (key: string, max: number) => {
+    const val = rawRules[key]
+    if (val === undefined) return undefined
+    if (typeof val !== 'number' || !Number.isInteger(val) || val < 1 || val > max) {
+      throw new HttpError(400, `模板字段 ${key} 超出允许范围`)
+    }
+    return val
+  }
+  const out: Partial<Collection> = {}
+  if (rawRules.title !== undefined) out.title = text(rawRules.title, '收集名称', 50, 0)
+  if (rawRules.description !== undefined)
+    out.description = text(rawRules.description, '收集说明', 150, 0)
+  if (rawRules.category !== undefined) {
+    if (
+      rawRules.category !== 'design' &&
+      rawRules.category !== 'document' &&
+      rawRules.category !== 'photo'
+    ) {
+      throw new HttpError(400, '模板收集类型无效')
+    }
+    out.category = rawRules.category
+  }
+  const target = optInt('target', 10000)
+  if (target !== undefined) out.target = target
+  if (rawRules.formats !== undefined) {
+    const formats = fileExtensions(text(rawRules.formats, '文件格式', 260))
+    if (
+      !formats.length ||
+      formats.length > 20 ||
+      formats.some((f) => !/^[a-z0-9]{1,12}$/.test(f))
+    ) {
+      throw new HttpError(400, '模板文件格式后缀无效')
+    }
+    out.formats = formats.join(', ').toUpperCase()
+  }
+  const maxFileSizeMB = optInt('maxFileSizeMB', 1024)
+  if (maxFileSizeMB !== undefined) out.maxFileSizeMB = maxFileSizeMB
+  const maxFilesPerSubmission = optInt('maxFilesPerSubmission', 100)
+  if (maxFilesPerSubmission !== undefined) out.maxFilesPerSubmission = maxFilesPerSubmission
+  const maxTotalSizeMB = optInt('maxTotalSizeMB', 1048576)
+  if (maxTotalSizeMB !== undefined) out.maxTotalSizeMB = maxTotalSizeMB
+
+  const validatedRules = collectionRules({
+    fields: rawRules.fields,
+    identityField: rawRules.identityField,
+    submissionMode: rawRules.submissionMode,
+    allowReplacement: rawRules.allowReplacement,
+    materials: rawRules.materials,
+    naming: rawRules.naming,
+    deadlineReminder: rawRules.deadlineReminder,
+    expectedSubmitters: [],
+    restrictToExpectedSubmitters: false,
+  })
+  const {
+    expectedSubmitters: _ignoredRoster,
+    restrictToExpectedSubmitters: _ignoredRestrict,
+    ...portableValidated
+  } = validatedRules
+  return {
+    name,
+    rules: sanitizeTemplateRules({ ...out, ...portableValidated }),
+  }
+}
+
 export function registerCollectionWorkflows(
   app: FastifyInstance,
   store: Store,
@@ -526,24 +672,7 @@ export function registerCollectionWorkflows(
         .n >= 50
     )
       throw new HttpError(400, '最多保存 50 个模板，请重用现有模板')
-    const rules: Partial<Collection> = {}
-    for (const k of [
-      'title',
-      'description',
-      'category',
-      'target',
-      'formats',
-      'maxFileSizeMB',
-      'maxFilesPerSubmission',
-      'maxTotalSizeMB',
-      'fields',
-      'identityField',
-      'naming',
-      'submissionMode',
-      'allowReplacement',
-      'materials',
-    ] as const)
-      Object.assign(rules, { [k]: c[k] })
+    const rules = sanitizeTemplateRules(c)
     const template: CollectionTemplate = {
       id: randomUUID(),
       name: text(b.name, '模板名称', 40),
@@ -556,6 +685,50 @@ export function registerCollectionWorkflows(
         .run(template.id, JSON.stringify(template))
       store.activity(`保存了收集模板「${template.name}」`)
     })
+    return template
+  })
+  app.get('/api/templates/:id/export', async (req, reply) => {
+    const id = String(object(req.params).id)
+    const row = store.db.prepare('SELECT data FROM collection_templates WHERE id=?').get(id) as
+      | { data: string }
+      | undefined
+    if (!row) throw new HttpError(404, '模板不存在')
+    const t = JSON.parse(row.data) as CollectionTemplate
+    const exported: ExportedCollectionTemplate = {
+      schema: TEMPLATE_SCHEMA_V1,
+      exportedAt: new Date().toISOString(),
+      name: t.name,
+      rules: sanitizeTemplateRules(t.rules || {}),
+    }
+    const downloadName = `${safeName(`${t.name}.jiyu-template.json`)}`
+    reply
+      .header('Content-Type', 'application/json; charset=utf-8')
+      .header(
+        'Content-Disposition',
+        `attachment; filename="jiyu-template.json"; filename*=UTF-8''${encodeURIComponent(downloadName).replace(/[!'()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16)}`)}`,
+      )
+    return exported
+  })
+  app.post('/api/templates/import', async (req, reply) => {
+    if (
+      (store.db.prepare('SELECT COUNT(*) AS n FROM collection_templates').get() as { n: number })
+        .n >= 50
+    )
+      throw new HttpError(400, '最多保存 50 个模板，请重用现有模板')
+    const { name, rules } = parseImportedTemplate(req.body)
+    const template: CollectionTemplate = {
+      id: randomUUID(),
+      name,
+      rules,
+      archived: false,
+    }
+    store.transaction(() => {
+      store.db
+        .prepare('INSERT INTO collection_templates VALUES (?,?)')
+        .run(template.id, JSON.stringify(template))
+      store.activity(`导入了收集模板「${template.name}」`)
+    })
+    reply.code(201)
     return template
   })
   app.patch('/api/templates/:id', async (req) => {

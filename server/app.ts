@@ -45,7 +45,7 @@ import type { AITransport } from './ai.ts'
 import type { AIFailureDiagnostics } from './ai-failure-diagnostics.ts'
 import { registerArchives } from './archive.ts'
 import { registerUploads } from './uploads.ts'
-import type { UploadBudget } from './uploads.ts'
+import type { UploadBudget, UploadCleanupOptions } from './uploads.ts'
 import { publicUser, registerUsers } from './users.ts'
 import type { UserRow } from './users.ts'
 import { registerBackups } from './backup-scheduler.ts'
@@ -219,7 +219,12 @@ export async function createApp(
     storageRetry?: StorageRetryPolicy
     materialToolMode?: boolean
     unlinkObject?: (path: string) => Promise<void>
-    unlockPolicy?: { globalMaxFailures?: number; backoffBaseMs?: number }
+    unlockPolicy?: {
+      globalMaxFailures?: number
+      backoffBaseMs?: number
+      maxInFlightPerCollection?: number
+    }
+    uploadCleanup?: UploadCleanupOptions
     webhookPolicy?: WebhookPolicy
   } = {},
 ) {
@@ -416,7 +421,7 @@ export async function createApp(
     })
     done()
   })
-  app.get('/api/health', async () => ({ ok: true, version: '0.4.0' }))
+  app.get('/api/health', async () => ({ ok: true, version: '0.5.0' }))
   app.get('/api/auth/status', async (req) => {
     const auth = session(req)
     return {
@@ -652,6 +657,7 @@ export async function createApp(
       materialSummary: _oldMatSummary,
       requestLimitMB: _oldReqLimit,
       hasAccessCode: _oldHasCode,
+      deadlineReminder: oldDeadlineReminder,
       ...base
     } = source
     const cloned: Collection = {
@@ -667,6 +673,15 @@ export async function createApp(
       restrictToExpectedSubmitters: includeExpected
         ? Boolean(source.restrictToExpectedSubmitters)
         : false,
+      ...(oldDeadlineReminder
+        ? {
+            deadlineReminder: {
+              enabled: oldDeadlineReminder.enabled,
+              hoursBefore: oldDeadlineReminder.hoursBefore,
+              desensitizeNames: oldDeadlineReminder.desensitizeNames,
+            },
+          }
+        : {}),
       ...(source.materials?.length ? { materialRevision: randomUUID() } : {}),
     }
     if (body.accessCode !== undefined && String(body.accessCode).trim() !== '') {
@@ -959,6 +974,8 @@ export async function createApp(
   const UNLOCK_TRACK_MAX_ENTRIES = 2000
   const unlockGlobalMaxFailures = Math.max(1, options.unlockPolicy?.globalMaxFailures ?? 30)
   const unlockBackoffBaseMs = Math.max(1, options.unlockPolicy?.backoffBaseMs ?? 2000)
+  const unlockMaxInFlight = Math.max(1, options.unlockPolicy?.maxInFlightPerCollection ?? 2)
+  const unlockInFlight = new Map<string, number>()
   const unlockIpFailures = new Map<
     string,
     { failures: number; lockedUntil: number; lastSeen: number }
@@ -998,6 +1015,7 @@ export async function createApp(
       accessCodeHash: hash,
       accessCodeVersion: _ver,
       draftOrigin: _draftOrigin,
+      deadlineReminder: _deadlineReminder,
       ...c
     } = raw
     return {
@@ -1054,33 +1072,68 @@ export async function createApp(
       const body = object(req.body)
       const code = typeof body.accessCode === 'string' ? body.accessCode.trim() : ''
       if (!code || code.length > 32) throw new HttpError(400, '请输入 4–8 位提取码')
-      const valid = await checkPassword(code, c.accessCodeHash)
+      const activeInFlight = unlockInFlight.get(collectionKey) ?? 0
+      if (activeInFlight >= unlockMaxInFlight) {
+        reply.header('Retry-After', '1')
+        throw new HttpError(429, '当前提取码校验请求较多，请稍后重试')
+      }
+      unlockInFlight.set(collectionKey, activeInFlight + 1)
+      let valid = false
+      try {
+        valid = await checkPassword(code, c.accessCodeHash)
+      } finally {
+        const left = (unlockInFlight.get(collectionKey) ?? 1) - 1
+        if (left <= 0) unlockInFlight.delete(collectionKey)
+        else unlockInFlight.set(collectionKey, left)
+      }
       if (!valid) {
         const failedAt = Date.now()
+        const latestIpRecord = unlockIpFailures.get(ipKey)
         const nextIpFailures =
-          ipRecord && failedAt - ipRecord.lastSeen <= UNLOCK_WINDOW_MS ? ipRecord.failures + 1 : 1
+          latestIpRecord && failedAt - latestIpRecord.lastSeen <= UNLOCK_WINDOW_MS
+            ? latestIpRecord.failures + 1
+            : 1
         const backoffMs =
           nextIpFailures >= 3
             ? Math.min(UNLOCK_BACKOFF_MAX_MS, unlockBackoffBaseMs * 2 ** (nextIpFailures - 3))
             : 0
+        const prevIpLockedUntil = latestIpRecord?.lockedUntil ?? 0
         unlockIpFailures.set(ipKey, {
           failures: nextIpFailures,
-          lockedUntil: backoffMs ? failedAt + backoffMs : 0,
+          lockedUntil: backoffMs
+            ? Math.max(prevIpLockedUntil, failedAt + backoffMs)
+            : prevIpLockedUntil > failedAt
+              ? prevIpLockedUntil
+              : 0,
           lastSeen: failedAt,
         })
+        const latestColRecord = unlockCollectionFailures.get(collectionKey)
         const activeCol =
-          colRecord && failedAt - colRecord.windowStart <= UNLOCK_WINDOW_MS
-            ? colRecord
+          latestColRecord && failedAt - latestColRecord.windowStart <= UNLOCK_WINDOW_MS
+            ? { ...latestColRecord }
             : { failures: 0, windowStart: failedAt, lockedUntil: 0 }
         activeCol.failures += 1
         if (activeCol.failures >= unlockGlobalMaxFailures) {
-          activeCol.lockedUntil = activeCol.windowStart + UNLOCK_WINDOW_MS
+          activeCol.lockedUntil = Math.max(
+            activeCol.lockedUntil,
+            activeCol.windowStart + UNLOCK_WINDOW_MS,
+          )
         }
         unlockCollectionFailures.set(collectionKey, activeCol)
         throw new HttpError(403, '提取码不正确，请核对后重试')
       }
+      const postNow = Date.now()
+      const postColRecord = unlockCollectionFailures.get(collectionKey)
+      if (postColRecord && postColRecord.lockedUntil > postNow) {
+        const retryAfter = Math.max(1, Math.ceil((postColRecord.lockedUntil - postNow) / 1000))
+        reply.header('Retry-After', String(retryAfter))
+        throw new HttpError(
+          429,
+          '该收集链接近期提取码错误次数过多，已临时保护锁定，请稍后重试或联系发起人更换提取码',
+        )
+      }
       unlockIpFailures.delete(ipKey)
-      const expiresAt = now + 12 * 60 * 60 * 1000
+      const expiresAt = postNow + 12 * 60 * 60 * 1000
       const proof = signAccessProof(
         store.publicAccessSecret(),
         c.id,
@@ -1571,7 +1624,15 @@ export async function createApp(
   const archives = registerArchives(app, store)
   registerCollectionWorkflows(app, store, requirePublicAccess)
   registerMaterials(app, store, config, session, webhooks, workspaceOptions)
-  await registerUploads(app, store, config, budget, requirePublicAccess, webhooks)
+  const uploads = await registerUploads(
+    app,
+    store,
+    config,
+    budget,
+    requirePublicAccess,
+    webhooks,
+    options.uploadCleanup,
+  )
   registerUsers(app, store, (req) => session(req)?.id)
   const backups = await registerBackups(
     app,
@@ -1679,5 +1740,5 @@ export async function createApp(
     })
   }
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: '页面或接口不存在' }))
-  return { app, store, webhooks }
+  return { app, store, webhooks, uploads }
 }

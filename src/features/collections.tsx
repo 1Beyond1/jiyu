@@ -11,10 +11,12 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FolderCog,
   LockKeyhole,
   MessageSquareText,
 } from 'lucide-react'
 import { CollectionIcon, Empty, Modal } from '../components/ui'
+import { TemplateManagerModal } from './collection-templates'
 import type { Collection, CollectedFile } from '../types'
 import { materialProgress } from '../lib/materials'
 import { collectionState, collectionStateNames, isExpired, nextWeek } from '../lib/collections'
@@ -156,6 +158,7 @@ export function Collections({
   const { canEdit } = useAccount()
   const [archiveScope, setArchiveScope] = useState<'active' | 'archived' | 'all'>('active')
   const [tab, setTab] = useState('all')
+  const [templatesOpen, setTemplatesOpen] = useState(false)
   const scoped = collections.filter((c) =>
     archiveScope === 'all'
       ? true
@@ -177,12 +180,18 @@ export function Collections({
           <h1>让收集，有条不紊。</h1>
           <p>一个链接收齐文件，进展尽在掌握。</p>
         </div>
-        {canEdit && (
-          <button type="button" className="button primary" onClick={onCreate}>
-            <Plus size={17} />
-            新建收集
+        <div className="button-row">
+          <button type="button" className="button" onClick={() => setTemplatesOpen(true)}>
+            <FolderCog size={16} />
+            模板管理
           </button>
-        )}
+          {canEdit && (
+            <button type="button" className="button primary" onClick={onCreate}>
+              <Plus size={17} />
+              新建收集
+            </button>
+          )}
+        </div>
       </div>
       <div className="collection-scope-bar">
         <div className="tabs archive-scope-tabs" role="tablist" aria-label="归档状态筛选">
@@ -266,6 +275,7 @@ export function Collections({
           }
         />
       )}
+      {templatesOpen && <TemplateManagerModal onClose={() => setTemplatesOpen(false)} />}
     </>
   )
 }
