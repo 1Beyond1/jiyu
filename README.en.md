@@ -136,11 +136,10 @@ scripts/   Helper scripts
 
 - [Changelog](CHANGELOG.md) · [Deployment Guide](docs/DEPLOYMENT.md) · [Architecture](docs/ARCHITECTURE.md) · [Project Notes](docs/PROJECT.md) · [Contributor Guidelines](AGENTS.md)
 
-## Known Boundaries
+## Deployment Notes
 
-- Cloud storage adapters (WebDAV, S3, Baidu Netdisk, OneDrive, Google Drive) and AI flows are covered by automated protocol, checksum, retry, and security tests; live end-to-end validation with real cloud accounts and external LLM providers (including semantic quality, billing, and latency) must be verified with your own credentials.
-- Cloud sync retains complete local copies on the VPS (required for previews, streaming archives, and full backups) and does not reclaim local disk space automatically.
-- Jiyu does not include antivirus scanning or end-to-end encryption. Configure HTTPS, domain routing, access controls, and off-site backup replication before production use.
+- Cloud sync retains complete local copies on the VPS (for online previews, streaming archives, and full backups) and does not reclaim local disk space automatically.
+- Configure HTTPS, domain routing, access controls, and off-site backup replication before production use (built-in antivirus scanning and end-to-end encryption are not included).
 
 ## License
 
