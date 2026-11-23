@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { createHash, randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createApp } from './app.ts'
@@ -930,19 +931,21 @@ test('v0.5.0 定时截止预警幂等调度（跨重启不重发）、手动催�
     assert.equal(imported.rules.materials.length, 1)
     assert.equal(imported.rules.deadlineReminder.hoursBefore, 6)
 
-    // 6. 验证 compose.yaml、.env.example 与 Caddyfile 安全加固配置一致
-    const composeText = await readFile(resolve('compose.yaml'), 'utf8')
-    const envExampleText = await readFile(resolve('.env.example'), 'utf8')
-    const caddyText = await readFile(resolve('Caddyfile'), 'utf8')
-    assert.ok(composeText.includes('JIYU_RATE_LIMIT_UNLOCK'))
-    assert.ok(composeText.includes('JIYU_STORAGE_STRICT_READBACK'))
-    assert.ok(composeText.includes('JIYU_DEADLINE_CHECK_INTERVAL_SECONDS'))
-    assert.ok(envExampleText.includes('JIYU_RATE_LIMIT_UNLOCK'))
-    assert.ok(envExampleText.includes('JIYU_STORAGE_STRICT_READBACK'))
-    assert.ok(envExampleText.includes('JIYU_DEADLINE_CHECK_INTERVAL_SECONDS'))
-    assert.ok(composeText.includes('NET_BIND_SERVICE'))
-    assert.ok(caddyText.includes('Strict-Transport-Security'))
-    assert.ok(caddyText.includes('Permissions-Policy'))
+    // 6. 验证 compose.yaml、.env.example 与 Caddyfile 安全加固配置一致（容器构建阶段仅复制源码，不包含宿主编排文件）
+    if (existsSync(resolve('compose.yaml'))) {
+      const composeText = await readFile(resolve('compose.yaml'), 'utf8')
+      const envExampleText = await readFile(resolve('.env.example'), 'utf8')
+      const caddyText = await readFile(resolve('Caddyfile'), 'utf8')
+      assert.ok(composeText.includes('JIYU_RATE_LIMIT_UNLOCK'))
+      assert.ok(composeText.includes('JIYU_STORAGE_STRICT_READBACK'))
+      assert.ok(composeText.includes('JIYU_DEADLINE_CHECK_INTERVAL_SECONDS'))
+      assert.ok(envExampleText.includes('JIYU_RATE_LIMIT_UNLOCK'))
+      assert.ok(envExampleText.includes('JIYU_STORAGE_STRICT_READBACK'))
+      assert.ok(envExampleText.includes('JIYU_DEADLINE_CHECK_INTERVAL_SECONDS'))
+      assert.ok(composeText.includes('NET_BIND_SERVICE'))
+      assert.ok(caddyText.includes('Strict-Transport-Security'))
+      assert.ok(caddyText.includes('Permissions-Policy'))
+    }
   } finally {
     await svc.app.close().catch(() => {})
     await rm(dir, { recursive: true, force: true })
