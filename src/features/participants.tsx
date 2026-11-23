@@ -40,9 +40,16 @@ export function ParticipantLedger({
         'POST',
         { desensitizeNames: c.deadlineReminder?.desensitizeNames ?? true },
       )
+      const failedNote =
+        res.failed > 0
+          ? `（${res.failed} 个渠道投递失败：${res.deliveries
+              .filter((d) => d.status === 'failed')
+              .map((d) => `${d.channelName}${d.error ? `·${d.error}` : ''}`)
+              .join('；')}）`
+          : ''
       setWebhookBanner({
         kind: 'ok',
-        text: `已向 ${res.succeeded}/${res.totalChannels} 个 Webhook 渠道推送催交摘要（${res.summary}）`,
+        text: `已向 ${res.succeeded}/${res.totalChannels} 个 Webhook 渠道推送催交摘要（${res.summary}）${failedNote}`,
       })
     } catch (e) {
       setWebhookBanner({

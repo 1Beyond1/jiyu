@@ -829,6 +829,15 @@ export function registerWebhooks(
 
   function markCollectionDeadlineSent(collectionId: string, deadline: string) {
     if (stopped) return
+    const cfg = readConfig(store)
+    const eligibleChannels = cfg.channels.filter(
+      (ch) => ch.enabled && ch.events.includes('collection.deadline_soon'),
+    )
+    const notified = readDeadlineNotified()
+    const allDelivered =
+      eligibleChannels.length > 0 &&
+      eligibleChannels.every((ch) => Boolean(notified[`${ch.id}:${collectionId}:${deadline}`]))
+    if (!allDelivered) return
     store.transaction(() => {
       const latest = store.collection(collectionId)
       if (!latest || latest.deadline !== deadline || !latest.deadlineReminder?.enabled) return

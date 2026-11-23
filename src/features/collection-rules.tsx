@@ -11,6 +11,7 @@ export function CollectionRules({
   section = 'all',
   title = '示例收集',
   received = 0,
+  legacyReminder = false,
 }: {
   value: Partial<CollectionInput>
   onChange: (v: Partial<CollectionInput>) => void
@@ -18,6 +19,7 @@ export function CollectionRules({
   section?: 'all' | 'submission' | 'naming'
   title?: string
   received?: number
+  legacyReminder?: boolean
 }) {
   const fields = value.fields || [],
     naming = value.naming || { parts: [], separator: '_' as const }
@@ -221,7 +223,9 @@ export function CollectionRules({
               <h3>定时截止预警（Webhook）</h3>
               <small>
                 {value.deadlineReminder?.enabled
-                  ? `已启用 · 截止前 ${value.deadlineReminder.hoursBefore} 小时自动推送催交摘要`
+                  ? legacyReminder
+                    ? `旧版兼容默认已启用 · 截止前 ${value.deadlineReminder.hoursBefore} 小时触发，取消勾选并保存可显式关闭`
+                    : `已启用 · 截止前 ${value.deadlineReminder.hoursBefore} 小时自动推送催交摘要`
                   : '在任务临近截止时自动统计已收/缺交情况并播报至已配置的 Webhook 群聊'}
               </small>
             </div>

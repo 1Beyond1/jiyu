@@ -75,10 +75,14 @@ export async function registerUploads(
   const cleanupIntervalMs = Math.max(100, cleanupOptions.cleanupIntervalMs ?? 60 * 60 * 1000)
   const path = (id: string, file: number, part: number) =>
     join(config.dataDir, 'chunks', `${id}.${file}.${part}`)
-  async function clearParts(id: string, skipIfActive = false) {
+  const existsStmt = store.db.prepare('SELECT 1 FROM uploads WHERE id=?')
+  async function clearParts(id: string, guardLive = false) {
     for (const name of await readdir(join(config.dataDir, 'chunks'))) {
-      if (skipIfActive && active.has(id)) return
-      if (name.startsWith(`${id}.`)) await rm(join(config.dataDir, 'chunks', name), { force: true })
+      if (guardLive && (active.has(id) || existsStmt.get(id))) return
+      if (name.startsWith(`${id}.`)) {
+        if (guardLive && (active.has(id) || existsStmt.get(id))) return
+        await rm(join(config.dataDir, 'chunks', name), { force: true })
+      }
     }
   }
   let cleanupRunning = false
@@ -95,12 +99,11 @@ export async function registerUploads(
         const deleted = store.db
           .prepare('DELETE FROM uploads WHERE id=? AND expires<=?')
           .run(id, nowFn())
-        if (deleted.changes > 0 && !active.has(id)) {
+        if (deleted.changes > 0 && !active.has(id) && !existsStmt.get(id)) {
           await clearParts(id, true)
         }
       }
       const chunksDir = join(config.dataDir, 'chunks')
-      const existsStmt = store.db.prepare('SELECT 1 FROM uploads WHERE id=?')
       for (const name of await readdir(chunksDir)) {
         if (!/^[a-f0-9-]{36}\.\d+\.\d+(\.tmp)?$/.test(name)) continue
         const batchId = name.slice(0, 36)

@@ -50,7 +50,20 @@ export function CollectionForm({
     collection?.maxFilesPerSubmission || defaultCollectionLimits.maxFilesPerSubmission,
   )
   const [maxTotalSizeMB, setMaxTotalSizeMB] = useState(collection?.maxTotalSizeMB || 2048)
-  const [rules, setRules] = useState<Partial<CollectionInput>>(collection || {})
+  const isLegacyReminder = Boolean(collection && collection.deadlineReminder === undefined)
+  const defaultDeadlineReminder = {
+    enabled: isLegacyReminder,
+    hoursBefore: 24,
+    desensitizeNames: true,
+  }
+  const [rules, setRules] = useState<Partial<CollectionInput>>(() =>
+    collection
+      ? {
+          ...collection,
+          deadlineReminder: collection.deadlineReminder ?? defaultDeadlineReminder,
+        }
+      : { deadlineReminder: defaultDeadlineReminder },
+  )
   const [templateName, setTemplateName] = useState(''),
     [error, setError] = useState(''),
     [step, setStep] = useState(0)
@@ -95,7 +108,7 @@ export function CollectionForm({
           hoursBefore: r.deadlineReminder.hoursBefore || 24,
           desensitizeNames: r.deadlineReminder.desensitizeNames ?? true,
         }
-      : undefined
+      : { enabled: false, hoursBefore: 24, desensitizeNames: true }
     setRules({ ...r, expectedSubmitters: [], deadlineReminder: cleanReminder })
     setError('')
   }
@@ -252,6 +265,11 @@ export function CollectionForm({
           onSave({
             ...rules,
             ...(draftConfirmation ? { draftConfirmation } : {}),
+            deadlineReminder: rules.deadlineReminder ?? {
+              enabled: false,
+              hoursBefore: 24,
+              desensitizeNames: true,
+            },
             expectedSubmitters: (rules.expectedSubmitters || [])
               .map((v) => v.trim())
               .filter(Boolean),
@@ -434,6 +452,7 @@ export function CollectionForm({
                 value={rules}
                 onChange={setRules}
                 locked={!!collection?.received}
+                legacyReminder={isLegacyReminder}
               />
             </>
           )}

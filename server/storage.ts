@@ -153,7 +153,7 @@ export function registerStorage(
     store.set(`storage.${p.id}`, JSON.stringify(saved))
     return saved
   }
-  const inFlightRefresh = new Map<Provider, Promise<StorageCredentials>>()
+  const inFlightRefresh = new Map<string, Promise<StorageCredentials>>()
   const needsTokenRefresh = (p: SavedProfile, c: StorageCredentials) => {
     const expiredOrMissing =
       !c.accessToken || (c.expiresAt !== undefined && c.expiresAt < Date.now() + 60000)
@@ -163,22 +163,15 @@ export function registerStorage(
     return false
   }
   const refresh = async (p: SavedProfile): Promise<StorageCredentials> => {
-    const existing = inFlightRefresh.get(p.id)
+    const refreshKey = `${p.id}:${p.revision}`
+    const existing = inFlightRefresh.get(refreshKey)
     if (existing) {
-      try {
-        const fresh = await existing
-        const after = get(p.id)
-        if (after.revision !== p.revision) throw new HttpError(409, '连接设置已变更，请重新操作')
-        const afterCreds = credentials(after)
-        if (!needsTokenRefresh(after, afterCreds)) return afterCreds
-        return fresh
-      } catch (err) {
-        const after = get(p.id)
-        if (after.revision === p.revision && err instanceof HttpError && err.statusCode === 409) {
-          return refresh(p)
-        }
-        throw err
-      }
+      const fresh = await existing
+      const after = get(p.id)
+      if (after.revision !== p.revision) throw new HttpError(409, '连接设置已变更，请重新操作')
+      const afterCreds = credentials(after)
+      if (!needsTokenRefresh(after, afterCreds)) return afterCreds
+      return fresh
     }
 
     const initial = get(p.id)
@@ -246,11 +239,11 @@ export function registerStorage(
       }
       return c
     })().finally(() => {
-      if (inFlightRefresh.get(p.id) === task) {
-        inFlightRefresh.delete(p.id)
+      if (inFlightRefresh.get(refreshKey) === task) {
+        inFlightRefresh.delete(refreshKey)
       }
     })
-    inFlightRefresh.set(p.id, task)
+    inFlightRefresh.set(refreshKey, task)
     return task
   }
   const adapter = (p: SavedProfile, c: StorageCredentials) =>

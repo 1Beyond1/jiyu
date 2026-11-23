@@ -10,8 +10,9 @@ import type {
   UploadReceipt,
 } from '../src/types.ts'
 import type { Store } from './store.ts'
-import { digest, equalToken, HttpError, object, safeName, text } from './security.ts'
+import { digest, equalToken, HttpError, object, text } from './security.ts'
 import { fileExtensions } from '../src/lib/collections.ts'
+import { sanitizeFilenameChars } from '../src/lib/text-safety.ts'
 import { fileNameKey, submissionFileName } from '../src/lib/submission-naming.ts'
 import { collectionParticipants } from '../src/lib/participants.ts'
 import { materialParticipants, materialReviewState } from '../src/lib/materials.ts'
@@ -119,7 +120,17 @@ export function collectionRules(
     throw new HttpError(400, '命名规则无效')
   let deadlineReminder: DeadlineReminderConfig | undefined = current?.deadlineReminder
   if (body.deadlineReminder === null) {
-    deadlineReminder = undefined
+    deadlineReminder = {
+      enabled: false,
+      hoursBefore: current?.deadlineReminder?.hoursBefore ?? 24,
+      desensitizeNames: current?.deadlineReminder?.desensitizeNames ?? true,
+      ...(current?.deadlineReminder?.lastSentDeadline
+        ? { lastSentDeadline: current.deadlineReminder.lastSentDeadline }
+        : {}),
+      ...(current?.deadlineReminder?.lastSentAt
+        ? { lastSentAt: current.deadlineReminder.lastSentAt }
+        : {}),
+    }
   } else if (body.deadlineReminder !== undefined) {
     const rawReminder = object(body.deadlineReminder)
     if (typeof rawReminder.enabled !== 'boolean') {
@@ -149,6 +160,12 @@ export function collectionRules(
       ...(current?.deadlineReminder?.lastSentAt
         ? { lastSentAt: current.deadlineReminder.lastSentAt }
         : {}),
+    }
+  } else if (!current) {
+    deadlineReminder = {
+      enabled: false,
+      hoursBefore: 24,
+      desensitizeNames: true,
     }
   }
   return {
@@ -700,7 +717,11 @@ export function registerCollectionWorkflows(
       name: t.name,
       rules: sanitizeTemplateRules(t.rules || {}),
     }
-    const downloadName = `${safeName(`${t.name}.jiyu-template.json`)}`
+    const cleanBase =
+      sanitizeFilenameChars(t.name.normalize('NFC'), '_', { stripBidi: true })
+        .trim()
+        .replace(/^\.+|[. ]+$/g, '') || 'jiyu-template'
+    const downloadName = `${cleanBase}.jiyu-template.json`
     reply
       .header('Content-Type', 'application/json; charset=utf-8')
       .header(

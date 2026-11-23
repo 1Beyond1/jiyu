@@ -26,7 +26,11 @@ async function exportTemplateJson(t: CollectionTemplate): Promise<void> {
     throw new Error(msg)
   }
   const parsed = JSON.parse(textContent) as ExportedCollectionTemplate
-  const safeBase = t.name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'jiyu-template'
+  const safeBase =
+    t.name
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .trim()
+      .replace(/^\.+|[. ]+$/g, '') || 'jiyu-template'
   downloadText(
     `${safeBase}.jiyu-template.json`,
     `${JSON.stringify(parsed, null, 2)}\n`,

@@ -936,13 +936,334 @@ test('v0.5.0 定时截止预警幂等调度（跨重启不重发）、手动催�
     const caddyText = await readFile(resolve('Caddyfile'), 'utf8')
     assert.ok(composeText.includes('JIYU_RATE_LIMIT_UNLOCK'))
     assert.ok(composeText.includes('JIYU_STORAGE_STRICT_READBACK'))
+    assert.ok(composeText.includes('JIYU_DEADLINE_CHECK_INTERVAL_SECONDS'))
     assert.ok(envExampleText.includes('JIYU_RATE_LIMIT_UNLOCK'))
     assert.ok(envExampleText.includes('JIYU_STORAGE_STRICT_READBACK'))
+    assert.ok(envExampleText.includes('JIYU_DEADLINE_CHECK_INTERVAL_SECONDS'))
     assert.ok(composeText.includes('NET_BIND_SERVICE'))
     assert.ok(caddyText.includes('Strict-Transport-Security'))
     assert.ok(caddyText.includes('Permissions-Policy'))
   } finally {
     await svc.app.close().catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('红队回归：含标点模板名导出不报400、新建未勾选任务不误发24h预警、多渠道部分失败可重试且不重复、OAuth跨revision刷新失败不传染', async () => {
+  const root = resolve('.tmp')
+  await mkdir(root, { recursive: true })
+  const dir = await mkdtemp(join(root, 'rt6-regression-'))
+  let fakeNow = Date.parse('2026-11-25T22:00:00+08:00') // 距 2026-11-25 截止仅 2 小时
+  let failChannelB = true
+  const webhookByUrl: Record<string, number> = {}
+
+  const webhookHttp: RemoteHTTP = async (req: RemoteRequest) => {
+    const key = req.url.hostname
+    webhookByUrl[key] = (webhookByUrl[key] || 0) + 1
+    if (key === 'chan-b.example.com' && failChannelB) {
+      return { status: 503, headers: {}, body: bufStream('{"error":"temp"}') }
+    }
+    return { status: 200, headers: {}, body: bufStream('{"ok":true}') }
+  }
+
+  let r1RefreshStarted!: () => void
+  const r1RefreshStartedPromise = new Promise<void>((r) => {
+    r1RefreshStarted = r
+  })
+  let releaseR1Refresh!: () => void
+  const r1RefreshGate = new Promise<void>((r) => {
+    releaseR1Refresh = r
+  })
+
+  const storageHttp: RemoteHTTP = async (req: RemoteRequest) => {
+    if (req.url.toString().includes('/oauth2/v2.0/token')) {
+      const form = new URLSearchParams(Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '')
+      const rt = form.get('refresh_token')
+      if (rt === 'r1-broken-refresh') {
+        r1RefreshStarted()
+        await r1RefreshGate
+        return {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+          body: bufStream('{"error":"invalid_grant"}'),
+        }
+      }
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: bufStream(
+          JSON.stringify({
+            access_token: 'r2-fresh-access',
+            refresh_token: 'r2-fresh-refresh',
+            expires_in: 3600,
+          }),
+        ),
+      }
+    }
+    if (req.url.hostname === 'upload.up.1drv.com') {
+      const bodyBuf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: bufStream(
+          JSON.stringify({
+            id: 'probe-1',
+            size: bodyBuf.length,
+            file: {
+              hashes: {
+                sha256Hash: createHash('sha256').update(bodyBuf).digest('hex').toUpperCase(),
+              },
+            },
+          }),
+        ),
+      }
+    }
+    if (req.url.pathname.endsWith('/createUploadSession')) {
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: bufStream(JSON.stringify({ uploadUrl: 'https://upload.up.1drv.com/session' })),
+      }
+    }
+    if (req.method === 'DELETE') return { status: 204, headers: {}, body: bufStream('') }
+    if (req.url.pathname.includes('.jiyu-check-')) {
+      return { status: 404, headers: {}, body: bufStream('{}') }
+    }
+    if (req.url.pathname.includes(':/')) {
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: bufStream(JSON.stringify({ id: 'folder-1', folder: {} })),
+      }
+    }
+    return { status: 200, headers: {}, body: bufStream(JSON.stringify({ id: 'drive-root' })) }
+  }
+
+  const config: Config = {
+    dataDir: join(dir, 'data'),
+    origin: 'http://127.0.0.1:3000',
+    host: '127.0.0.1',
+    port: 0,
+    quotaBytes: 16 * 1024 ** 2,
+    requestBytes: 4 * 1024 ** 2,
+    secureCookie: false,
+  }
+  const { app, store, webhooks } = await createApp(config, {
+    serveFrontend: false,
+    storageHTTP: storageHttp,
+    storageRetry: { pollIntervalMs: 15, maxRetries: 0 },
+    webhookPolicy: {
+      http: webhookHttp,
+      debounceMs: 10,
+      retryBaseMs: 10,
+      maxAttempts: 1,
+      deadlineIntervalMs: 60 * 60 * 1000,
+      now: () => fakeNow,
+    },
+  })
+  try {
+    const admin = await setupAdmin(app, store, config.origin)
+
+    // 注册 A / B 两个订阅截止预警的渠道
+    for (const [name, url] of [
+      ['渠道A', 'https://chan-a.example.com/hook'],
+      ['渠道B', 'https://chan-b.example.com/hook'],
+    ]) {
+      const r = await app.inject({
+        method: 'POST',
+        url: '/api/webhooks',
+        headers: admin,
+        payload: {
+          name,
+          type: 'generic',
+          url,
+          events: ['collection.deadline_soon'],
+          enabled: true,
+        },
+      })
+      assert.equal(r.statusCode, 201, r.body)
+    }
+
+    // 1. P1-2：新建任务未勾选/未传 deadlineReminder 时显式落库 enabled:false，临近截止（2h）绝不误发群聊
+    const silentColRes = await app.inject({
+      method: 'POST',
+      url: '/api/collections',
+      headers: admin,
+      payload: {
+        title: '机密敏感收集',
+        description: '',
+        category: 'document',
+        formats: 'PDF',
+        deadline: '2026-11-25',
+        target: 5,
+        maxFileSizeMB: 10,
+        maxFilesPerSubmission: 5,
+      },
+    })
+    assert.equal(silentColRes.statusCode, 200, silentColRes.body)
+    const silentCol = silentColRes.json().collections[0]
+    assert.equal(silentCol.deadlineReminder?.enabled, false, '新建任务默认须显式关闭自动预警')
+    assert.equal(webhooks.checkDeadlines(false), 0, '未开启定时预警的新任务不得在 24h 内自动推送')
+    await webhooks.flushPending()
+    assert.equal(Object.keys(webhookByUrl).length, 0)
+
+    // 2. P1-1：模板名称含 / : ? * 等标点符号时，导出接口必须清洗下载名并返回 200（不可报 400）
+    const punctTpl = await app.inject({
+      method: 'POST',
+      url: '/api/templates',
+      headers: admin,
+      payload: { collectionId: silentCol.id, name: '2026/05 毕业材料:终稿?*' },
+    })
+    assert.equal(punctTpl.statusCode, 200, punctTpl.body)
+    const exportPunct = await app.inject({
+      method: 'GET',
+      url: `/api/templates/${punctTpl.json().id}/export`,
+      headers: { cookie: admin.cookie },
+    })
+    assert.equal(exportPunct.statusCode, 200, exportPunct.body)
+    assert.equal(exportPunct.json().name, '2026/05 毕业材料:终稿?*')
+    assert.match(String(exportPunct.headers['content-disposition']), /filename\*=UTF-8''/)
+
+    // 3. P2-2：多渠道部分失败时 A 成功、B 503 失败 -> 不提前写死 lastSentDeadline；B 恢复后仅补发 B（A 不重复）且随后写 lastSentDeadline
+    const alertColRes = await app.inject({
+      method: 'POST',
+      url: '/api/collections',
+      headers: admin,
+      payload: {
+        title: '多渠道预警任务',
+        description: '',
+        category: 'document',
+        formats: 'PDF',
+        deadline: '2026-11-25',
+        target: 5,
+        maxFileSizeMB: 10,
+        maxFilesPerSubmission: 5,
+        deadlineReminder: { enabled: true, hoursBefore: 6, desensitizeNames: true },
+      },
+    })
+    assert.equal(alertColRes.statusCode, 200, alertColRes.body)
+    const alertCol = alertColRes
+      .json()
+      .collections.find((x: { title: string }) => x.title === '多渠道预警任务')
+
+    assert.equal(webhooks.checkDeadlines(false), 1)
+    await webhooks.flushPending()
+    assert.equal(webhookByUrl['chan-a.example.com'], 1)
+    assert.equal(webhookByUrl['chan-b.example.com'], 1)
+    assert.equal(
+      store.collection(alertCol.id)?.deadlineReminder?.lastSentDeadline,
+      undefined,
+      '存在失败渠道时不得提前写入任务级 lastSentDeadline',
+    )
+
+    // 渠道 B 恢复后再次巡检：A 不得重复发送，仅补发 B，成功后写入 lastSentDeadline
+    failChannelB = false
+    assert.equal(webhooks.checkDeadlines(false), 1)
+    await webhooks.flushPending()
+    assert.equal(webhookByUrl['chan-a.example.com'], 1, '已成功渠道 A 不得重复收到通知')
+    assert.equal(webhookByUrl['chan-b.example.com'], 2, '上次失败的渠道 B 应获得补发')
+    assert.equal(
+      store.collection(alertCol.id)?.deadlineReminder?.lastSentDeadline,
+      '2026-11-25',
+      '全部渠道投递成功后应持久化 lastSentDeadline',
+    )
+    assert.equal(webhooks.checkDeadlines(false), 0)
+
+    // 4. P2-1：OAuth 单飞锁按 provider:revision 隔离：旧 revision R1 失败 400 期间，新 revision R2 并发 /test 不受传染且启用成功
+    const rev1 = randomUUID()
+    store.set(
+      'storage.onedrive',
+      JSON.stringify({
+        id: 'onedrive',
+        endpoint: 'https://graph.microsoft.com',
+        root: '/集屿',
+        clientId: 'c1',
+        enabled: true,
+        verifiedAt: new Date().toISOString(),
+        revision: rev1,
+        encryptedCredentials: encrypt(
+          store,
+          JSON.stringify({
+            clientSecret: 's1',
+            accessToken: 'expired-r1',
+            refreshToken: 'r1-broken-refresh',
+            expiresAt: Date.now() - 60_000,
+          }),
+        ),
+      }),
+    )
+    const colId = randomUUID()
+    store.saveCollection({
+      id: colId,
+      title: 'R1传输',
+      description: '',
+      category: 'document',
+      received: 1,
+      target: 1,
+      deadline: '2099-12-31',
+      storage: 'onedrive',
+      status: 'active',
+      formats: 'TXT',
+      maxFileSizeMB: 1,
+      maxFilesPerSubmission: 1,
+    })
+    const key = randomUUID()
+    const payload = Buffer.from('r1-file')
+    await writeFile(join(config.dataDir, 'objects', key), payload)
+    store.addFile(
+      {
+        id: randomUUID(),
+        name: 'r1.txt',
+        originalName: 'r1.txt',
+        size: payload.length,
+        collectionId: colId,
+        owner: '张三',
+        createdAt: new Date().toISOString(),
+        storage: 'onedrive',
+        remoteStatus: 'queued',
+        status: 'pending',
+        sha256: createHash('sha256').update(payload).digest('hex'),
+      },
+      key,
+    )
+
+    // 等待后台 work() 进入 R1 慢速刷新
+    await r1RefreshStartedPromise
+
+    // 此时管理员保存全新有效凭证 R2，并立即触发 /test，同时放行 R1 返回 HTTP 400
+    const rev2 = randomUUID()
+    store.set(
+      'storage.onedrive',
+      JSON.stringify({
+        id: 'onedrive',
+        endpoint: 'https://graph.microsoft.com',
+        root: '/集屿',
+        clientId: 'c2',
+        enabled: false,
+        revision: rev2,
+        encryptedCredentials: encrypt(
+          store,
+          JSON.stringify({
+            clientSecret: 's2',
+            accessToken: 'expired-r2',
+            refreshToken: 'r2-good-refresh',
+            expiresAt: Date.now() - 60_000,
+          }),
+        ),
+      }),
+    )
+    const testR2Promise = app.inject({
+      method: 'POST',
+      url: '/api/storage/connections/onedrive/test',
+      headers: admin,
+      payload: { revision: rev2 },
+    })
+    releaseR1Refresh()
+    const testR2 = await testR2Promise
+    assert.equal(testR2.statusCode, 200, `R1 刷新失败不得传染 R2 测试：${testR2.body}`)
+    assert.equal(testR2.json().enabled, true, 'R2 连接测试通过后应启用，不得被 R1 错误停用')
+  } finally {
+    await app.close().catch(() => {})
     await rm(dir, { recursive: true, force: true })
   }
 })
