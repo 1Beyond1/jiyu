@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/screenshots/logo.png" alt="集屿 Jiyu Logo" width="84" />
+</p>
+
 # 集屿 Jiyu
 
 简体中文 | [English](README.en.md)

@@ -15,7 +15,7 @@ import { fileExtension } from '../lib/collections'
 export function Brand({ small = false }: { small?: boolean }) {
   return (
     <div className={`brand ${small ? 'small' : ''}`}>
-      <img src="/favicon.svg" alt="" />
+      <img src="/logo.png" alt="" />
       <div>
         <strong>
           集屿<span>jiyu</span>
