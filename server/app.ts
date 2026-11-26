@@ -264,6 +264,26 @@ export async function createApp(
       headerPairs: 100,
     },
   })
+  const isDemoUser = (user: Pick<UserRow, 'id' | 'username' | 'role'> | undefined) =>
+    Boolean(
+      config.demo?.enabled &&
+        user &&
+        user.id !== 'primary' &&
+        user.role === 'editor' &&
+        user.username.toLowerCase() === config.demo.username.toLowerCase(),
+    )
+  const lookupDemoUser = () => {
+    if (!config.demo?.enabled) return undefined
+    return store.db
+      .prepare(
+        "SELECT * FROM users WHERE username=? COLLATE NOCASE AND role='editor' AND disabled=0 AND id!='primary'",
+      )
+      .get(config.demo.username) as unknown as UserRow | undefined
+  }
+  const sessionUser = (row: UserRow) => ({
+    ...publicUser(row),
+    ...(isDemoUser(row) ? { demo: true } : {}),
+  })
   const session = (req: FastifyRequest) => {
     const value = req.cookies.jiyu_session
     if (!value || value.length > 100) return undefined
@@ -293,7 +313,7 @@ export async function createApp(
       authenticated: true,
       setupRequired: false,
       csrf,
-      user: publicUser(
+      user: sessionUser(
         store.db.prepare('SELECT * FROM users WHERE id=?').get(userId) as unknown as UserRow,
       ),
     }
@@ -321,7 +341,13 @@ export async function createApp(
     const publicRoute =
       url.startsWith('/api/public/') ||
       (req.method === 'GET' && /^\/api\/storage\/oauth\/(onedrive|gdrive)\/callback$/.test(url)) ||
-      ['/api/auth/status', '/api/auth/setup', '/api/auth/login', '/api/health'].includes(url)
+      [
+        '/api/auth/status',
+        '/api/auth/setup',
+        '/api/auth/login',
+        '/api/auth/demo',
+        '/api/health',
+      ].includes(url)
     if (!publicRoute) {
       const auth = session(req)
       if (!auth) throw new HttpError(401, '登录已过期，请重新登录')
@@ -343,6 +369,8 @@ export async function createApp(
             url.startsWith('/api/ai/settings') ||
             url === '/api/ai/test'))
       if (auth.role !== 'admin' && adminOnly) throw new HttpError(403, '这项操作需要管理员权限')
+      if (isDemoUser(auth) && /^\/api\/collections\/[^/]+\/remind-webhook$/.test(url))
+        throw new HttpError(403, '公开体验账号不能触发外部通知推送')
       const readOperation = url === '/api/archives' || /^\/api\/archives\/[^/]+$/.test(url)
       if (
         auth.role === 'viewer' &&
@@ -424,11 +452,13 @@ export async function createApp(
   app.get('/api/health', async () => ({ ok: true, version: '0.5.0' }))
   app.get('/api/auth/status', async (req) => {
     const auth = session(req)
+    const setupRequired = !store.get('password')
     return {
-      setupRequired: !store.get('password'),
+      setupRequired,
       authenticated: !!auth,
+      demoEnabled: !setupRequired && !!lookupDemoUser(),
       csrf: auth?.csrf,
-      user: auth ? publicUser(auth) : undefined,
+      user: auth ? sessionUser(auth) : undefined,
     }
   })
   app.post(
@@ -479,6 +509,17 @@ export async function createApp(
       return setSession(reply, user.id)
     },
   )
+  app.post(
+    '/api/auth/demo',
+    { config: { rateLimit: { max: config.demo?.loginPerMinute ?? 10, timeWindow: '1 minute' } } },
+    async (_req, reply) => {
+      if (!config.demo?.enabled) throw new HttpError(404, '页面或接口不存在')
+      if (!store.get('password')) throw new HttpError(503, '站点尚未完成管理员初始化')
+      const demoUser = lookupDemoUser()
+      if (!demoUser) throw new HttpError(503, '公开体验账号尚未就绪，请联系站点管理员')
+      return setSession(reply, demoUser.id)
+    },
+  )
   app.post('/api/auth/logout', async (req, reply) => {
     store.db
       .prepare('DELETE FROM sessions WHERE hash=?')
@@ -489,6 +530,7 @@ export async function createApp(
   app.post('/api/auth/password', async (req, reply) => {
     const body = object(req.body)
     const auth = session(req)!
+    if (isDemoUser(auth)) throw new HttpError(403, '公开体验账号不允许修改密码')
     if (!(await checkPassword(passwordInput(body.currentPassword, 1), auth.password)))
       throw new HttpError(400, '当前密码不正确')
     const hash = await hashPassword(passwordInput(body.password))

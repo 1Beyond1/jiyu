@@ -556,7 +556,9 @@ function WorkspaceApp() {
                 {user?.role === 'admin'
                   ? '管理员'
                   : user?.role === 'editor'
-                    ? '编辑者'
+                    ? user.demo
+                      ? '公开体验 · 编辑者'
+                      : '编辑者'
                     : '只读成员'}
               </small>
             </span>
@@ -582,7 +584,7 @@ function WorkspaceApp() {
           <div className="topbar-right">
             <span className="preview-badge">
               <i />
-              自托管工作台
+              {user?.demo ? '公开体验模式 · 成员身份' : '自托管工作台'}
             </span>
             <ThemeSwitch compact />
             <form

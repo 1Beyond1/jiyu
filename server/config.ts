@@ -8,6 +8,12 @@ export interface RateLimitConfig {
   unlockPerMinute?: number
 }
 
+export interface DemoConfig {
+  enabled: boolean
+  username: string
+  loginPerMinute?: number
+}
+
 export interface Config {
   dataDir: string
   origin: string
@@ -19,6 +25,7 @@ export interface Config {
   trustProxy?: boolean
   backupDir?: string
   rateLimits?: RateLimitConfig
+  demo?: DemoConfig
 }
 
 function envPositiveInt(key: string, fallback: number, max: number) {
@@ -27,6 +34,19 @@ function envPositiveInt(key: string, fallback: number, max: number) {
   const value = Number(raw)
   if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`${key} 配置无效`)
   return value
+}
+
+function demoFromEnv(): DemoConfig | undefined {
+  const raw = (process.env.JIYU_DEMO_ENABLED || '').trim().toLowerCase()
+  if (raw !== 'true' && raw !== '1') return undefined
+  const username = (process.env.JIYU_DEMO_USERNAME || 'demo').trim()
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/.test(username))
+    throw new Error('JIYU_DEMO_USERNAME 配置无效')
+  return {
+    enabled: true,
+    username,
+    loginPerMinute: envPositiveInt('JIYU_RATE_LIMIT_DEMO', 10, 100000),
+  }
 }
 
 export function resolveRateLimits(overrides?: RateLimitConfig) {
@@ -58,5 +78,6 @@ export function configFromEnv(): Config {
     trustProxy: process.env.JIYU_TRUST_PROXY === 'true',
     backupDir: process.env.JIYU_BACKUP_DIR ? resolve(process.env.JIYU_BACKUP_DIR) : undefined,
     rateLimits: resolveRateLimits(),
+    demo: demoFromEnv(),
   }
 }

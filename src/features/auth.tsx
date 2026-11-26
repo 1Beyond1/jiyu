@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ArrowRight, LockKeyhole, RefreshCw } from 'lucide-react'
+import { ArrowRight, LockKeyhole, RefreshCw, Sparkles } from 'lucide-react'
 import { Brand } from '../components/ui'
 import { api, setCsrf } from '../lib/api'
 import type { SessionUser } from '../types'
@@ -8,13 +8,19 @@ import type { SessionUser } from '../types'
 interface Session {
   authenticated: boolean
   setupRequired: boolean
+  demoEnabled?: boolean
   csrf?: string
   user?: SessionUser
 }
 const UserContext = createContext<SessionUser | undefined>(undefined)
 export function useAccount() {
   const user = useContext(UserContext)
-  return { user, canEdit: !!user && user.role !== 'viewer', isAdmin: user?.role === 'admin' }
+  return {
+    user,
+    canEdit: !!user && user.role !== 'viewer',
+    isAdmin: user?.role === 'admin',
+    isDemo: !!user?.demo,
+  }
 }
 
 export function AdminGate({ children }: { children: ReactNode }) {
@@ -43,7 +49,11 @@ export function AdminGate({ children }: { children: ReactNode }) {
       } catch {
         /* ignore storage access errors */
       }
-      setSession({ authenticated: false, setupRequired: false })
+      setSession((prev) => ({
+        authenticated: false,
+        setupRequired: false,
+        demoEnabled: prev?.demoEnabled,
+      }))
       setCsrf('')
     }
     window.addEventListener('jiyu:session-expired', expired)
@@ -77,9 +87,10 @@ export function AdminGate({ children }: { children: ReactNode }) {
   return (
     <AuthForm
       setup={session.setupRequired}
+      demoEnabled={Boolean(session.demoEnabled)}
       onAuthenticated={(value) => {
         setCsrf(value.csrf || '')
-        setSession(value)
+        setSession((prev) => ({ ...value, demoEnabled: prev?.demoEnabled ?? value.demoEnabled }))
       }}
     />
   )
@@ -87,9 +98,11 @@ export function AdminGate({ children }: { children: ReactNode }) {
 
 function AuthForm({
   setup,
+  demoEnabled,
   onAuthenticated,
 }: {
   setup: boolean
+  demoEnabled: boolean
   onAuthenticated: (value: Session) => void
 }) {
   const [password, setPassword] = useState(''),
@@ -97,8 +110,21 @@ function AuthForm({
     [setupToken, setSetupToken] = useState(''),
     [displayName, setDisplayName] = useState(''),
     [error, setError] = useState(''),
-    [busy, setBusy] = useState(false)
+    [busy, setBusy] = useState(false),
+    [demoBusy, setDemoBusy] = useState(false)
   const [username, setUsername] = useState('admin')
+  async function enterDemo() {
+    if (busy || demoBusy) return
+    setDemoBusy(true)
+    setError('')
+    try {
+      onAuthenticated(await api<Session>('/api/auth/demo', 'POST', {}))
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setDemoBusy(false)
+    }
+  }
   return (
     <main className="auth-page">
       <Brand />
@@ -111,8 +137,31 @@ function AuthForm({
         <p>
           {setup
             ? '设置管理员，开启你的私人文件工作台。'
-            : '使用你的成员账号登录，继续收集与整理。'}
+            : demoEnabled
+              ? '无需账号密码即可一键体验核心工作台，或使用管理员账号登录完整后台。'
+              : '使用你的成员账号登录，继续收集与整理。'}
         </p>
+        {!setup && demoEnabled && (
+          <div className="demo-entry">
+            <button
+              type="button"
+              className="button primary submit-button"
+              disabled={busy || demoBusy}
+              onClick={() => void enterDemo()}
+            >
+              <Sparkles size={16} />
+              {demoBusy ? '正在进入体验工作台…' : '一键访客体验（成员身份）'}
+              <ArrowRight size={16} />
+            </button>
+            <p className="demo-entry-note">
+              以编辑者身份免密体验创建收集、分享提交、材料核对、台账导出与 AI
+              助手；系统设置、成员与密钥管理仅管理员可用。
+            </p>
+            <div className="auth-divider" aria-hidden="true">
+              <span>或使用账号密码登录</span>
+            </div>
+          </div>
+        )}
         <form
           onSubmit={async (e) => {
             e.preventDefault()
@@ -136,7 +185,7 @@ function AuthForm({
             }
           }}
         >
-          <fieldset disabled={busy}>
+          <fieldset disabled={busy || demoBusy}>
             {setup && (
               <>
                 <label className="field">
@@ -207,14 +256,17 @@ function AuthForm({
                 {error}
               </p>
             )}
-            <button type="submit" className="button primary submit-button">
+            <button
+              type="submit"
+              className={`button ${!setup && demoEnabled ? '' : 'primary'} submit-button`}
+            >
               {busy ? '请稍候…' : setup ? '创建管理员' : '进入工作台'}
               <ArrowRight size={16} />
             </button>
           </fieldset>
         </form>
       </section>
-      <p className="auth-footnote">文件保存在你自己的服务器 · 集屿 v0.4 开发版</p>
+      <p className="auth-footnote">文件保存在你自己的服务器 · 集屿 v0.5.0</p>
     </main>
   )
 }

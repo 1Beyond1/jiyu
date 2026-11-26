@@ -19,6 +19,14 @@ import { failureDiagnostics } from './ai-failure-diagnostics.ts'
 import type { AIFailureDiagnostics } from './ai-failure-diagnostics.ts'
 import { hasAsciiWhitespaceOrControl, hasUnsafeTagChars } from '../src/lib/text-safety.ts'
 
+type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high'
+const VALID_REASONING_EFFORTS = new Set<ReasoningEffort>(['minimal', 'low', 'medium', 'high'])
+
+function managedReasoningEffort(): ReasoningEffort | undefined {
+  const raw = (process.env.JIYU_AI_REASONING_EFFORT || '').trim().toLowerCase()
+  return VALID_REASONING_EFFORTS.has(raw as ReasoningEffort) ? (raw as ReasoningEffort) : undefined
+}
+
 interface SavedSettings {
   enabled: boolean
   protocol: 'responses' | 'chat'
@@ -486,6 +494,7 @@ export function registerAI(
       outcome = 'failed'
     let providerResponse: unknown
     try {
+      const reasoningEffort = saved.managed ? managedReasoningEffort() : undefined
       const response = await transport({
         endpoint: new URL(
           `${saved.baseUrl}/${saved.protocol === 'responses' ? 'responses' : 'chat/completions'}`,
@@ -503,6 +512,7 @@ export function registerAI(
                 text: { format: { type: 'json_object' } },
                 max_output_tokens: outputLimit,
                 store: false,
+                ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
               }
             : {
                 model: saved.model,
@@ -511,6 +521,7 @@ export function registerAI(
                 max_tokens: outputLimit,
                 stream: false,
                 store: false,
+                ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
               },
       })
       providerResponse = response

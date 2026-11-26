@@ -9,6 +9,7 @@ export interface SessionUser {
   displayName: string
   role: UserRole
   disabled?: boolean
+  demo?: boolean
 }
 
 export interface Collection {

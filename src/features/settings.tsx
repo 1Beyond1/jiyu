@@ -22,7 +22,7 @@ export function SettingsPage({
   onSave: (name: string) => void
   onLogout: () => void
 }) {
-  const { user, isAdmin, canEdit } = useAccount()
+  const { user, isAdmin, canEdit, isDemo } = useAccount()
   const [name, setName] = useState(workspace.displayName),
     [passwordOpen, setPasswordOpen] = useState(false)
   const [fullExportOpen, setFullExportOpen] = useState(false),
@@ -112,17 +112,21 @@ export function SettingsPage({
               <dd>登录有效期最长 12 小时</dd>
             </div>
           </dl>
-          <button
-            type="button"
-            className="button"
-            onClick={() => {
-              setPasswordOpen(true)
-              setSaved(false)
-              setError('')
-            }}
-          >
-            修改我的密码
-          </button>
+          {isDemo ? (
+            <p className="muted">公开体验账号不可修改密码或个人资料。</p>
+          ) : (
+            <button
+              type="button"
+              className="button"
+              onClick={() => {
+                setPasswordOpen(true)
+                setSaved(false)
+                setError('')
+              }}
+            >
+              修改我的密码
+            </button>
+          )}
         </section>
         <section className="settings-panel">
           <h2>界面外观</h2>
@@ -158,7 +162,7 @@ export function SettingsPage({
               <FileDown size={15} />
               {exportingMeta ? '正在准备清单…' : '导出元数据清单（已脱敏）'}
             </button>
-            {canEdit && (
+            {canEdit && !isDemo && (
               <button
                 type="button"
                 className="button"
