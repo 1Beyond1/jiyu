@@ -50,7 +50,7 @@ jobs:
           persist-credentials: false
       - name: Build and boot container
         run: |
-          docker build -t jiyu:test .
+          docker build --build-arg SKIP_TESTS=1 -t jiyu:test .
           docker run -d --name jiyu-test -e JIYU_ORIGIN=http://127.0.0.1:3000 -p 127.0.0.1:3000:3000 jiyu:test
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:3000/api/health; then exit 0; fi

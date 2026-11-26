@@ -18,7 +18,7 @@ export function ParticipantLedger({
   onSelect: (ids: string[] | null, label?: string) => void
   onOfflineUpload?: (person: { owner: string; identity: string }) => void
 }) {
-  const { canEdit, isAdmin } = useAccount()
+  const { canEdit, isAdmin, isDemo } = useAccount()
   const [filter, setFilter] = useState('all')
   const [reminder, setReminder] = useState<{ mode: 'group' | 'direct'; personId?: string } | null>(
     null,
@@ -31,7 +31,7 @@ export function ParticipantLedger({
   const rows = collectionParticipants(c, files)
 
   async function pushWebhookDigest() {
-    if (pushingWebhook || !canEdit || c.archivedAt) return
+    if (pushingWebhook || !canEdit || isDemo || c.archivedAt) return
     setPushingWebhook(true)
     setWebhookBanner(null)
     try {
@@ -120,15 +120,17 @@ export function ParticipantLedger({
                 <MessageSquareText size={15} />
                 一键催交话术
               </button>
-              <button
-                type="button"
-                className="button"
-                disabled={pushingWebhook}
-                onClick={() => void pushWebhookDigest()}
-              >
-                <BellRing size={15} />
-                {pushingWebhook ? '推送中…' : '立即推送 Webhook 催交'}
-              </button>
+              {!isDemo && (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={pushingWebhook}
+                  onClick={() => void pushWebhookDigest()}
+                >
+                  <BellRing size={15} />
+                  {pushingWebhook ? '推送中…' : '立即推送 Webhook 催交'}
+                </button>
+              )}
             </>
           )}
           <button type="button" className="button" disabled={!rows.length} onClick={exportList}>

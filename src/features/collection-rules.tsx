@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { submissionFileName } from '../lib/submission-naming'
 import { safeRandomUUID } from '../lib/browser-crypto'
 import type { Collection, CollectionInput } from '../types'
+import { useAccount } from './auth'
 import { MaterialRulesEditor } from './material-rules'
 
 export function CollectionRules({
@@ -21,6 +22,7 @@ export function CollectionRules({
   received?: number
   legacyReminder?: boolean
 }) {
+  const { isDemo } = useAccount()
   const fields = value.fields || [],
     naming = value.naming || { parts: [], separator: '_' as const }
   const update = (v: Partial<CollectionInput>) => onChange({ ...value, ...v })
@@ -229,79 +231,85 @@ export function CollectionRules({
                   : '在任务临近截止时自动统计已收/缺交情况并播报至已配置的 Webhook 群聊'}
               </small>
             </div>
-            <label className="check-field">
-              <input
-                type="checkbox"
-                checked={Boolean(value.deadlineReminder?.enabled)}
-                onChange={(e) =>
-                  update({
-                    deadlineReminder: {
-                      enabled: e.target.checked,
-                      hoursBefore: value.deadlineReminder?.hoursBefore ?? 24,
-                      desensitizeNames: value.deadlineReminder?.desensitizeNames ?? true,
-                      ...(value.deadlineReminder?.lastSentDeadline
-                        ? { lastSentDeadline: value.deadlineReminder.lastSentDeadline }
-                        : {}),
-                      ...(value.deadlineReminder?.lastSentAt
-                        ? { lastSentAt: value.deadlineReminder.lastSentAt }
-                        : {}),
-                    },
-                  })
-                }
-              />
-              启用截止前自动 Webhook 催交预警
-            </label>
-            {value.deadlineReminder?.enabled && (
+            {isDemo ? (
+              <p className="field-hint">公开体验模式暂不支持开启定时截止 Webhook 预警。</p>
+            ) : (
               <>
-                <div className="form-row">
-                  <label className="field">
-                    提前预警时间
-                    <select
-                      value={value.deadlineReminder.hoursBefore}
-                      onChange={(e) =>
-                        update({
-                          deadlineReminder: {
-                            ...value.deadlineReminder!,
-                            hoursBefore: Number(e.target.value),
-                          },
-                        })
-                      }
-                    >
-                      {[24, 12, 6, 1].map((h) => (
-                        <option key={h} value={h}>
-                          截止前 {h} 小时
-                        </option>
-                      ))}
-                      {![24, 12, 6, 1].includes(value.deadlineReminder.hoursBefore) && (
-                        <option value={value.deadlineReminder.hoursBefore}>
-                          截止前 {value.deadlineReminder.hoursBefore} 小时
-                        </option>
-                      )}
-                    </select>
-                    <small>服务端每 5 分钟巡检一次，同一截止日期仅自动发送一次。</small>
-                  </label>
-                  <label className="check-field deadline-desensitize-check">
-                    <input
-                      type="checkbox"
-                      checked={value.deadlineReminder.desensitizeNames}
-                      onChange={(e) =>
-                        update({
-                          deadlineReminder: {
-                            ...value.deadlineReminder!,
-                            desensitizeNames: e.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    缺交名单脱敏播报（推荐，避免大群直接暴露完整姓名或学号）
-                  </label>
-                </div>
-                <small className="field-hint">
-                  需先在「设置 → 事件通知」启用订阅「临近截止汇总」的飞书 / 钉钉 / 企业微信 / 通用
-                  Webhook 渠道。
-                  {value.deadlineReminder.lastSentDeadline &&
-                    ` 上次已针对 ${value.deadlineReminder.lastSentDeadline} 截止发送过自动预警。`}
-                </small>
+                <label className="check-field">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(value.deadlineReminder?.enabled)}
+                    onChange={(e) =>
+                      update({
+                        deadlineReminder: {
+                          enabled: e.target.checked,
+                          hoursBefore: value.deadlineReminder?.hoursBefore ?? 24,
+                          desensitizeNames: value.deadlineReminder?.desensitizeNames ?? true,
+                          ...(value.deadlineReminder?.lastSentDeadline
+                            ? { lastSentDeadline: value.deadlineReminder.lastSentDeadline }
+                            : {}),
+                          ...(value.deadlineReminder?.lastSentAt
+                            ? { lastSentAt: value.deadlineReminder.lastSentAt }
+                            : {}),
+                        },
+                      })
+                    }
+                  />
+                  启用截止前自动 Webhook 催交预警
+                </label>
+                {value.deadlineReminder?.enabled && (
+                  <>
+                    <div className="form-row">
+                      <label className="field">
+                        提前预警时间
+                        <select
+                          value={value.deadlineReminder.hoursBefore}
+                          onChange={(e) =>
+                            update({
+                              deadlineReminder: {
+                                ...value.deadlineReminder!,
+                                hoursBefore: Number(e.target.value),
+                              },
+                            })
+                          }
+                        >
+                          {[24, 12, 6, 1].map((h) => (
+                            <option key={h} value={h}>
+                              截止前 {h} 小时
+                            </option>
+                          ))}
+                          {![24, 12, 6, 1].includes(value.deadlineReminder.hoursBefore) && (
+                            <option value={value.deadlineReminder.hoursBefore}>
+                              截止前 {value.deadlineReminder.hoursBefore} 小时
+                            </option>
+                          )}
+                        </select>
+                        <small>服务端每 5 分钟巡检一次，同一截止日期仅自动发送一次。</small>
+                      </label>
+                      <label className="check-field deadline-desensitize-check">
+                        <input
+                          type="checkbox"
+                          checked={value.deadlineReminder.desensitizeNames}
+                          onChange={(e) =>
+                            update({
+                              deadlineReminder: {
+                                ...value.deadlineReminder!,
+                                desensitizeNames: e.target.checked,
+                              },
+                            })
+                          }
+                        />
+                        缺交名单脱敏播报（推荐，避免大群直接暴露完整姓名或学号）
+                      </label>
+                    </div>
+                    <small className="field-hint">
+                      需先在「设置 → 事件通知」启用订阅「临近截止汇总」的飞书 / 钉钉 / 企业微信 /
+                      通用 Webhook 渠道。
+                      {value.deadlineReminder.lastSentDeadline &&
+                        ` 上次已针对 ${value.deadlineReminder.lastSentDeadline} 截止发送过自动预警。`}
+                    </small>
+                  </>
+                )}
               </>
             )}
           </div>

@@ -63,7 +63,7 @@ export function MaterialWorkbench({
   onRefresh: () => Promise<void>
   onOfflineUpload?: (person: { owner: string; identity: string }) => void
 }) {
-  const { canEdit, isAdmin, user } = useAccount()
+  const { canEdit, isAdmin, isDemo, user } = useAccount()
   const noteKey = `jiyu:material-note-drafts:${user?.id}:${c.id}`
   const [filter, setFilter] = useState('all'),
     [query, setQuery] = useState(''),
@@ -455,7 +455,7 @@ export function MaterialWorkbench({
     submitReview,
   ])
   async function pushWebhookDigest() {
-    if (pushingWebhook || !canEdit || c.archivedAt) return
+    if (pushingWebhook || !canEdit || isDemo || c.archivedAt) return
     setPushingWebhook(true)
     setWebhookBanner(null)
     try {
@@ -665,15 +665,17 @@ export function MaterialWorkbench({
                 <MessageSquareText size={15} />
                 一键催交话术
               </button>
-              <button
-                type="button"
-                className="button"
-                disabled={busy || pushingWebhook || !state.ready}
-                onClick={() => void pushWebhookDigest()}
-              >
-                <BellRing size={15} />
-                {pushingWebhook ? '推送中…' : '立即推送 Webhook 催交'}
-              </button>
+              {!isDemo && (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy || pushingWebhook || !state.ready}
+                  onClick={() => void pushWebhookDigest()}
+                >
+                  <BellRing size={15} />
+                  {pushingWebhook ? '推送中…' : '立即推送 Webhook 催交'}
+                </button>
+              )}
             </>
           )}
           <button

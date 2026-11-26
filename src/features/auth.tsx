@@ -4,6 +4,7 @@ import { ArrowRight, LockKeyhole, RefreshCw, Sparkles } from 'lucide-react'
 import { Brand } from '../components/ui'
 import { api, setCsrf } from '../lib/api'
 import type { SessionUser } from '../types'
+import { APP_VERSION } from '../types'
 
 interface Session {
   authenticated: boolean
@@ -266,7 +267,7 @@ function AuthForm({
           </fieldset>
         </form>
       </section>
-      <p className="auth-footnote">文件保存在你自己的服务器 · 集屿 v0.5.0</p>
+      <p className="auth-footnote">文件保存在你自己的服务器 · 集屿 v{APP_VERSION}</p>
     </main>
   )
 }

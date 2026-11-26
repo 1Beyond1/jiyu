@@ -13,7 +13,7 @@
 
 作者与维护者：[1Beyond1](https://github.com/1Beyond1) · [公开仓库](https://github.com/1Beyond1/jiyu) · [更新记录](CHANGELOG.md)
 
-**当前版本 v0.5.0**（SQLite schema 6）：用一个随机链接集中收集文件，提交者无需登录即可断点续传，工作台成员可在同一处完成材料收齐核对、分页检索、多渠道 Webhook 定时催交预警、模板 JSON 导入导出、批量命名、流式 ZIP 打包、在线备份与可选云端同步。从旧版本升级前请先生成完整备份（schema 6 数据目录不能直接用旧版本打开）。
+**当前版本 v0.5.1**（SQLite schema 6）：用一个随机链接集中收集文件，提交者无需登录即可断点续传，工作台成员可在同一处完成材料收齐核对、分页检索、多渠道 Webhook 定时催交预警、模板 JSON 导入导出、批量命名、流式 ZIP 打包、在线备份与可选云端同步。从旧版本升级前请先生成完整备份（schema 6 数据目录不能直接用旧版本打开）。
 
 ## 界面预览
 
@@ -107,24 +107,28 @@ docker compose exec app cat /data/live/setup-token
 
 主要环境变量（完整示例见 [.env.example](.env.example) 与 [部署指南](docs/DEPLOYMENT.md)）：
 
-| 变量名                                               | 默认值                  | 说明                                                |
-| ---------------------------------------------------- | ----------------------- | --------------------------------------------------- |
-| `JIYU_DOMAIN`                                        | —                       | Caddy 绑定域名（需已解析至服务器）                  |
-| `JIYU_ORIGIN`                                        | `http://127.0.0.1:3000` | 外部完整访问 Origin，须与浏览器地址栏一致           |
-| `JIYU_HOST` / `JIYU_PORT`                            | `127.0.0.1` / `3000`    | 服务监听地址与端口（容器默认 `0.0.0.0:3000`）       |
-| `JIYU_DATA_DIR` / `JIYU_BACKUP_DIR`                  | `./data` / `./backups`  | 数据目录与在线备份目录                              |
-| `JIYU_QUOTA_MB` / `JIYU_REQUEST_MB`                  | `10240` / `512`         | 工作台总存储配额与单次请求上限（MiB）               |
-| `JIYU_BACKUP_MAX_KEEP`                               | `30`                    | 在线自动备份最大保留份数（1–30）                    |
-| `JIYU_STORAGE_STRICT_READBACK`                       | 未开启                  | 设为 `1` 时禁用原生校验和省流，强制云端全量读回验证 |
-| `JIYU_AI_BASE_URL` / `JIYU_AI_MODEL` / `JIYU_AI_KEY` | 空                      | 预置模型服务地址、模型 ID 与 Key（三项齐全生效）    |
-| `JIYU_AI_PROTOCOL` / `JIYU_AI_DAILY_CALLS`           | `chat` / `50`           | 预置模型协议（`chat`/`responses`）与每日调用上限    |
-| `JIYU_RATE_LIMIT_GLOBAL`                             | `180`                   | 全局每分钟限流次数                                  |
-| `JIYU_RATE_LIMIT_UPLOAD_MULTIPART`                   | `30`                    | multipart 上传每小时限流次数                        |
-| `JIYU_RATE_LIMIT_UPLOAD_CREATE`                      | `60`                    | 分片批次创建每小时限流次数                          |
-| `JIYU_RATE_LIMIT_UPLOAD_CHUNK`                       | `180`                   | 分片上传每分钟限流次数                              |
-| `JIYU_RATE_LIMIT_UNLOCK`                             | `6`                     | 公开提取码解锁每分钟防爆破限流次数                  |
+| 变量名                                               | 默认值                  | 说明                                                              |
+| ---------------------------------------------------- | ----------------------- | ----------------------------------------------------------------- |
+| `JIYU_DOMAIN`                                        | —                       | Caddy 绑定域名（需已解析至服务器）                                |
+| `JIYU_ORIGIN`                                        | `http://127.0.0.1:3000` | 外部完整访问 Origin，须与浏览器地址栏一致                         |
+| `JIYU_HOST` / `JIYU_PORT`                            | `127.0.0.1` / `3000`    | 服务监听地址与端口（容器默认 `0.0.0.0:3000`）                     |
+| `JIYU_DATA_DIR` / `JIYU_BACKUP_DIR`                  | `./data` / `./backups`  | 数据目录与在线备份目录                                            |
+| `JIYU_QUOTA_MB` / `JIYU_REQUEST_MB`                  | `10240` / `512`         | 工作台总存储配额与单次请求上限（MiB）                             |
+| `JIYU_BACKUP_MAX_KEEP`                               | `30`                    | 在线自动备份最大保留份数（1–30）                                  |
+| `JIYU_STORAGE_STRICT_READBACK`                       | 未开启                  | 设为 `1` 时禁用原生校验和省流，强制云端全量读回验证               |
+| `JIYU_AI_BASE_URL` / `JIYU_AI_MODEL` / `JIYU_AI_KEY` | 空                      | 预置模型服务地址、模型 ID 与 Key（三项齐全生效）                  |
+| `JIYU_AI_PROTOCOL` / `JIYU_AI_DAILY_CALLS`           | `chat` / `50`           | 预置模型协议（`chat`/`responses`）与每日调用上限                  |
+| `JIYU_AI_REASONING_EFFORT`                           | 空                      | 预置推理模型思考强度（`minimal`/`low`/`medium`/`high`，留空不传） |
+| `JIYU_DEMO_ENABLED` / `JIYU_DEMO_USERNAME`           | `false` / `demo`        | 公开体验模式开关与绑定的非管理员 `editor` 登录名（默认关闭）      |
+| `JIYU_RATE_LIMIT_DEMO`                               | `10`                    | 公开体验一键登录每分钟限流次数                                    |
+| `JIYU_DEADLINE_CHECK_INTERVAL_SECONDS`               | `300`                   | 任务定时截止预警巡检间隔（秒，10–86400）                          |
+| `JIYU_RATE_LIMIT_GLOBAL`                             | `180`                   | 全局每分钟限流次数                                                |
+| `JIYU_RATE_LIMIT_UPLOAD_MULTIPART`                   | `30`                    | multipart 上传每小时限流次数                                      |
+| `JIYU_RATE_LIMIT_UPLOAD_CREATE`                      | `60`                    | 分片批次创建每小时限流次数                                        |
+| `JIYU_RATE_LIMIT_UPLOAD_CHUNK`                       | `180`                   | 分片上传每分钟限流次数                                            |
+| `JIYU_RATE_LIMIT_UNLOCK`                             | `6`                     | 公开提取码解锁每分钟防爆破限流次数                                |
 
-> 注意：切勿使用 `docker compose down -v` 删除数据卷；元数据导出不包含文件正文，不能替代完整备份。
+> 注意：切勿使用 `docker compose down -v` 删除数据卷；元数据导出不包含文件正文，不能替代完整备份。若启用公开体验模式（`JIYU_DEMO_ENABLED=true`），建议仅部署在独立演示实例，勿与私密生产数据混用（体验会话有效期 2 小时、关闭开关重启后自动吊销，且自动静音外部 Webhook 推送）。
 
 ## 项目架构与目录
 

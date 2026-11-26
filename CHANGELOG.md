@@ -1,5 +1,31 @@
 # 更新记录
 
+## v0.5.1 — 2026-11-26
+
+### 新特性与品牌更新
+
+- **受控公开体验模式（`JIYU_DEMO_ENABLED`）**：新增受环境变量控制的公开体验入口（`JIYU_DEMO_ENABLED`、`JIYU_DEMO_USERNAME`、`JIYU_RATE_LIMIT_DEMO`），仅在显式开启且存在对应非管理员 `editor` 账号时展示登录页「一键访客体验」按钮；体验账号严禁改密、访问系统设置/成员/备份/Webhook/云存储写入/永久清理/线下补录等高危接口。
+- **预置推理模型思考强度配置**：支持通过 `JIYU_AI_REASONING_EFFORT`（`minimal` / `low` / `medium` / `high`）为预置模型配置推理思考强度，非法值自动忽略。
+- **新版品牌 Logo**：更换集屿新版品牌 Logo 并在中英文 README 与应用界面统一展示。
+
+### 安全加固与缺陷修复
+
+- **公开体验模式全面安全收口**：
+  - 在 `sessions` 表幂等追加 `is_demo` 列（平滑兼容现有 `schema 6` 数据卷），体验会话固定签发 2 小时短 TTL；当 `JIYU_DEMO_ENABLED` 关闭后重启服务，自动吊销全部 `is_demo = 1` 旧会话。
+  - Webhook 全路径防绕过：服务端禁止体验号创建或修改开启 `deadlineReminder` 的任务，克隆管理员任务强制关闭定时预警与剥离应交名单；`webhooks.emit` 与 `checkDeadlines` 对体验会话、体验任务与体验用户触发的提交/审阅/截止事件一律静音，前端材料核对页与提交人台账同步隐藏 Webhook 催交推送按钮。
+  - 后端敏感数据隔离：对体验会话，`GET /api/workspace?mode=summary` 自动剥离非体验（管理员）任务的 `uploadToken` 与 `expectedSubmitters`（保留体验号自建任务的完整创建、分享、提交、核对与导出体验流程），`GET /api/workspace?mode=full` 与前端脱敏导出一致剥离全部敏感令牌与名单，并禁止体验号修改/归档/轮换管理员任务链接，同时按体验身份隔离 `ETag`。
+- **S3 SigV4 补签 `x-amz-checksum-sha256`**：`server/storage-adapters.ts` 扩展 `s3Headers()` 支持将 `extraHeaders` 中规范化小写后的 `x-amz-*` 头合并入 `CanonicalHeaders` 与 `SignedHeaders` 参与 AWS SigV4 签名，解决严格校验签名的 S3 兼容服务拒绝携带校验和上传的问题。
+- **JPEG 尺寸探测越界与大 EXIF 截断修复**：`server/content.ts` 为 `imagePixels()` 补全 `0xff` 填充扫描与 `readUInt16BE` 边界校验，跳过无载荷独立标记（`0x01`、`0xd0–0xd8`），杜绝畸形 JPEG 触发 `RangeError`；新增按段流式 seek（上限 2 MiB），正确跳过超过 64 KiB 的 EXIF/APPn/COM 段以支持高像素实拍照片 OCR。
+- **回收站恢复防误标 `stale` 与防同任务重名冲突**：`POST /api/files/restore` 仅对确实处于回收站（`Boolean(deletedAt)`）的文件执行恢复与 `materialVersion` 递增，避免重复恢复误将活跃已通过文件标为 `stale`；恢复事务内按同任务 `fileNameKey` 判重，撞名时自动附加不冲突序号并保留原扩展名。
+- **ZIP 打包计划上限与淘汰策略优化**：`server/archive.ts` 全局 20 个计划上限改为仅统计活跃计划（`ready` / `streaming`），新增单会话最多 5 个活跃计划限制；已结束计划改用 60 秒短 TTL 与最多 50 条 FIFO 淘汰，避免高频下载误触发全局 429。
+- **可靠性与 CI 稳定性修复**：
+  - 修复 32–64 MiB 已索引大文件在禁用二进制预览时未降级返回 `preview: 'text'` 的问题；
+  - `POST /api/collections/:id/offline-upload` 事务内补充 10000 文件总数上限与最新字段/材料归属复核；
+  - `server/backup.ts` 在备份/恢复失败时自动清理本次新建的半成品目录（不触碰已存在目录）；
+  - `server/webhooks.ts` 将 `inFlightDeadlines` 改为引用计数 `Map<string, number>` 并在 `deliverNow` 透传 `nowFn()`；
+  - 放宽 `server/content.test.ts` 的 3 处 `<100ms` 墙钟断言为宽裕阈值以消除 CI 抖动，并为 `Dockerfile` 增加 `ARG SKIP_TESTS=0` 避免 CI 容器阶段二次重复执行全量单测；
+  - 抽取统一 `APP_VERSION` 常量并将版本对齐为 `0.5.1`。
+
 ## v0.5.0 — 2026-11-23
 
 ### 新功能与高频产品体验

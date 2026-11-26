@@ -622,11 +622,13 @@ export function registerCollectionWorkflows(
   app: FastifyInstance,
   store: Store,
   requirePublicAccess: (req: FastifyRequest, c: Collection) => void = () => {},
+  isDemoRequest: (req: FastifyRequest) => boolean = () => false,
 ) {
   app.get('/api/collections/:id/participants', async (req) => {
     const c = store.collection(String(object(req.params).id))
     if (!c) throw new HttpError(404, '收集不存在')
-    return { participants: participants(store, c) }
+    const scoped = isDemoRequest(req) && !c.createdByDemo ? { ...c, expectedSubmitters: [] } : c
+    return { participants: participants(store, scoped) }
   })
   app.get('/api/public/:token/receipts/:receiptId', async (req) => {
     const p = object(req.params),

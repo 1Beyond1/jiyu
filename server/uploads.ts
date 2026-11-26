@@ -67,6 +67,7 @@ export async function registerUploads(
   requirePublicAccess: (req: FastifyRequest, c: Collection) => void = () => {},
   webhooks?: WebhookService,
   cleanupOptions: UploadCleanupOptions = {},
+  isDemoRequest: (req: FastifyRequest) => boolean = () => false,
 ) {
   const rateLimits = resolveRateLimits(config.rateLimits)
   const active = new Set<string>()
@@ -463,6 +464,7 @@ export async function registerUploads(
         actor: batch.owner,
         fileCount: staged.length,
         summary: `${batch.owner}向「${latest.title}」提交了 ${staged.length} 份文件`,
+        demo: Boolean(latest.createdByDemo || isDemoRequest(req)),
       })
       reply.code(201)
       await clearParts(row.id).catch(() => {})

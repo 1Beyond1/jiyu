@@ -50,25 +50,33 @@ async function header(path: string) {
     await file.close()
   }
 }
-function imagePixels(b: Buffer, mime: string) {
+const JPEG_SOF_MARKERS = new Set([
+  0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf,
+])
+
+export function imagePixels(b: Buffer, mime: string): number {
   if (mime === 'image/png' && b.length >= 24) return b.readUInt32BE(16) * b.readUInt32BE(20)
   if (mime === 'image/gif' && b.length >= 10) return b.readUInt16LE(6) * b.readUInt16LE(8)
   if (mime === 'image/jpeg') {
+    if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return 0
     let i = 2
-    while (i + 9 < b.length) {
-      if (b[i++] !== 0xff) break
-      while (b[i] === 0xff) i++
-      const marker = b[i++],
-        length = b.readUInt16BE(i)
-      if (
-        [0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(
-          marker,
-        )
-      )
-        return b.readUInt16BE(i + 3) * b.readUInt16BE(i + 5)
+    while (i < b.length) {
+      if (b[i] !== 0xff) break
+      while (i < b.length && b[i] === 0xff) i++
+      if (i >= b.length) break
+      const marker = b[i++]
+      if (marker === 0x00 || marker === 0xd9 || marker === 0xda) break
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue
+      if (i + 2 > b.length) break
+      const length = b.readUInt16BE(i)
       if (length < 2) break
+      if (JPEG_SOF_MARKERS.has(marker)) {
+        if (length < 7 || i + 7 > b.length) break
+        return b.readUInt16BE(i + 3) * b.readUInt16BE(i + 5)
+      }
       i += length
     }
+    return 0
   }
   if (mime === 'image/webp' && b.length >= 30) {
     const kind = b.subarray(12, 16).toString()
@@ -81,6 +89,62 @@ function imagePixels(b: Buffer, mime: string) {
     }
   }
   return 0
+}
+
+export async function jpegPixelsFromFile(
+  path: string,
+  maxScanBytes = 2 * 1024 ** 2,
+): Promise<number> {
+  const fh = await open(path, 'r')
+  try {
+    const fileSize = (await fh.stat()).size
+    const limit = Math.min(fileSize, maxScanBytes)
+    if (limit < 4) return 0
+    const probe = Buffer.alloc(64)
+    const headRead = await fh.read(probe, 0, 2, 0)
+    if (headRead.bytesRead < 2 || probe[0] !== 0xff || probe[1] !== 0xd8) return 0
+    let pos = 2
+    while (pos < limit) {
+      let sawFF = false
+      let marker = -1
+      while (pos < limit) {
+        const toRead = Math.min(probe.length, limit - pos)
+        const { bytesRead } = await fh.read(probe, 0, toRead, pos)
+        if (bytesRead <= 0) break
+        let offset = 0
+        if (!sawFF) {
+          if (probe[0] !== 0xff) return 0
+          sawFF = true
+          offset = 1
+        }
+        while (offset < bytesRead && probe[offset] === 0xff) offset++
+        if (offset < bytesRead) {
+          marker = probe[offset]
+          pos += offset + 1
+          break
+        }
+        pos += bytesRead
+      }
+      if (marker < 0) break
+      if (marker === 0x00 || marker === 0xd9 || marker === 0xda) break
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue
+      if (pos + 2 > limit) break
+      const lenRead = await fh.read(probe, 0, 2, pos)
+      if (lenRead.bytesRead < 2) break
+      const length = probe.readUInt16BE(0)
+      if (length < 2) break
+      if (JPEG_SOF_MARKERS.has(marker)) {
+        if (length < 7 || pos + 7 > fileSize) break
+        const sofRead = await fh.read(probe, 0, 7, pos)
+        if (sofRead.bytesRead < 7) break
+        return probe.readUInt16BE(3) * probe.readUInt16BE(5)
+      }
+      pos += length
+    }
+    return 0
+  } finally {
+    await fh.close()
+  }
 }
 export function decodeXml(value: string) {
   return value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (whole, entity: string) => {
@@ -286,7 +350,8 @@ export const extractContent: ContentExtractor = async (file, path, signal) => {
     }
   }
   if (kind.preview === 'image') {
-    const pixels = imagePixels(b, kind.mime!)
+    let pixels = imagePixels(b, kind.mime!)
+    if (!pixels && kind.mime === 'image/jpeg') pixels = await jpegPixelsFromFile(path)
     if (!pixels || pixels > 40 * 1000 ** 2)
       throw new HttpError(413, 'OCR 支持尺寸明确且不超过 4000 万像素的图片')
     return {
@@ -500,11 +565,11 @@ export function registerContent(
         .get(id) as unknown as DocumentInfo | undefined
       const indexedText = contentExcerpt(store, id, MAX_TEXT)
       if (indexedText) {
+        const effectivePreview = file.size > 32 * 1024 ** 2 ? 'none' : kind.preview
         return {
           ...kind,
-          ...(file.size > 32 * 1024 ** 2 ? { preview: 'none' } : {}),
+          preview: effectivePreview === 'none' ? 'text' : effectivePreview,
           text: indexedText,
-          ...(kind.preview === 'none' ? { preview: 'text' } : {}),
           chars: document?.chars ?? indexedText.length,
           truncated: Boolean(document?.truncated),
           document,

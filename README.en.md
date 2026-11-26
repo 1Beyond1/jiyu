@@ -13,7 +13,7 @@ A home for every collected file. **Jiyu** is a self-hosted file collection, chec
 
 Author & Maintainer: [1Beyond1](https://github.com/1Beyond1) · [Repository](https://github.com/1Beyond1/jiyu) · [Changelog](CHANGELOG.md)
 
-**Current Version: v0.5.0** (SQLite schema 6) — Collect files from anyone through a single random link with no submitter login required, and organize everything in one workbench with checklist verification, SQLite-indexed paginated search, multi-channel Webhook deadline reminders, portable JSON templates, batch renaming, streaming ZIP archives, online backups, and optional cloud sync. Back up your full data directory before upgrading from older versions (schema 6 databases cannot be opened directly by older releases).
+**Current Version: v0.5.1** (SQLite schema 6) — Collect files from anyone through a single random link with no submitter login required, and organize everything in one workbench with checklist verification, SQLite-indexed paginated search, multi-channel Webhook deadline reminders, portable JSON templates, batch renaming, streaming ZIP archives, online backups, and optional cloud sync. Back up your full data directory before upgrading from older versions (schema 6 databases cannot be opened directly by older releases).
 
 ## Interface Preview
 
@@ -118,13 +118,17 @@ Key environment variables (see [.env.example](.env.example) and [Deployment Guid
 | `JIYU_STORAGE_STRICT_READBACK`                       | unset                   | Set to `1` to force full remote read-back verification instead of native checksum fast-path |
 | `JIYU_AI_BASE_URL` / `JIYU_AI_MODEL` / `JIYU_AI_KEY` | empty                   | Operator-managed AI endpoint, model ID, and API key (all three required)                    |
 | `JIYU_AI_PROTOCOL` / `JIYU_AI_DAILY_CALLS`           | `chat` / `50`           | Managed AI protocol (`chat`/`responses`) and daily call cap                                 |
+| `JIYU_AI_REASONING_EFFORT`                           | empty                   | Optional reasoning effort for managed reasoning models (`minimal`/`low`/`medium`/`high`)    |
+| `JIYU_DEMO_ENABLED` / `JIYU_DEMO_USERNAME`           | `false` / `demo`        | Public demo mode switch & dedicated non-admin `editor` account username (off by default)    |
+| `JIYU_RATE_LIMIT_DEMO`                               | `10`                    | Public demo one-click sign-in attempts per minute limit                                     |
+| `JIYU_DEADLINE_CHECK_INTERVAL_SECONDS`               | `300`                   | Scheduled deadline reminder scan interval in seconds (`10–86400`)                           |
 | `JIYU_RATE_LIMIT_GLOBAL`                             | `180`                   | Global requests per minute limit                                                            |
 | `JIYU_RATE_LIMIT_UPLOAD_MULTIPART`                   | `30`                    | Multipart upload requests per hour limit                                                    |
 | `JIYU_RATE_LIMIT_UPLOAD_CREATE`                      | `60`                    | Chunked upload session creations per hour limit                                             |
 | `JIYU_RATE_LIMIT_UPLOAD_CHUNK`                       | `180`                   | Chunk PUT requests per minute limit                                                         |
 | `JIYU_RATE_LIMIT_UNLOCK`                             | `6`                     | Public passcode unlock attempts per minute limit (anti-brute-force)                         |
 
-> Warning: Never run `docker compose down -v` unless you intend to delete persistent volumes. Metadata JSON exports do not include file contents and cannot replace full backups.
+> Warning: Never run `docker compose down -v` unless you intend to delete persistent volumes. Metadata JSON exports do not include file contents and cannot replace full backups. If you enable public demo mode (`JIYU_DEMO_ENABLED=true`), run it on a dedicated demo instance rather than alongside private production data (demo sessions expire after 2 hours, are revoked automatically on restart when disabled, strip non-demo tokens/rosters, and silence outbound Webhooks).
 
 ## Architecture & Repository Layout
 

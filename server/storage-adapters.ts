@@ -39,7 +39,8 @@ export function s3Headers(
   credentials: StorageCredentials,
   payloadHash: string,
   date = new Date(),
-) {
+  extraHeaders?: Record<string, string>,
+): Record<string, string> {
   const time = date.toISOString().replace(/[:-]|\.\d{3}/g, ''),
     day = time.slice(0, 8),
     scope = `${day}/${region}/s3/aws4_request`
@@ -48,6 +49,14 @@ export function s3Headers(
     'x-amz-content-sha256': payloadHash,
     'x-amz-date': time,
     ...(credentials.sessionToken ? { 'x-amz-security-token': credentials.sessionToken } : {}),
+  }
+  if (extraHeaders) {
+    for (const [k, v] of Object.entries(extraHeaders)) {
+      const lower = k.trim().toLowerCase()
+      if (lower.startsWith('x-amz-') && !(lower in headers)) {
+        headers[lower] = v.trim().replace(/\s+/g, ' ')
+      }
+    }
   }
   const names = Object.keys(headers).sort(),
     canonicalHeaders = names.map((n) => `${n}:${headers[n].trim()}\n`).join('')
@@ -138,9 +147,22 @@ export class StandardStorage {
     extraHeaders?: Record<string, string>,
   ) {
     const url = objectUrl(this.profile, path)
+    const normalizedExtra = extraHeaders
+      ? Object.fromEntries(
+          Object.entries(extraHeaders).map(([k, v]) => [k.trim().toLowerCase(), v.trim()]),
+        )
+      : undefined
     const auth =
       this.profile.id === 's3'
-        ? s3Headers(method, url, this.profile.region || 'us-east-1', this.credentials, sha256)
+        ? s3Headers(
+            method,
+            url,
+            this.profile.region || 'us-east-1',
+            this.credentials,
+            sha256,
+            new Date(),
+            normalizedExtra,
+          )
         : {
             authorization: `Basic ${Buffer.from(`${this.profile.username}:${this.credentials.password}`).toString('base64')}`,
           }
@@ -148,8 +170,8 @@ export class StandardStorage {
       url,
       method,
       headers: {
+        ...(normalizedExtra || {}),
         ...auth,
-        ...(extraHeaders || {}),
         ...(body
           ? { 'content-length': String(size), 'content-type': 'application/octet-stream' }
           : {}),

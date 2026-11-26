@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createApp } from './app.ts'
 import type { Config } from './config.ts'
 import type { CollectedFile } from '../src/types.ts'
+import { materialFileVersion, materialReviewState } from '../src/lib/materials.ts'
 
 test('回收站后端分页搜索与仅管理员可见的二次确认在线永久清理（含活跃打包并发防误删）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'jiyu-purge-'))
@@ -376,6 +377,128 @@ test('purge 遇 EBUSY 准确报告实际释放字节与未删警告，且 OCR �
     assert.equal(ftsRow, undefined, '已删除文件在 OCR 结束后绝不得向 content_search 复活正文')
   } finally {
     releaseOcr()
+    await app.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('回收站恢复防误标活跃文件为 stale，并在同任务撞名时自动追加序号保留扩展名', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'jiyu-restore-guard-'))
+  const config: Config = {
+    dataDir: join(dir, 'data'),
+    origin: 'http://127.0.0.1:3000',
+    host: '127.0.0.1',
+    port: 0,
+    quotaBytes: 64 * 1024 * 1024,
+    requestBytes: 16 * 1024 * 1024,
+    secureCookie: false,
+  }
+  const { app, store } = await createApp(config, { serveFrontend: false })
+  try {
+    const origin = { origin: config.origin }
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/setup',
+      headers: origin,
+      payload: {
+        setupToken: store.setupToken(),
+        password: 'admin-restore-password',
+        displayName: '管理员',
+      },
+    })
+    const adminHeaders = {
+      ...origin,
+      cookie: setup.headers['set-cookie']!.toString().split(';')[0],
+      'x-csrf-token': setup.json().csrf as string,
+    }
+    const colRes = await app.inject({
+      method: 'POST',
+      url: '/api/collections',
+      headers: adminHeaders,
+      payload: {
+        title: '恢复边界测试',
+        description: '',
+        category: 'document',
+        formats: 'PDF, TXT',
+        deadline: '2099-12-31',
+        target: 10,
+        maxFileSizeMB: 10,
+        maxFilesPerSubmission: 5,
+        materials: [{ id: 'mat_doc', name: '报告', required: true, description: '' }],
+      },
+    })
+    assert.equal(colRes.statusCode, 200, colRes.body)
+    const col = colRes.json().collections[0] as { id: string; materialRevision: string }
+
+    const putFile = async (name: string, content: string, deletedAt?: string) => {
+      const buf = Buffer.from(content)
+      const key = randomUUID()
+      const f: CollectedFile = {
+        id: randomUUID(),
+        name,
+        size: buf.length,
+        collectionId: col.id,
+        owner: '张三',
+        createdAt: new Date().toISOString(),
+        storage: 'local',
+        status: 'pending',
+        sha256: createHash('sha256').update(buf).digest('hex'),
+        materialId: 'mat_doc',
+        materialVersion: 1,
+        ...(deletedAt ? { deletedAt } : {}),
+      }
+      await writeFile(join(config.dataDir, 'objects', key), buf)
+      store.addFile(f, key)
+      return f
+    }
+
+    // 1. 活跃且已通过人工核对的文件：误传入 /api/files/restore 不得递增 materialVersion 或变 stale
+    const activeAccepted = await putFile('REPORT.PDF', 'active-accepted')
+    activeAccepted.materialReview = {
+      decision: 'accepted',
+      note: '合格',
+      rulesRevision: col.materialRevision,
+      fileVersion: materialFileVersion(activeAccepted),
+      operationId: randomUUID(),
+      reviewerId: 'primary',
+      reviewerName: '管理员',
+      reviewedAt: new Date().toISOString(),
+    }
+    store.saveFile(activeAccepted)
+
+    // 2. 两份回收站内与活跃文件大小写重名的文件，以及一份无扩展名重名文件
+    const trashedDup1 = await putFile('report.pdf', 'trashed-dup-1', new Date().toISOString())
+    const trashedDup2 = await putFile('Report.pdf', 'trashed-dup-2', new Date().toISOString())
+    await putFile('README', 'active-readme')
+    const trashedReadme = await putFile('readme', 'trashed-readme', new Date().toISOString())
+
+    const restoreRes = await app.inject({
+      method: 'POST',
+      url: '/api/files/restore',
+      headers: adminHeaders,
+      payload: {
+        ids: [activeAccepted.id, trashedDup1.id, trashedDup2.id, trashedReadme.id],
+      },
+    })
+    assert.equal(restoreRes.statusCode, 200, restoreRes.body)
+
+    const freshActive = store.file(activeAccepted.id)!
+    assert.equal(freshActive.materialVersion, 1, '活跃文件不得因重复 restore 递增 materialVersion')
+    assert.equal(
+      materialReviewState(store.collection(col.id)!, freshActive),
+      'accepted',
+      '活跃已通过文件不得被误标为 stale',
+    )
+
+    const freshDup1 = store.file(trashedDup1.id)!
+    const freshDup2 = store.file(trashedDup2.id)!
+    const freshReadme = store.file(trashedReadme.id)!
+    assert.equal(freshDup1.deletedAt, undefined)
+    assert.equal(freshDup1.materialVersion, 2)
+    assert.equal(freshDup1.name, 'report (2).pdf')
+    assert.equal(freshDup2.name, 'Report (3).pdf')
+    assert.equal(freshReadme.name, 'readme (2)')
+  } finally {
     await app.close()
     await rm(dir, { recursive: true, force: true })
   }

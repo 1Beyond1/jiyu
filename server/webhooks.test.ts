@@ -730,3 +730,140 @@ test('Webhook 加固：PATCH 换 URL/类型清空旧密钥、逐渠道解密探�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Webhook inFlightDeadlines 引用计数防过早清除 & deliverNow 透传注入时钟 nowFn()', async () => {
+  const root = resolve('.tmp')
+  await mkdir(root, { recursive: true })
+  const dir = await mkdtemp(join(root, 'webhooks-refcount-'))
+  const fakeNow = Date.parse('2026-11-26T22:00:00+08:00') // 距今日 23:59 剩 2h
+  let callIndex = 0
+  let releaseFirstStarted!: () => void
+  const firstStarted = new Promise<void>((r) => {
+    releaseFirstStarted = r
+  })
+  let releaseFirstDone!: () => void
+  const firstGate = new Promise<void>((r) => {
+    releaseFirstDone = r
+  })
+  let releaseSecondStarted!: () => void
+  const secondStarted = new Promise<void>((r) => {
+    releaseSecondStarted = r
+  })
+  let releaseSecondDone!: () => void
+  const secondGate = new Promise<void>((r) => {
+    releaseSecondDone = r
+  })
+  const seenTimestamps: string[] = []
+  const mockHttp: RemoteHTTP = async (req: RemoteRequest) => {
+    seenTimestamps.push(String(req.headers?.['X-Jiyu-Timestamp'] || ''))
+    const idx = ++callIndex
+    if (idx === 1) {
+      releaseFirstStarted()
+      await firstGate
+      return { status: 500, headers: {}, body: bufStream('{"error":"first-fail"}') }
+    }
+    if (idx === 2) {
+      releaseSecondStarted()
+      await secondGate
+    }
+    return { status: 200, headers: {}, body: bufStream('{"ok":true}') }
+  }
+
+  const { app, store, webhooks } = await createApp(
+    {
+      dataDir: join(dir, 'data'),
+      origin: 'http://127.0.0.1:3000',
+      host: '127.0.0.1',
+      port: 0,
+      quotaBytes: 8 * 1024 ** 2,
+      requestBytes: 2 * 1024 ** 2,
+      secureCookie: false,
+    },
+    {
+      serveFrontend: false,
+      webhookPolicy: {
+        http: mockHttp,
+        debounceMs: 5,
+        retryBaseMs: 5,
+        maxAttempts: 1,
+        deadlineIntervalMs: 60 * 60 * 1000,
+        now: () => fakeNow,
+      },
+    },
+  )
+
+  try {
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/setup',
+      headers: { origin: 'http://127.0.0.1:3000' },
+      payload: {
+        setupToken: store.setupToken(),
+        displayName: '管理员',
+        password: 'AdminPassword123!',
+      },
+    })
+    const adminHeaders = {
+      origin: 'http://127.0.0.1:3000',
+      cookie: String(setup.headers['set-cookie']).split(';')[0],
+      'x-csrf-token': setup.json().csrf as string,
+    }
+    await app.inject({
+      method: 'POST',
+      url: '/api/webhooks',
+      headers: adminHeaders,
+      payload: {
+        name: '时钟测试渠道',
+        type: 'generic',
+        url: 'https://clock.example.com/hook',
+        events: ['collection.deadline_soon'],
+        enabled: true,
+      },
+    })
+    store.saveCollection({
+      id: randomUUID(),
+      title: '引用计数任务',
+      description: '',
+      category: 'document',
+      received: 0,
+      target: 5,
+      deadline: '2026-11-26',
+      storage: 'local',
+      status: 'active',
+      formats: 'PDF',
+      maxFileSizeMB: 10,
+      maxFilesPerSubmission: 5,
+      deadlineReminder: { enabled: true, hoursBefore: 6, desensitizeNames: true },
+    })
+
+    // 触发第 1 次投递并挂起在 HTTP 请求中
+    assert.equal(webhooks.checkDeadlines(false), 1)
+    await firstStarted
+
+    // 期间手动强制触发第 2 次（force=true），进入 pending/queue，refcount 变为 2
+    assert.equal(webhooks.checkDeadlines(true), 1)
+    // 放行第 1 次（返回 500 失败）-> refcount 从 2 降为 1，第 2 次开始执行期间仍应阻塞非强制重复入队
+    releaseFirstDone()
+    await secondStarted
+    assert.equal(
+      webhooks.checkDeadlines(false),
+      0,
+      '第 1 次失败退出后第 2 次仍在途，引用计数 > 0 必须继续阻止重复入队',
+    )
+    releaseSecondDone()
+    await webhooks.flushPending()
+
+    // 验证 deliverNow 透传了 fakeNow 到 X-Jiyu-Timestamp 与日志 createdAt
+    assert.ok(seenTimestamps.length >= 2)
+    for (const ts of seenTimestamps) {
+      assert.equal(ts, String(Math.floor(fakeNow / 1000)))
+    }
+    const state = (
+      await app.inject({ method: 'GET', url: '/api/webhooks', headers: adminHeaders })
+    ).json() as WebhookState
+    assert.equal(state.logs[0].createdAt, new Date(fakeNow).toISOString())
+  } finally {
+    await app.close().catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  }
+})

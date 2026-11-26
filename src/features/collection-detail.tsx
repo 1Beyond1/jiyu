@@ -86,7 +86,8 @@ export function CollectionDetail({
   const [filesLoading, setFilesLoading] = useState(summaryMode)
   const [filesError, setFilesError] = useState('')
   const [filesReloadTick, setFilesReloadTick] = useState(0)
-  const { canEdit, isAdmin } = useAccount()
+  const { canEdit, isAdmin, isDemo } = useAccount()
+  const canManageTask = canEdit && (!isDemo || Boolean(c.createdByDemo))
 
   useEffect(() => {
     if (!summaryMode) {
@@ -207,19 +208,23 @@ export function CollectionDetail({
               <CopyPlus size={15} />
               复制任务
             </button>
-            <button type="button" className="button" onClick={onArchive}>
-              {archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
-              {archived ? '取消归档' : '归档'}
-            </button>
-            <button type="button" className="button" onClick={onEdit}>
-              <Pencil size={15} />
-              编辑规则
-            </button>
-            {!archived && (
-              <button type="button" className="button primary" onClick={onShare}>
-                <Link size={15} />
-                分享收集
-              </button>
+            {canManageTask && (
+              <>
+                <button type="button" className="button" onClick={onArchive}>
+                  {archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+                  {archived ? '取消归档' : '归档'}
+                </button>
+                <button type="button" className="button" onClick={onEdit}>
+                  <Pencil size={15} />
+                  编辑规则
+                </button>
+                {!archived && (
+                  <button type="button" className="button primary" onClick={onShare}>
+                    <Link size={15} />
+                    分享收集
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}
@@ -229,7 +234,7 @@ export function CollectionDetail({
           <span>
             此任务已归档，公开链接已暂停接收新提交。已收文件与核对台账完整保留，随时可取消归档或一键复制为新任务。
           </span>
-          {canEdit && (
+          {canManageTask && (
             <button type="button" className="text-button" onClick={onArchive}>
               取消归档
             </button>
@@ -320,7 +325,7 @@ export function CollectionDetail({
                   ? '收集已暂停，提交页暂不接收文件。'
                   : '收集已结束，已收到的文件仍可整理。'}
         </p>
-        {canEdit && !archived && (
+        {canManageTask && !archived && (
           <div className="button-row">
             {actions.map((a) => (
               <button

@@ -28,80 +28,86 @@ export interface Manifest {
 
 async function writeSnapshot(db: DatabaseSync, dataDir: string, destination: string) {
   await mkdir(destination, { mode: 0o700 })
-  await mkdir(join(destination, 'objects'), { mode: 0o700 })
-  await backup(db, join(destination, 'jiyu.sqlite'))
-  const snapshot = new DatabaseSync(join(destination, 'jiyu.sqlite'), { readOnly: true })
-  let rows: { storage_key: string; data: string }[], schema: number
+  let completed = false
   try {
-    schema = (snapshot.prepare('PRAGMA user_version').get() as { user_version: number })
-      .user_version
-    if (schema < 1 || schema > SCHEMA_VERSION) throw new Error('数据库版本不受当前备份工具支持')
-    const ai = snapshot.prepare("SELECT value FROM settings WHERE key='ai.settings'").get() as
-      | { value: string }
-      | undefined
-    if (ai && JSON.parse(ai.value).encryptedKey && !existsSync(join(dataDir, 'secrets.key')))
-      throw new Error('模型凭证主密钥缺失，备份未完成')
-    const storage = snapshot
-      .prepare("SELECT value FROM settings WHERE key LIKE 'storage.%'")
-      .all() as { value: string }[]
+    await mkdir(join(destination, 'objects'), { mode: 0o700 })
+    await backup(db, join(destination, 'jiyu.sqlite'))
+    const snapshot = new DatabaseSync(join(destination, 'jiyu.sqlite'), { readOnly: true })
+    let rows: { storage_key: string; data: string }[], schema: number
+    try {
+      schema = (snapshot.prepare('PRAGMA user_version').get() as { user_version: number })
+        .user_version
+      if (schema < 1 || schema > SCHEMA_VERSION) throw new Error('数据库版本不受当前备份工具支持')
+      const ai = snapshot.prepare("SELECT value FROM settings WHERE key='ai.settings'").get() as
+        | { value: string }
+        | undefined
+      if (ai && JSON.parse(ai.value).encryptedKey && !existsSync(join(dataDir, 'secrets.key')))
+        throw new Error('模型凭证主密钥缺失，备份未完成')
+      const storage = snapshot
+        .prepare("SELECT value FROM settings WHERE key LIKE 'storage.%'")
+        .all() as { value: string }[]
+      if (
+        storage.some((s) => JSON.parse(s.value).encryptedCredentials) &&
+        !existsSync(join(dataDir, 'secrets.key'))
+      )
+        throw new Error('存储凭证主密钥缺失，备份未完成')
+      const webhooks = snapshot
+        .prepare("SELECT value FROM settings WHERE key='webhooks.config'")
+        .get() as { value: string } | undefined
+      if (
+        webhooks &&
+        (JSON.parse(webhooks.value).channels || []).some(
+          (ch: { encryptedUrl?: string; encryptedSecret?: string }) =>
+            ch.encryptedUrl || ch.encryptedSecret,
+        ) &&
+        !existsSync(join(dataDir, 'secrets.key'))
+      )
+        throw new Error('通知凭证主密钥缺失，备份未完成')
+      rows = snapshot.prepare('SELECT storage_key,data FROM files').all() as {
+        storage_key: string
+        data: string
+      }[]
+    } finally {
+      snapshot.close()
+    }
     if (
-      storage.some((s) => JSON.parse(s.value).encryptedCredentials) &&
-      !existsSync(join(dataDir, 'secrets.key'))
+      existsSync(join(dataDir, 'secrets.key')) &&
+      (await stat(join(dataDir, 'secrets.key'))).size !== 32
     )
-      throw new Error('存储凭证主密钥缺失，备份未完成')
-    const webhooks = snapshot
-      .prepare("SELECT value FROM settings WHERE key='webhooks.config'")
-      .get() as { value: string } | undefined
-    if (
-      webhooks &&
-      (JSON.parse(webhooks.value).channels || []).some(
-        (ch: { encryptedUrl?: string; encryptedSecret?: string }) =>
-          ch.encryptedUrl || ch.encryptedSecret,
-      ) &&
-      !existsSync(join(dataDir, 'secrets.key'))
-    )
-      throw new Error('通知凭证主密钥缺失，备份未完成')
-    rows = snapshot.prepare('SELECT storage_key,data FROM files').all() as {
-      storage_key: string
-      data: string
-    }[]
+      throw new Error('模型凭证主密钥无效，备份未完成')
+    const files = []
+    for (const row of rows) {
+      const file = JSON.parse(row.data) as { size: number; sha256: string },
+        key = row.storage_key
+      if (!/^[a-f0-9-]{36}$/.test(key)) throw new Error('存储键无效')
+      const source = join(dataDir, 'objects', key),
+        target = join(destination, 'objects', key)
+      await copyFile(source, target)
+      if ((await stat(target)).size !== file.size || (await checksum(target)) !== file.sha256)
+        throw new Error('文件校验不通过，备份未完成')
+      files.push({ key, size: file.size, sha256: file.sha256 })
+    }
+    let secretKeySha256: string | undefined
+    if (existsSync(join(dataDir, 'secrets.key'))) {
+      await copyFile(join(dataDir, 'secrets.key'), join(destination, 'secrets.key'))
+      secretKeySha256 = await checksum(join(destination, 'secrets.key'))
+    }
+    const manifest: Manifest = {
+      version: schema === 1 && !secretKeySha256 ? 1 : 2,
+      createdAt: new Date().toISOString(),
+      databaseSha256: await checksum(join(destination, 'jiyu.sqlite')),
+      secretKeySha256,
+      files,
+    }
+    await writeFile(join(destination, 'manifest.json'), JSON.stringify(manifest, null, 2), {
+      mode: 0o600,
+      flag: 'wx',
+    })
+    completed = true
+    return { files: files.length, destination }
   } finally {
-    snapshot.close()
+    if (!completed) await rm(destination, { recursive: true, force: true }).catch(() => {})
   }
-  if (
-    existsSync(join(dataDir, 'secrets.key')) &&
-    (await stat(join(dataDir, 'secrets.key'))).size !== 32
-  )
-    throw new Error('模型凭证主密钥无效，备份未完成')
-  const files = []
-  for (const row of rows) {
-    const file = JSON.parse(row.data) as { size: number; sha256: string },
-      key = row.storage_key
-    if (!/^[a-f0-9-]{36}$/.test(key)) throw new Error('存储键无效')
-    const source = join(dataDir, 'objects', key),
-      target = join(destination, 'objects', key)
-    await copyFile(source, target)
-    if ((await stat(target)).size !== file.size || (await checksum(target)) !== file.sha256)
-      throw new Error('文件校验不通过，备份未完成')
-    files.push({ key, size: file.size, sha256: file.sha256 })
-  }
-  let secretKeySha256: string | undefined
-  if (existsSync(join(dataDir, 'secrets.key'))) {
-    await copyFile(join(dataDir, 'secrets.key'), join(destination, 'secrets.key'))
-    secretKeySha256 = await checksum(join(destination, 'secrets.key'))
-  }
-  const manifest: Manifest = {
-    version: schema === 1 && !secretKeySha256 ? 1 : 2,
-    createdAt: new Date().toISOString(),
-    databaseSha256: await checksum(join(destination, 'jiyu.sqlite')),
-    secretKeySha256,
-    files,
-  }
-  await writeFile(join(destination, 'manifest.json'), JSON.stringify(manifest, null, 2), {
-    mode: 0o600,
-    flag: 'wx',
-  })
-  return { files: files.length, destination }
 }
 
 export async function createOnlineBackup(store: Store, destination: string) {
@@ -213,23 +219,29 @@ export async function restoreBackup(source: string, destination: string) {
     db.close()
   }
   await mkdir(destination, { mode: 0o700 }) // 必须是全新目录，永不覆盖现有数据。
-  await mkdir(join(destination, 'objects'), { mode: 0o700 })
-  await copyFile(join(source, 'jiyu.sqlite'), join(destination, 'jiyu.sqlite'))
-  if (manifest.secretKeySha256)
-    await copyFile(join(source, 'secrets.key'), join(destination, 'secrets.key'))
-  for (const file of manifest.files)
-    await copyFile(join(source, 'objects', file.key), join(destination, 'objects', file.key))
-  const restored = new Store(destination)
+  let completed = false
   try {
-    restored.db.exec('DELETE FROM sessions; DELETE FROM uploads; DELETE FROM storage_oauth;')
-    restored.set('public.accessSecret', token())
-    restored.activity(
-      '从已校验的备份恢复数据，旧登录会话、提取码解锁凭证与未完成上传、授权流程已撤销',
-    )
+    await mkdir(join(destination, 'objects'), { mode: 0o700 })
+    await copyFile(join(source, 'jiyu.sqlite'), join(destination, 'jiyu.sqlite'))
+    if (manifest.secretKeySha256)
+      await copyFile(join(source, 'secrets.key'), join(destination, 'secrets.key'))
+    for (const file of manifest.files)
+      await copyFile(join(source, 'objects', file.key), join(destination, 'objects', file.key))
+    const restored = new Store(destination)
+    try {
+      restored.db.exec('DELETE FROM sessions; DELETE FROM uploads; DELETE FROM storage_oauth;')
+      restored.set('public.accessSecret', token())
+      restored.activity(
+        '从已校验的备份恢复数据，旧登录会话、提取码解锁凭证与未完成上传、授权流程已撤销',
+      )
+    } finally {
+      restored.close()
+    }
+    completed = true
+    return { files: manifest.files.length, destination }
   } finally {
-    restored.close()
+    if (!completed) await rm(destination, { recursive: true, force: true }).catch(() => {})
   }
-  return { files: manifest.files.length, destination }
 }
 
 export async function pruneTrash(dataDir: string, backupDir: string) {

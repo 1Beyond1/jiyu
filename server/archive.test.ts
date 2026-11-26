@@ -612,3 +612,118 @@ test('按材料项分目录（material-owner / owner-material）与仅打包人�
     await f.close()
   }
 })
+
+test('ZIP 计划上限仅统计活跃计划（单会话 5 个 / 全局 20 个），已结束计划 60s 过期不占活跃配额', async (t) => {
+  const f = await fixture()
+  try {
+    const c = collection()
+    f.store.saveCollection(c)
+    const { record } = await f.add(c.id, 'quota.txt', '张三', Buffer.from('archive-quota-test'))
+
+    const loginSession = async (ip: string) => {
+      const login = await f.app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        remoteAddress: ip,
+        headers: { origin: 'http://127.0.0.1:3000' },
+        payload: { password: 'fixture-archive-password' },
+      })
+      assert.equal(login.statusCode, 200, login.body)
+      return {
+        ip,
+        headers: {
+          origin: 'http://127.0.0.1:3000',
+          cookie: String(login.headers['set-cookie']).split(';')[0],
+          'x-csrf-token': login.json().csrf as string,
+        },
+      }
+    }
+
+    const createPlan = (sess: { ip: string; headers: Record<string, string> }) =>
+      f.app.inject({
+        method: 'POST',
+        url: '/api/archives',
+        remoteAddress: sess.ip,
+        headers: sess.headers,
+        payload: { ids: [record.id], layout: 'flat' },
+      })
+
+    // 1. 单会话最多 5 个活跃计划，第 6 个返回 429；取消 1 个后可立即再创建
+    const s1 = await loginSession('127.0.0.11')
+    const s1Plans: string[] = []
+    for (let i = 0; i < 5; i++) {
+      const r = await createPlan(s1)
+      assert.equal(r.statusCode, 200, `第 ${i + 1} 个计划应成功: ${r.body}`)
+      s1Plans.push(r.json().id as string)
+    }
+    const sixth = await createPlan(s1)
+    assert.equal(sixth.statusCode, 429, '同会话第 6 个活跃计划应返回 429')
+
+    // 2. 已完成计划不占用活跃配额：下载完成后该会话立即释放 1 个活跃名额
+    const dl = await f.app.inject({
+      method: 'GET',
+      url: `/api/archives/${s1Plans[0]}/download`,
+      remoteAddress: s1.ip,
+      headers: s1.headers,
+    })
+    assert.equal(dl.statusCode, 200)
+    const afterComplete = await createPlan(s1)
+    assert.equal(afterComplete.statusCode, 200, '已结束计划不应占用活跃计划名额')
+    const extraReadyId = afterComplete.json().id as string
+
+    // 3. 全局活跃计划上限为 20 个（4 个会话各 5 个活跃计划 = 20）
+    const s2 = await loginSession('127.0.0.12')
+    const s3 = await loginSession('127.0.0.13')
+    const s4 = await loginSession('127.0.0.14')
+    const s5 = await loginSession('127.0.0.15')
+    for (const sess of [s2, s3, s4]) {
+      for (let i = 0; i < 5; i++) {
+        const r = await createPlan(sess)
+        assert.equal(r.statusCode, 200, r.body)
+      }
+    }
+    const globalBlocked = await createPlan(s5)
+    assert.equal(globalBlocked.statusCode, 429, '全局已有 20 个活跃计划时新会话应返回 429')
+
+    // 释放 1 个活跃计划后，第 5 个会话立即可创建
+    await f.app.inject({
+      method: 'DELETE',
+      url: `/api/archives/${extraReadyId}`,
+      remoteAddress: s1.ip,
+      headers: s1.headers,
+    })
+    const globalAllowed = await createPlan(s5)
+    assert.equal(globalAllowed.statusCode, 200, globalAllowed.body)
+
+    // 4. 已结束计划使用 60s 短 TTL，61s 后自动过期返回 404，而未下载的 ready 计划在 61s 后仍有效
+    const finishedBefore = await f.app.inject({
+      method: 'GET',
+      url: `/api/archives/${s1Plans[0]}`,
+      remoteAddress: s1.ip,
+      headers: s1.headers,
+    })
+    assert.equal(finishedBefore.statusCode, 200)
+    assert.equal(finishedBefore.json().status, 'completed')
+
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 61 * 1000 })
+    const finishedAfter = await f.app.inject({
+      method: 'GET',
+      url: `/api/archives/${s1Plans[0]}`,
+      remoteAddress: s1.ip,
+      headers: s1.headers,
+    })
+    assert.equal(finishedAfter.statusCode, 404, '已结束计划应在 60s 后过期淘汰')
+
+    const readyStillAlive = await f.app.inject({
+      method: 'GET',
+      url: `/api/archives/${s1Plans[1]}`,
+      remoteAddress: s1.ip,
+      headers: s1.headers,
+    })
+    assert.equal(readyStillAlive.statusCode, 200, '活跃 ready 计划在 61s 后应仍保持 10 分钟有效期')
+    assert.equal(readyStillAlive.json().status, 'ready')
+  } finally {
+    t.mock.timers.reset()
+    await f.close()
+  }
+})

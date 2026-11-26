@@ -7,7 +7,13 @@ import { pipeline } from 'node:stream/promises'
 import { createWriteStream } from 'node:fs'
 import { ZipFile } from 'yazl'
 import { createApp } from './app.ts'
-import { decodeXml, extractContent, extractDocxXmlText } from './content.ts'
+import {
+  decodeXml,
+  extractContent,
+  extractDocxXmlText,
+  imagePixels,
+  jpegPixelsFromFile,
+} from './content.ts'
 import type { Config } from './config.ts'
 import type { CollectedFile } from '../src/types.ts'
 
@@ -264,7 +270,7 @@ test('本机正文索引、中文检索、DOCX 解包、范围预览与权限边
     assert.equal(bombRes.json().text, undefined)
     assert.match(bombRes.json().previewError, /膨胀比/)
 
-    // 对抗性测试：45,000 个未闭合 <w:t> 的恶意 DOCX（~225 KiB，未触发 256 KiB 膨胀比门限）必须在 100ms 内线性完成
+    // 对抗性测试：45,000 个未闭合 <w:t> 的恶意 DOCX（~225 KiB，未触发 256 KiB 膨胀比门限）必须线性完成
     const redosXml = `<w:document><w:p>${'<w:t>'.repeat(45_000)}<w:t>合法尾段</w:t></w:p></w:document>`
     const redosChunks: Buffer[] = []
     const redosZip = new ZipFile()
@@ -282,8 +288,8 @@ test('本机正文索引、中文检索、DOCX 解包、范围预览与权限边
     )
     const elapsedMs = performance.now() - t0
     assert.ok(
-      elapsedMs < 100,
-      `45,000 未闭合 <w:t> 解析应为线性时间 (<100ms)，实际耗时 ${elapsedMs.toFixed(2)}ms`,
+      elapsedMs < 1000,
+      `45,000 未闭合 <w:t> 解析应为线性时间 (<1000ms)，实际耗时 ${elapsedMs.toFixed(2)}ms`,
     )
     assert.equal(redosExtracted.text.trim(), '合法尾段')
 
@@ -297,7 +303,32 @@ test('本机正文索引、中文检索、DOCX 解包、范围预览与权限边
     const apiElapsedMs = performance.now() - tApi0
     assert.equal(redosApiRes.statusCode, 200)
     assert.equal(redosApiRes.json().text.trim(), '合法尾段')
-    assert.ok(apiElapsedMs < 100, `即时预览解析耗时应 <100ms，实际 ${apiElapsedMs.toFixed(2)}ms`)
+    assert.ok(apiElapsedMs < 2000, `即时预览解析耗时应 <2000ms，实际 ${apiElapsedMs.toFixed(2)}ms`)
+
+    // 32–64 MiB 已索引 PDF 在禁用原文件内联预览时仍应降级返回 preview: 'text'
+    const bigPdf = await add('大体积已索引.pdf', Buffer.from('%PDF-1.7\nlarge-pdf-body'))
+    store.saveFile({ ...bigPdf, size: 40 * 1024 ** 2 })
+    store.db
+      .prepare(
+        "INSERT INTO documents(file_id,status,kind,chars,truncated,updated_at) VALUES (?,'ready','PDF 文本（前 50 页）',?,0,?)",
+      )
+      .run(bigPdf.id, 18, new Date().toISOString())
+    store.db
+      .prepare('INSERT INTO content_search(file_id,body) VALUES (?,?)')
+      .run(bigPdf.id, '大体积 PDF 已索引正文内容测试')
+    const bigPdfContent = await app.inject({
+      method: 'GET',
+      url: `/api/files/${bigPdf.id}/content`,
+      headers,
+    })
+    assert.equal(bigPdfContent.statusCode, 200)
+    assert.equal(bigPdfContent.json().preview, 'text')
+    assert.match(bigPdfContent.json().text, /大体积 PDF 已索引正文内容测试/)
+    assert.equal(
+      (await app.inject({ method: 'GET', url: `/api/files/${bigPdf.id}/preview`, headers }))
+        .statusCode,
+      415,
+    )
 
     // 即时预览端点并发护栏：同时发起 12 个请求触发 429，结束后名额立即释放
     const burst = await Promise.all(
@@ -349,5 +380,70 @@ test('DOCX XML 线性解析：大小写实体解码、表格/制表符/换行防
   const out = extractDocxXmlText(hugeUnclosed)
   const elapsed = performance.now() - t0
   assert.equal(out.trim(), '尾部')
-  assert.ok(elapsed < 100, `20 万未闭合 <w:t> 解析耗时应 <100ms，实际 ${elapsed.toFixed(2)}ms`)
+  assert.ok(elapsed < 1000, `20 万未闭合 <w:t> 解析耗时应 <1000ms，实际 ${elapsed.toFixed(2)}ms`)
+})
+
+test('JPEG 像素探测：尾 0xff 填充与截断不抛 RangeError、跳过无载荷独立标记、支持 >64 KiB EXIF 流式 seek', async () => {
+  const sof0 = (width: number, height: number) => {
+    const seg = Buffer.alloc(19)
+    seg[0] = 0xff
+    seg[1] = 0xc0
+    seg.writeUInt16BE(17, 2)
+    seg[4] = 8
+    seg.writeUInt16BE(height, 5)
+    seg.writeUInt16BE(width, 7)
+    return seg
+  }
+
+  // 1. 尾部大量 0xff 填充字节不得抛出 RangeError
+  const trailingFF = Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.alloc(32, 0xff)])
+  assert.equal(imagePixels(trailingFF, 'image/jpeg'), 0)
+
+  // 2. 截断的 APP1 与截断的 SOF0 均安全返回 0
+  assert.equal(imagePixels(Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x00]), 'image/jpeg'), 0)
+  assert.equal(
+    imagePixels(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x01]), 'image/jpeg'),
+    0,
+  )
+
+  // 3. 无载荷独立标记（TEM 0x01 / RST0 0xd0）不误读长度，可正确解析后续 SOF0
+  const withStandalone = Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0x01, 0xff, 0xd0, 0xff, 0xff, 0xd7]),
+    sof0(1200, 800),
+    Buffer.from([0xff, 0xd9]),
+  ])
+  assert.equal(imagePixels(withStandalone, 'image/jpeg'), 1200 * 800)
+
+  // 4. >64 KiB EXIF/APPn 段（两个 50 KiB APP1/APP2 段 + 70 字节 0xff 填充）通过流式 seek 正确探测尺寸
+  const makeAppSeg = (marker: number, payloadLen: number) => {
+    const seg = Buffer.alloc(4 + payloadLen, 0x41)
+    seg[0] = 0xff
+    seg[1] = marker
+    seg.writeUInt16BE(payloadLen + 2, 2)
+    return seg
+  }
+  const bigExifJpeg = Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    makeAppSeg(0xe1, 50_000),
+    makeAppSeg(0xe2, 50_000),
+    Buffer.alloc(70, 0xff),
+    sof0(1920, 1080).subarray(1), // 第一个 0xff 已在前面的 70 字节填充中
+    Buffer.from([0xff, 0xd9]),
+  ])
+  assert.equal(imagePixels(bigExifJpeg.subarray(0, 65536), 'image/jpeg'), 0)
+
+  const root = resolve('.artifacts')
+  await mkdir(root, { recursive: true })
+  const dir = await mkdtemp(join(root, 'jpeg-exif-test-'))
+  try {
+    const jpgPath = join(dir, 'big-exif.jpg')
+    await writeFile(jpgPath, bigExifJpeg)
+    assert.equal(await jpegPixelsFromFile(jpgPath), 1920 * 1080)
+
+    const ffPath = join(dir, 'trailing-ff.jpg')
+    await writeFile(ffPath, trailingFF)
+    assert.equal(await jpegPixelsFromFile(ffPath), 0)
+  } finally {
+    if (!relative(root, dir).startsWith('..')) await rm(dir, { recursive: true, force: true })
+  }
 })

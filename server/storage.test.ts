@@ -226,7 +226,7 @@ test('WebDAV/S3 完整校验、加密配置、云端队列、失败保留原件�
     assert.match(put.url.pathname, /^\/jiyu-files\/jiyu\//)
     assert.match(
       put.headers!.authorization,
-      /^AWS4-HMAC-SHA256 Credential=fixture-key-id\/\d{8}\/us-east-1\/s3\/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=[a-f0-9]{64}$/,
+      /^AWS4-HMAC-SHA256 Credential=fixture-key-id\/\d{8}\/us-east-1\/s3\/aws4_request, SignedHeaders=host;x-amz-checksum-sha256;x-amz-content-sha256;x-amz-date, Signature=[a-f0-9]{64}$/,
     )
     assert.equal(
       put.headers!['x-amz-content-sha256'],

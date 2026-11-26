@@ -40,6 +40,7 @@ import {
 } from '../src/lib/collections.ts'
 import { fileNameKey, submissionFileName } from '../src/lib/submission-naming.ts'
 import type { Collection, CollectedFile, FileSortOption, TagChange } from '../src/types.ts'
+import { APP_VERSION } from '../src/types.ts'
 import { proposalHash, registerAI } from './ai.ts'
 import type { AITransport } from './ai.ts'
 import type { AIFailureDiagnostics } from './ai-failure-diagnostics.ts'
@@ -192,9 +193,29 @@ async function collectionInput(value: unknown, current?: Collection): Promise<Co
       current?.materialRevision && materialRuleKey(current) === materialRuleKey(result)
         ? current.materialRevision
         : randomUUID()
+  if (current?.createdByDemo) result.createdByDemo = true
   if (current?.draftOrigin) result.draftOrigin = current.draftOrigin
   if (current?.archivedAt) result.archivedAt = current.archivedAt
   return result
+}
+
+function resolveUniqueRestoreName(name: string, occupied: Set<string>): string {
+  if (!occupied.has(fileNameKey(name))) {
+    occupied.add(fileNameKey(name))
+    return name
+  }
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 ? name.slice(dot) : ''
+  const stem = dot > 0 ? name.slice(0, dot) : name
+  let n = 2
+  let candidate = ''
+  do {
+    const suffix = ` (${n++})`
+    const maxStem = Math.max(1, 200 - suffix.length - ext.length)
+    candidate = `${stem.slice(0, maxStem)}${suffix}${ext}`
+  } while (occupied.has(fileNameKey(candidate)))
+  occupied.add(fileNameKey(candidate))
+  return candidate
 }
 
 function validDeadline(raw: unknown): string {
@@ -229,6 +250,15 @@ export async function createApp(
   } = {},
 ) {
   const store = new Store(config.dataDir)
+  if (!config.demo?.enabled) {
+    store.db.prepare('DELETE FROM sessions WHERE is_demo=1').run()
+  } else {
+    store.db
+      .prepare(
+        "DELETE FROM sessions WHERE is_demo=1 AND user_id NOT IN (SELECT id FROM users WHERE username=? COLLATE NOCASE AND role='editor' AND disabled=0 AND id!='primary')",
+      )
+      .run(config.demo.username)
+  }
   const app = Fastify({
     logger: false,
     trustProxy: config.trustProxy || false,
@@ -272,6 +302,9 @@ export async function createApp(
         user.role === 'editor' &&
         user.username.toLowerCase() === config.demo.username.toLowerCase(),
     )
+  const isDemoAuth = (
+    auth: (Pick<UserRow, 'id' | 'username' | 'role'> & { is_demo?: number }) | undefined,
+  ) => Boolean(auth && (auth.is_demo === 1 || isDemoUser(auth)))
   const lookupDemoUser = () => {
     if (!config.demo?.enabled) return undefined
     return store.db
@@ -280,42 +313,54 @@ export async function createApp(
       )
       .get(config.demo.username) as unknown as UserRow | undefined
   }
-  const sessionUser = (row: UserRow) => ({
+  const sessionUser = (row: UserRow & { is_demo?: number }) => ({
     ...publicUser(row),
-    ...(isDemoUser(row) ? { demo: true } : {}),
+    ...(isDemoAuth(row) ? { demo: true } : {}),
   })
   const session = (req: FastifyRequest) => {
     const value = req.cookies.jiyu_session
     if (!value || value.length > 100) return undefined
-    return store.db
+    const row = store.db
       .prepare(
-        'SELECT s.csrf,s.expires,u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.hash=? AND s.expires>? AND u.disabled=0',
+        'SELECT s.csrf,s.expires,s.is_demo,u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.hash=? AND s.expires>? AND u.disabled=0',
       )
       .get(digest(value), Date.now()) as unknown as
-      | (UserRow & { csrf: string; expires: number })
+      | (UserRow & { csrf: string; expires: number; is_demo: number })
       | undefined
+    if (!row) return undefined
+    if (row.is_demo && !config.demo?.enabled) return undefined
+    return row
   }
-  const setSession = (reply: FastifyReply, userId = 'primary') => {
+  const REGULAR_SESSION_TTL_MS = 12 * 60 * 60 * 1000
+  const DEMO_SESSION_TTL_MS = 2 * 60 * 60 * 1000
+  const setSession = (
+    reply: FastifyReply,
+    userId = 'primary',
+    sessionOptions?: { isDemo?: boolean },
+  ) => {
+    const userRow = store.db
+      .prepare('SELECT * FROM users WHERE id=?')
+      .get(userId) as unknown as UserRow
+    const demoSession = Boolean(sessionOptions?.isDemo || isDemoUser(userRow))
+    const ttlMs = demoSession ? DEMO_SESSION_TTL_MS : REGULAR_SESSION_TTL_MS
     const value = token(),
       csrf = token()
     store.db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now())
     store.db
-      .prepare('INSERT INTO sessions(hash,csrf,expires,user_id) VALUES (?,?,?,?)')
-      .run(digest(value), csrf, Date.now() + 12 * 60 * 60 * 1000, userId)
+      .prepare('INSERT INTO sessions(hash,csrf,expires,user_id,is_demo) VALUES (?,?,?,?,?)')
+      .run(digest(value), csrf, Date.now() + ttlMs, userId, demoSession ? 1 : 0)
     reply.setCookie('jiyu_session', value, {
       path: '/',
       httpOnly: true,
       sameSite: 'strict',
       secure: config.secureCookie,
-      maxAge: 12 * 60 * 60,
+      maxAge: Math.floor(ttlMs / 1000),
     })
     return {
       authenticated: true,
       setupRequired: false,
       csrf,
-      user: sessionUser(
-        store.db.prepare('SELECT * FROM users WHERE id=?').get(userId) as unknown as UserRow,
-      ),
+      user: sessionUser({ ...userRow, is_demo: demoSession ? 1 : 0 }),
     }
   }
   app.addHook('onRequest', async (req, reply) => {
@@ -369,7 +414,7 @@ export async function createApp(
             url.startsWith('/api/ai/settings') ||
             url === '/api/ai/test'))
       if (auth.role !== 'admin' && adminOnly) throw new HttpError(403, '这项操作需要管理员权限')
-      if (isDemoUser(auth) && /^\/api\/collections\/[^/]+\/remind-webhook$/.test(url))
+      if (isDemoAuth(auth) && /^\/api\/collections\/[^/]+\/remind-webhook$/.test(url))
         throw new HttpError(403, '公开体验账号不能触发外部通知推送')
       const readOperation = url === '/api/archives' || /^\/api\/archives\/[^/]+$/.test(url)
       if (
@@ -449,7 +494,7 @@ export async function createApp(
     })
     done()
   })
-  app.get('/api/health', async () => ({ ok: true, version: '0.5.0' }))
+  app.get('/api/health', async () => ({ ok: true, version: APP_VERSION }))
   app.get('/api/auth/status', async (req) => {
     const auth = session(req)
     const setupRequired = !store.get('password')
@@ -517,7 +562,7 @@ export async function createApp(
       if (!store.get('password')) throw new HttpError(503, '站点尚未完成管理员初始化')
       const demoUser = lookupDemoUser()
       if (!demoUser) throw new HttpError(503, '公开体验账号尚未就绪，请联系站点管理员')
-      return setSession(reply, demoUser.id)
+      return setSession(reply, demoUser.id, { isDemo: true })
     },
   )
   app.post('/api/auth/logout', async (req, reply) => {
@@ -530,7 +575,7 @@ export async function createApp(
   app.post('/api/auth/password', async (req, reply) => {
     const body = object(req.body)
     const auth = session(req)!
-    if (isDemoUser(auth)) throw new HttpError(403, '公开体验账号不允许修改密码')
+    if (isDemoAuth(auth)) throw new HttpError(403, '公开体验账号不允许修改密码')
     if (!(await checkPassword(passwordInput(body.currentPassword, 1), auth.password)))
       throw new HttpError(400, '当前密码不正确')
     const hash = await hashPassword(passwordInput(body.password))
@@ -552,31 +597,47 @@ export async function createApp(
     const mode = queryMode === 'summary' || headerMode === 'summary' ? 'summary' : 'full'
     return { mode }
   }
+  const workspaceFor = (req: FastifyRequest, wsOpt = workspaceOptions(req)) => {
+    const auth = session(req)
+    const role = auth?.role || 'viewer'
+    const demo = isDemoAuth(auth)
+    const workspace = store.workspace(config.quotaBytes, config.requestBytes, wsOpt)
+    if (role === 'viewer') {
+      workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c)
+      workspace.lastRenameId = undefined
+    } else if (demo) {
+      const stripAllSensitive =
+        req.method === 'GET' && req.url.split('?')[0] === '/api/workspace' && wsOpt.mode === 'full'
+      workspace.collections = workspace.collections.map((c) => {
+        if (!stripAllSensitive && c.createdByDemo) return c
+        const { uploadToken: _token, expectedSubmitters: _roster, ...safe } = c
+        return safe
+      })
+    }
+    return workspace
+  }
   const webhooks = registerWebhooks(app, store, options.webhookPolicy)
   app.get('/api/workspace', async (req, reply) => {
-    const role = session(req)?.role || 'viewer'
+    const auth = session(req)
+    const scope = isDemoAuth(auth) ? 'demo' : auth?.role || 'viewer'
     const wsOpt = workspaceOptions(req)
     const etag = makeEtag(
       'workspace',
       store.changeStamp(),
-      role,
+      scope,
       wsOpt.mode || 'full',
       config.quotaBytes,
       config.requestBytes,
     )
     reply.header('ETag', etag).header('Cache-Control', 'no-cache').header('Vary', 'Cookie')
     if (etagMatches(req.headers['if-none-match'], etag)) return reply.code(304).send()
-    const workspace = store.workspace(config.quotaBytes, config.requestBytes, wsOpt)
-    if (role === 'viewer') {
-      workspace.collections = workspace.collections.map(({ uploadToken: _token, ...c }) => c)
-      workspace.lastRenameId = undefined
-    }
-    return workspace
+    return workspaceFor(req, wsOpt)
   })
   app.get('/api/files', async (req, reply) => {
-    const role = session(req)?.role || 'viewer'
+    const auth = session(req)
+    const scope = isDemoAuth(auth) ? 'demo' : auth?.role || 'viewer'
     const query = parseFileQuery(req.query)
-    const etag = makeEtag('files', store.changeStamp(), role, JSON.stringify(query))
+    const etag = makeEtag('files', store.changeStamp(), scope, JSON.stringify(query))
     reply.header('ETag', etag).header('Cache-Control', 'no-cache').header('Vary', 'Cookie')
     if (etagMatches(req.headers['if-none-match'], etag)) return reply.code(304).send()
     return store.queryFiles(query)
@@ -584,9 +645,10 @@ export async function createApp(
   app.get('/api/collections/:id/files', async (req, reply) => {
     const id = String(object(req.params).id)
     getCollection(id)
-    const role = session(req)?.role || 'viewer'
+    const auth = session(req)
+    const scope = isDemoAuth(auth) ? 'demo' : auth?.role || 'viewer'
     const query = parseFileQuery(req.query, id)
-    const etag = makeEtag('collection-files', store.changeStamp(), role, JSON.stringify(query))
+    const etag = makeEtag('collection-files', store.changeStamp(), scope, JSON.stringify(query))
     reply.header('ETag', etag).header('Cache-Control', 'no-cache').header('Vary', 'Cookie')
     if (etagMatches(req.headers['if-none-match'], etag)) return reply.code(304).send()
     return store.queryFiles(query)
@@ -597,7 +659,7 @@ export async function createApp(
       store.set('displayName', displayName)
       store.db.prepare("UPDATE users SET display_name=? WHERE id='primary'").run(displayName)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   app.post(
     '/api/settings/diagnostics',
@@ -605,15 +667,21 @@ export async function createApp(
     async () => diagnostics(store, config, budget.bytes),
   )
   app.post('/api/collections', async (req) => {
+    const auth = session(req)!
     const body = object(req.body),
       c = { ...(await collectionInput(body)), storage: requireStorage(store, body.storage) }
+    if (isDemoAuth(auth)) {
+      if (c.deadlineReminder?.enabled)
+        throw new HttpError(403, '公开体验账号不能开启定时截止 Webhook 预警')
+      c.createdByDemo = true
+    }
     store.transaction(() => {
       const origin = confirmCollectionDraft(store, body, c)
       if (origin) c.draftOrigin = origin
       store.saveCollection(c)
       store.activity(`创建了「${c.title}」`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   const getCollection = (id: string) => {
     const c = store.collection(id)
@@ -623,20 +691,27 @@ export async function createApp(
   app.patch('/api/collections/:id', async (req) => {
     if (object(req.body).draftConfirmation !== undefined)
       throw new HttpError(400, 'AI 草稿仅用于新建，不覆盖已有收集')
+    const auth = session(req)!
     const current = getCollection(String(object(req.params).id))
+    if (isDemoAuth(auth) && !current.createdByDemo)
+      throw new HttpError(403, '公开体验账号不能修改管理员创建的收集任务')
     const c = {
       ...(await collectionInput(req.body, current)),
       storage: requireStorage(store, object(req.body).storage ?? current.storage),
     }
+    if (isDemoAuth(auth) && c.deadlineReminder?.enabled)
+      throw new HttpError(403, '公开体验账号不能开启定时截止 Webhook 预警')
     store.transaction(() => {
       store.saveCollection(c)
       store.activity(`修改了「${c.title}」的规则`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   app.post('/api/collections/:id/status', async (req) => {
     const c = getCollection(String(object(req.params).id)),
       status = object(req.body).status
+    if (isDemoAuth(session(req)) && !c.createdByDemo)
+      throw new HttpError(403, '公开体验账号不能修改管理员创建的收集任务状态')
     if (!['active', 'paused', 'completed'].includes(String(status)))
       throw new HttpError(400, '收集状态无效')
     if (status === 'active' && c.archivedAt)
@@ -648,10 +723,12 @@ export async function createApp(
         `将「${c.title}」设为${status === 'active' ? '收集中' : status === 'paused' ? '暂停' : '完成'}`,
       )
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   app.post('/api/collections/:id/archive', async (req) => {
     const c = getCollection(String(object(req.params).id))
+    if (isDemoAuth(session(req)) && !c.createdByDemo)
+      throw new HttpError(403, '公开体验账号不能归档或恢复管理员创建的收集任务')
     const body = object(req.body)
     if (typeof body.archived !== 'boolean') throw new HttpError(400, '归档状态参数无效')
     const next: Collection = { ...c }
@@ -665,9 +742,10 @@ export async function createApp(
       store.saveCollection(next)
       store.activity(`${body.archived ? '归档' : '取消归档'}了「${c.title}」`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   app.post('/api/collections/:id/clone', async (req, reply) => {
+    const demo = isDemoAuth(session(req))
     const source = getCollection(String(object(req.params).id))
     const body = req.body ? object(req.body) : {}
     const defaultTitle = `${source.title}（副本）`.slice(0, 50)
@@ -681,7 +759,11 @@ export async function createApp(
         ? validDeadline(body.deadline)
         : defaultDeadline
     const includeExpected =
-      body.includeExpectedSubmitters === undefined ? true : Boolean(body.includeExpectedSubmitters)
+      demo && !source.createdByDemo
+        ? false
+        : body.includeExpectedSubmitters === undefined
+          ? true
+          : Boolean(body.includeExpectedSubmitters)
     let storage: Collection['storage'] = 'local'
     try {
       storage = requireStorage(store, source.storage)
@@ -699,6 +781,7 @@ export async function createApp(
       materialSummary: _oldMatSummary,
       requestLimitMB: _oldReqLimit,
       hasAccessCode: _oldHasCode,
+      createdByDemo: _oldDemo,
       deadlineReminder: oldDeadlineReminder,
       ...base
     } = source
@@ -715,15 +798,24 @@ export async function createApp(
       restrictToExpectedSubmitters: includeExpected
         ? Boolean(source.restrictToExpectedSubmitters)
         : false,
-      ...(oldDeadlineReminder
+      ...(demo
         ? {
+            createdByDemo: true,
             deadlineReminder: {
-              enabled: oldDeadlineReminder.enabled,
-              hoursBefore: oldDeadlineReminder.hoursBefore,
-              desensitizeNames: oldDeadlineReminder.desensitizeNames,
+              enabled: false,
+              hoursBefore: oldDeadlineReminder?.hoursBefore ?? 24,
+              desensitizeNames: oldDeadlineReminder?.desensitizeNames ?? true,
             },
           }
-        : {}),
+        : oldDeadlineReminder
+          ? {
+              deadlineReminder: {
+                enabled: oldDeadlineReminder.enabled,
+                hoursBefore: oldDeadlineReminder.hoursBefore,
+                desensitizeNames: oldDeadlineReminder.desensitizeNames,
+              },
+            }
+          : {}),
       ...(source.materials?.length ? { materialRevision: randomUUID() } : {}),
     }
     if (body.accessCode !== undefined && String(body.accessCode).trim() !== '') {
@@ -735,7 +827,7 @@ export async function createApp(
       store.saveCollection(cloned)
       store.activity(`复制「${source.title}」创建了新任务「${cloned.title}」`)
     })
-    const ws = store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    const ws = workspaceFor(req)
     reply.code(201)
     return {
       workspace: ws,
@@ -909,11 +1001,21 @@ export async function createApp(
       store.transaction(() => {
         const finalCol = getCollection(c.id)
         if (finalCol.archivedAt) throw new HttpError(409, '该任务已归档，请先取消归档后再补录')
+        if (store.fileCount() + staged.length > 10000)
+          throw new HttpError(413, '已达到 10000 个文件的上限，请备份后整理数据')
         if (
           store.usedBytes() + bytes > config.quotaBytes ||
           store.usedBytes(c.id) + bytes > (finalCol.maxTotalSizeMB || 2048) * 1024 ** 2
         )
           throw new HttpError(413, '任务或存储容量超过上限')
+        const finalFields: Record<string, string> = {}
+        for (const f of finalCol.fields || []) {
+          finalFields[f.id] = text(fieldsObj[f.id] ?? '', f.label, 80, f.required ? 1 : 0)
+        }
+        if (parsedMaterialIds?.some((id) => id && !finalCol.materials?.some((m) => m.id === id)))
+          throw new HttpError(409, '任务材料清单已变更，请刷新后重新补录')
+        const finalPerson = participantIdentity(finalCol, owner, finalFields)
+        if (!finalPerson) throw new HttpError(400, '请填写提交人标识')
         const occupied = new Set(
           store.collectionFiles(finalCol.id, false).map((f) => fileNameKey(f.name)),
         )
@@ -927,7 +1029,7 @@ export async function createApp(
             finalCol,
             entry.file.name,
             owner,
-            parsedFields,
+            finalFields,
             finalCol.received + i + 1,
             receipt.createdAt,
             occupied,
@@ -939,9 +1041,9 @@ export async function createApp(
             name: finalName,
             status: markReady ? 'ready' : 'pending',
             submissionId: receipt.receiptId,
-            submissionFields: parsedFields,
+            submissionFields: finalFields,
             fieldLabels,
-            participant: person,
+            participant: finalPerson,
             ...(finalCol.materials?.length || parsedMaterialIds
               ? { materialId: matId, materialVersion: 1 }
               : {}),
@@ -958,7 +1060,7 @@ export async function createApp(
             receipt.receiptId,
             finalCol.id,
             digest(token()),
-            JSON.stringify({ owner, fields: parsedFields, identity: person, receipt }),
+            JSON.stringify({ owner, fields: finalFields, identity: finalPerson, receipt }),
           )
         store.activity(
           `管理员「${auth.display_name}」替「${owner}」向「${finalCol.title}」线下补录了 ${staged.length} 份文件${note ? `（${note}）` : ''}`,
@@ -975,10 +1077,11 @@ export async function createApp(
         fileCount: staged.length,
         summary: `管理员「${auth.display_name}」替「${owner}」向「${c.title}」线下补录了 ${staged.length} 份文件`,
         ...(note ? { detail: `补录备注：${note}` } : {}),
+        demo: Boolean(c.createdByDemo),
       })
       reply.code(201)
       return {
-        workspace: store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req)),
+        workspace: workspaceFor(req),
         files: committedFiles,
         receipt,
       }
@@ -993,11 +1096,13 @@ export async function createApp(
   })
   app.post('/api/collections/:id/rotate-token', async (req) => {
     const c = getCollection(String(object(req.params).id))
+    if (isDemoAuth(session(req)) && !c.createdByDemo)
+      throw new HttpError(403, '公开体验账号不能更换管理员任务的收集链接')
     store.transaction(() => {
       store.saveCollection({ ...c, uploadToken: token() })
       store.activity(`更换了「${c.title}」的收集链接，旧链接失效`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   const publicCollection = (value: string) => {
     const c = store.byToken(value)
@@ -1058,6 +1163,7 @@ export async function createApp(
       accessCodeVersion: _ver,
       draftOrigin: _draftOrigin,
       deadlineReminder: _deadlineReminder,
+      createdByDemo: _createdByDemo,
       ...c
     } = raw
     return {
@@ -1392,6 +1498,7 @@ export async function createApp(
           actor: owner,
           fileCount: staged.length,
           summary: `${owner}向「${c.title}」提交了 ${staged.length} 份文件`,
+          demo: Boolean(c.createdByDemo || isDemoAuth(session(req))),
         })
         reply.code(201)
         return receipt
@@ -1443,7 +1550,7 @@ export async function createApp(
       for (const f of list) store.saveFile({ ...f, status: 'ready' })
       store.activity(`将 ${list.length} 个文件标记为已整理`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   app.post('/api/files/trash', async (req) => {
     const list = chosenFiles(object(req.body).ids)
@@ -1456,18 +1563,35 @@ export async function createApp(
         })
       store.activity(`将 ${list.length} 个文件移入回收站`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   app.post('/api/files/restore', async (req) => {
     const list = chosenFiles(object(req.body).ids, true)
     store.transaction(() => {
+      const occupiedByCollection = new Map<string, Set<string>>()
+      let restoredCount = 0
       for (const f of list) {
-        const { deletedAt: _deleted, ...rest } = f
-        store.saveFile({ ...rest, materialVersion: (f.materialVersion || 0) + 1 })
+        const current = store.file(f.id)
+        if (!current || !current.deletedAt) continue
+        let occupied = occupiedByCollection.get(current.collectionId)
+        if (!occupied) {
+          occupied = new Set(
+            store.collectionFiles(current.collectionId, false).map((x) => fileNameKey(x.name)),
+          )
+          occupiedByCollection.set(current.collectionId, occupied)
+        }
+        const nextName = resolveUniqueRestoreName(current.name, occupied)
+        const { deletedAt: _deleted, ...rest } = current
+        store.saveFile({
+          ...rest,
+          name: nextName,
+          materialVersion: (current.materialVersion || 0) + 1,
+        })
+        restoredCount++
       }
-      store.activity(`从回收站恢复 ${list.length} 个文件`)
+      if (restoredCount > 0) store.activity(`从回收站恢复 ${restoredCount} 个文件`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   app.post('/api/files/rename', async (req) => {
     const body = object(req.body),
@@ -1589,7 +1713,7 @@ export async function createApp(
       )
     })
     return {
-      workspace: store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req)),
+      workspace: workspaceFor(req),
       operationId,
     }
   })
@@ -1646,7 +1770,7 @@ export async function createApp(
       store.db.prepare('UPDATE renames SET undone=1 WHERE id=?').run(id)
       store.activity(`撤销了 ${files.length} 个文件的整理操作`)
     })
-    return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req))
+    return workspaceFor(req)
   })
   app.get('/api/storage', async () =>
     storageSpace(
@@ -1664,8 +1788,20 @@ export async function createApp(
     options.materialToolMode === true,
   )
   const archives = registerArchives(app, store)
-  registerCollectionWorkflows(app, store, requirePublicAccess)
-  registerMaterials(app, store, config, session, webhooks, workspaceOptions)
+  const isDemoReq = (req: FastifyRequest) => isDemoAuth(session(req))
+  registerCollectionWorkflows(app, store, requirePublicAccess, isDemoReq)
+  registerMaterials(
+    app,
+    store,
+    config,
+    (req) => {
+      const auth = session(req)
+      return auth ? { ...auth, demo: isDemoAuth(auth) } : undefined
+    },
+    webhooks,
+    workspaceOptions,
+    (req) => workspaceFor(req),
+  )
   const uploads = await registerUploads(
     app,
     store,
@@ -1674,6 +1810,7 @@ export async function createApp(
     requirePublicAccess,
     webhooks,
     options.uploadCleanup,
+    isDemoReq,
   )
   registerUsers(app, store, (req) => session(req)?.id)
   const backups = await registerBackups(
@@ -1747,7 +1884,7 @@ export async function createApp(
       )
     }
     return {
-      workspace: store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions(req)),
+      workspace: workspaceFor(req),
       purged: targets.length,
       freedBytes,
       ...(failedFiles.length

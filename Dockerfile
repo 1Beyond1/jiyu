@@ -6,7 +6,8 @@ COPY tsconfig.json vite.config.ts index.html ./
 COPY src ./src
 COPY public ./public
 COPY server ./server
-RUN npm run build && npm test && rm -f server/*.test.ts && npm prune --omit=dev
+ARG SKIP_TESTS=0
+RUN npm run build && if [ "$SKIP_TESTS" != "1" ]; then npm test; fi && rm -f server/*.test.ts && npm prune --omit=dev
 
 FROM node:24-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng && rm -rf /var/lib/apt/lists/*

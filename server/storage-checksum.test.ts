@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { createHash } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { StandardStorage } from './storage-adapters.ts'
+import { s3Headers, StandardStorage } from './storage-adapters.ts'
 import { DriveStorage, quickXorHashBuffer } from './drive-storage.ts'
 import type { RemoteHTTP, RemoteRequest } from './remote-http.ts'
 import type { StorageProfile } from '../src/types.ts'
@@ -44,9 +44,53 @@ test('S3 优先核验 x-amz-checksum-sha256 或单段 MD5 ETag 跳过全量回�
   assert.equal(reqs1.length, 1)
   assert.equal(reqs1[0].method, 'PUT')
   assert.equal(reqs1[0].headers?.['x-amz-checksum-sha256'], sha256B64)
+  assert.match(
+    String(reqs1[0].headers?.authorization || ''),
+    /SignedHeaders=host;x-amz-checksum-sha256;x-amz-content-sha256;x-amz-date,/,
+    'S3 PUT Authorization SignedHeaders 必须包含 x-amz-checksum-sha256',
+  )
   assert.equal(
     reqs1.some((r) => r.method === 'GET'),
     false,
+  )
+
+  // 1b. 直接验证 s3Headers 合并并规范化 extraHeaders 中的 x-amz-* 参与 SigV4 签名计算
+  const fixedDate = new Date('2026-11-26T12:00:00.000Z')
+  const putUrl = new URL('https://s3.example.com/jiyu-bucket/jiyu/task/a.txt')
+  const signed = s3Headers(
+    'PUT',
+    putUrl,
+    'us-east-1',
+    { accessKeyId: 'ak', secretAccessKey: 'sk' },
+    sha256,
+    fixedDate,
+    {
+      'X-Amz-Checksum-Sha256': sha256B64,
+      'x-custom-ignored': 'ignored',
+      'x-amz-date': 'spoofed-date',
+    },
+  )
+  assert.equal(signed['x-amz-checksum-sha256'], sha256B64)
+  assert.equal(signed['x-amz-date'], '20261126T120000Z')
+  assert.equal('x-custom-ignored' in signed, false)
+  const expectedCanonical = [
+    'PUT',
+    '/jiyu-bucket/jiyu/task/a.txt',
+    '',
+    `host:s3.example.com\nx-amz-checksum-sha256:${sha256B64}\nx-amz-content-sha256:${sha256}\nx-amz-date:20261126T120000Z\n`,
+    'host;x-amz-checksum-sha256;x-amz-content-sha256;x-amz-date',
+    sha256,
+  ].join('\n')
+  const hmac = (key: Buffer | string, val: string) => createHmac('sha256', key).update(val).digest()
+  const signingKey = hmac(hmac(hmac(hmac('AWS4sk', '20261126'), 'us-east-1'), 's3'), 'aws4_request')
+  const expectedSig = createHmac('sha256', signingKey)
+    .update(
+      `AWS4-HMAC-SHA256\n20261126T120000Z\n20261126/us-east-1/s3/aws4_request\n${createHash('sha256').update(expectedCanonical).digest('hex')}`,
+    )
+    .digest('hex')
+  assert.equal(
+    signed.authorization,
+    `AWS4-HMAC-SHA256 Credential=ak/20261126/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-checksum-sha256;x-amz-content-sha256;x-amz-date, Signature=${expectedSig}`,
   )
 
   // 2. 服务端返回不匹配的 x-amz-checksum-sha256 -> 拒绝并报 502

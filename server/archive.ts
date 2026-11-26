@@ -18,6 +18,10 @@ import { sanitizeFilenameChars } from '../src/lib/text-safety.ts'
 import { materialReviewState, normalizeParticipant } from '../src/lib/materials.ts'
 
 const ttl = 10 * 60 * 1000,
+  finishedTtl = 60 * 1000,
+  maxActivePlans = 20,
+  maxActivePlansPerSession = 5,
+  maxFinishedPlans = 50,
   maxBytes = 10 * 1024 ** 3
 const layoutAliases: Record<string, ArchiveLayout> = {
   flat: 'flat',
@@ -118,15 +122,30 @@ interface StoredPlan extends ArchivePlan {
   session: string
   files: { file: CollectedFile; key: string }[]
   expires: number
+  finishedAt?: number
   collectionId?: string
   stop?: () => void
 }
+const isActivePlan = (plan: StoredPlan) => plan.status === 'ready' || plan.status === 'streaming'
 export function registerArchives(app: FastifyInstance, store: Store) {
   const plans = new Map<string, StoredPlan>()
   let active = 0
   const prune = () => {
-    for (const [id, plan] of plans)
-      if (plan.status !== 'streaming' && plan.expires <= Date.now()) plans.delete(id)
+    const now = Date.now()
+    const finished: StoredPlan[] = []
+    for (const [id, plan] of plans) {
+      if (plan.status !== 'streaming' && plan.expires <= now) {
+        plans.delete(id)
+        continue
+      }
+      if (!isActivePlan(plan)) finished.push(plan)
+    }
+    if (finished.length > maxFinishedPlans) {
+      finished.sort((a, b) => (a.finishedAt ?? a.expires) - (b.finishedAt ?? b.expires))
+      for (const old of finished.slice(0, finished.length - maxFinishedPlans)) {
+        plans.delete(old.id)
+      }
+    }
   }
   const cleanup = setInterval(prune, 30000)
   cleanup.unref()
@@ -195,7 +214,18 @@ export function registerArchives(app: FastifyInstance, store: Store) {
       const totalBytes = chosen.reduce((sum, f) => sum + f.size, 0)
       if (!Number.isSafeInteger(totalBytes) || totalBytes > maxBytes)
         throw new HttpError(413, '单个归档最多包含 10 GiB 内容，请分批下载')
-      if (plans.size >= 20) throw new HttpError(429, '短期打包计划过多，请关闭旧预览或稍后重试')
+      const currentSession = session(req)
+      let activeGlobal = 0
+      let activeSession = 0
+      for (const existing of plans.values()) {
+        if (!isActivePlan(existing)) continue
+        activeGlobal++
+        if (existing.session === currentSession) activeSession++
+      }
+      if (activeSession >= maxActivePlansPerSession)
+        throw new HttpError(429, '当前会话活跃打包计划过多，请关闭旧预览或下载后再试')
+      if (activeGlobal >= maxActivePlans)
+        throw new HttpError(429, '短期打包计划过多，请关闭旧预览或稍后重试')
       const stamp = new Date(Date.now() + 8 * 60 * 60 * 1000)
         .toISOString()
         .slice(0, 16)
@@ -251,8 +281,12 @@ export function registerArchives(app: FastifyInstance, store: Store) {
       const plan = get(req)
       if (plan.status !== 'ready') throw new HttpError(409, '该计划已使用，请重新生成打包计划')
       if (active >= 2) {
+        const now = Date.now()
         plan.status = 'failed'
         plan.error = '已有两个归档正在传输，请稍后重新生成预览'
+        plan.finishedAt = now
+        plan.expires = now + finishedTtl
+        prune()
         throw new HttpError(429, plan.error)
       }
       plan.status = 'streaming'
@@ -267,10 +301,13 @@ export function registerArchives(app: FastifyInstance, store: Store) {
         finished = true
         active--
         clearTimeout(timer)
+        const now = Date.now()
         plan.status = status
         plan.error = error
-        plan.expires = Date.now() + ttl
+        plan.finishedAt = now
+        plan.expires = now + finishedTtl
         plan.stop = undefined
+        prune()
         if (status !== 'completed') {
           input?.destroy()
           verifier?.destroy()

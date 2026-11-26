@@ -1,3 +1,5 @@
+export const APP_VERSION = '0.5.1'
+
 export type Page = 'overview' | 'collections' | 'files' | 'tools' | 'storage' | 'settings' | 'trash'
 export type CollectionStatus = 'active' | 'completed' | 'paused'
 export const cloudStorageIds = ['webdav', 's3', 'baidu', 'onedrive', 'gdrive'] as const
@@ -45,6 +47,7 @@ export interface Collection {
   materials?: MaterialRequirement[]
   materialRevision?: string
   deadlineReminder?: DeadlineReminderConfig
+  createdByDemo?: boolean
   draftOrigin?: {
     runId: string
     testMode: boolean

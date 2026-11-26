@@ -142,6 +142,8 @@ export class Store {
     }[]
     if (!sessionColumns.some((c) => c.name === 'user_id'))
       this.db.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'primary'")
+    if (!sessionColumns.some((c) => c.name === 'is_demo'))
+      this.db.exec('ALTER TABLE sessions ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0')
 
     // Idempotent v5 -> v6 (and earlier) materialized columns migration + backfill
     const existingFileCols = new Set(

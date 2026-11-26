@@ -109,7 +109,7 @@ export function SettingsPage({
             </div>
             <div>
               <dt>登录会话</dt>
-              <dd>登录有效期最长 12 小时</dd>
+              <dd>{isDemo ? '公开体验会话最长 2 小时' : '登录有效期最长 12 小时'}</dd>
             </div>
           </dl>
           {isDemo ? (

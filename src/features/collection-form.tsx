@@ -15,6 +15,7 @@ import { safeRandomUUID } from '../lib/browser-crypto'
 import { defaultCollectionLimits, fileExtensions, localDate, nextWeek } from '../lib/collections'
 import { CollectionRules } from './collection-rules'
 import { TemplatePicker } from './collection-templates'
+import { useAccount } from './auth'
 
 export function CollectionForm({
   collection,
@@ -33,6 +34,7 @@ export function CollectionForm({
   serverError?: string
   requestLimitMB?: number
 }) {
+  const { isDemo } = useAccount()
   const [draftConfirmation, setDraftConfirmation] = useState<DraftConfirmation>()
   const [draftDeadline, setDraftDeadline] = useState('')
   const [title, setTitle] = useState(collection?.title || '')
@@ -52,7 +54,7 @@ export function CollectionForm({
   const [maxTotalSizeMB, setMaxTotalSizeMB] = useState(collection?.maxTotalSizeMB || 2048)
   const isLegacyReminder = Boolean(collection && collection.deadlineReminder === undefined)
   const defaultDeadlineReminder = {
-    enabled: isLegacyReminder,
+    enabled: !isDemo && isLegacyReminder,
     hoursBefore: 24,
     desensitizeNames: true,
   }
@@ -104,7 +106,7 @@ export function CollectionForm({
     setMaxTotalSizeMB(r.maxTotalSizeMB || 2048)
     const cleanReminder = r.deadlineReminder
       ? {
-          enabled: Boolean(r.deadlineReminder.enabled),
+          enabled: !isDemo && Boolean(r.deadlineReminder.enabled),
           hoursBefore: r.deadlineReminder.hoursBefore || 24,
           desensitizeNames: r.deadlineReminder.desensitizeNames ?? true,
         }
@@ -262,14 +264,15 @@ export function CollectionForm({
             setStep(step + 1)
             return
           }
+          const effectiveReminder = rules.deadlineReminder ?? {
+            enabled: false,
+            hoursBefore: 24,
+            desensitizeNames: true,
+          }
           onSave({
             ...rules,
             ...(draftConfirmation ? { draftConfirmation } : {}),
-            deadlineReminder: rules.deadlineReminder ?? {
-              enabled: false,
-              hoursBefore: 24,
-              desensitizeNames: true,
-            },
+            deadlineReminder: isDemo ? { ...effectiveReminder, enabled: false } : effectiveReminder,
             expectedSubmitters: (rules.expectedSubmitters || [])
               .map((v) => v.trim())
               .filter(Boolean),

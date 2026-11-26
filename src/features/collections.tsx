@@ -41,7 +41,8 @@ export function CollectionCard({
   onClone?: (c: Collection) => void
   onArchive?: (c: Collection) => void
 }) {
-  const { canEdit } = useAccount()
+  const { canEdit, isDemo } = useAccount()
+  const canManageTask = canEdit && (!isDemo || Boolean(c.createdByDemo))
   const material = c.materialSummary ?? (c.materials?.length ? materialProgress(c, files) : null)
   const percent = material
     ? material.total
@@ -109,7 +110,7 @@ export function CollectionCard({
                 <CopyPlus size={14} />
               </button>
             )}
-            {onArchive && (
+            {canManageTask && onArchive && (
               <button
                 type="button"
                 className="icon-button card-quick-action"
@@ -120,7 +121,7 @@ export function CollectionCard({
                 {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
               </button>
             )}
-            {!archived && (
+            {canManageTask && !archived && (
               <button
                 type="button"
                 className="share-button"

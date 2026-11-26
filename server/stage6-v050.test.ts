@@ -576,10 +576,14 @@ test('v0.5.0 定时截止预警幂等调度（跨重启不重发）、手动催�
 
   let svc = await makeService()
   try {
-    // 1. 验证健康检查版本号为 0.5.0
+    // 1. 验证健康检查版本号与 package.json 一致（0.5.1）
+    const pkgVersion = (
+      JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { version: string }
+    ).version
+    assert.equal(pkgVersion, '0.5.1')
     const health = await svc.app.inject({ method: 'GET', url: '/api/health' })
     assert.equal(health.statusCode, 200)
-    assert.deepEqual(health.json(), { ok: true, version: '0.5.0' })
+    assert.deepEqual(health.json(), { ok: true, version: pkgVersion })
 
     const admin = await setupAdmin(svc.app, svc.store, config.origin)
     await createAndLoginUser(svc.app, admin, config.origin, 'ed_v05', 'editor')
@@ -703,7 +707,7 @@ test('v0.5.0 定时截止预警幂等调度（跨重启不重发）、手动催�
     assert.equal(svc.webhooks.checkDeadlines(false), 1)
     await svc.webhooks.flushPending()
     assert.equal(webhookHits.length, 1)
-    assert.equal(webhookHits[0].headers['User-Agent'], 'Jiyu-Webhook/0.5.0')
+    assert.equal(webhookHits[0].headers['User-Agent'], `Jiyu-Webhook/${pkgVersion}`)
     const sentBody = JSON.parse(webhookHits[0].body) as {
       summary: string
       items: { detail?: string }[]

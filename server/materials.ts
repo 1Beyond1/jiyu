@@ -1,5 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import type { Collection, CollectedFile, UserRole, MaterialOperation } from '../src/types.ts'
+import type {
+  Collection,
+  CollectedFile,
+  UserRole,
+  MaterialOperation,
+  Workspace,
+} from '../src/types.ts'
 import { assertMaterialAdvice, recordMaterialAdvice } from './material-ai.ts'
 import type { Store, WorkspaceOptions } from './store.ts'
 import type { Config } from './config.ts'
@@ -31,13 +37,18 @@ export function registerMaterials(
   app: FastifyInstance,
   store: Store,
   config: Config,
-  who: (req: FastifyRequest) => { id: string; display_name: string; role: UserRole } | undefined,
+  who: (
+    req: FastifyRequest,
+  ) => { id: string; display_name: string; role: UserRole; demo?: boolean } | undefined,
   webhooks?: WebhookService,
   workspaceOptions?: (req: FastifyRequest) => WorkspaceOptions,
+  workspaceResponse?: (req: FastifyRequest) => Workspace,
 ) {
   app.get('/api/collections/:id/materials', async (req) => {
-    const c = store.collection(String(object(req.params).id))
-    if (!c?.materials?.length) throw new HttpError(404, '此任务未配置材料清单')
+    const raw = store.collection(String(object(req.params).id))
+    if (!raw?.materials?.length) throw new HttpError(404, '此任务未配置材料清单')
+    const user = who(req)
+    const c = user?.demo && !raw.createdByDemo ? { ...raw, expectedSubmitters: [] } : raw
     const revision = object(req.query).revision
     if (revision !== undefined && revision !== c.materialRevision)
       throw new HttpError(409, '材料规则已改变，请刷新后重新读取')
@@ -85,8 +96,10 @@ export function registerMaterials(
     }
   })
   app.get('/api/collections/:id/materials/export', async (req, reply) => {
-    const c = store.collection(String(object(req.params).id))
-    if (!c?.materials?.length) throw new HttpError(404, '此任务未配置材料清单')
+    const raw = store.collection(String(object(req.params).id))
+    if (!raw?.materials?.length) throw new HttpError(404, '此任务未配置材料清单')
+    const user = who(req)
+    const c = user?.demo && !raw.createdByDemo ? { ...raw, expectedSubmitters: [] } : raw
     if (String(object(req.query).revision) !== c.materialRevision)
       throw new HttpError(409, '材料规则已改变，请刷新后重新导出台账')
     reply
@@ -237,8 +250,11 @@ export function registerMaterials(
           fileCount: appliedCount,
           summary: `${user.display_name}对「${c.title}」的 ${appliedCount} 份文件${decision === 'accepted' ? '审核通过' : '标记需补充'}`,
           ...(note ? { detail: `核对说明：${note.slice(0, 120)}` } : {}),
+          demo: Boolean(user.demo || c.createdByDemo),
         })
       }
-      return store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions?.(req))
+      return workspaceResponse
+        ? workspaceResponse(req)
+        : store.workspace(config.quotaBytes, config.requestBytes, workspaceOptions?.(req))
     })
 }
